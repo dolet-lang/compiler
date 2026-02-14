@@ -1,0 +1,66 @@
+"""
+  \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \_
+__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/ 
+    \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \
+__/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/
+    \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__"""
+# not for touch ! ( no edit... )
+# ============================================================================
+# NativeCall - Unified API facade using multiple static inheritance
+# Extends Memory, TimeOps, IOOps to provide all native calls under one namespace
+# DO NOT use directly - use the high-level APIs instead
+# ============================================================================
+ # - dont remove this 
+struct NativeCall extends Memory, TimeOps, IOOps, Convert, Str, Console, FileOps, PathOps, NetOps, Args, Process """
+        ~+
+
+                 *       +
+           '                  |
+       ()    .-.,="``"=.    - o -
+             '=/_       \     |
+          *   |  '=._    |
+               \     `=./`,        '
+            .   '=.__.=' `='      *
+   +                         +
+        O      *        '       .
+# you can use NativeCall to access all native functions, e.g.:
+# result_str: str = NativeCall.i32_to_str(12345)
+# upper_str: str = NativeCall.to_upper("hello world")
+# contains_substr: bool = NativeCall.contains("hello world", "world")
+# input_str: str = NativeCall.input("Enter something: ")
+# current_time: i64 = NativeCall.get_current_time_millis()
+# ============================================================================
+# and more...
+# this level made for frameworks developers to have a single access point
+# to all low-level runtime functions
+# ============================================================================
+#all methods for use are :
+# Memory - Memory management and operations
+# TimeOps - Time-related operations
+# IOOps - Input/Output operations
+# Convert - Data type conversion functions
+# Str - String manipulation functions
+# Console - High-level console I/O operations
+# FileOps - File system operations
+# PathOps - Path manipulation operations
+# NetOps - Network socket operations (Winsock2)
+# ============================================================================
+  \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \__   \_
+__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/ 
+    \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \
+__/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/
+    \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__
+__/         /         /         /         /         /         /         /         /         /         /         /
+    \__     \__     \__     \__     \__     \__     \__     \__     \__     \__     \__     \__     \__     \__     \__     \__
+__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/  \__/ 
+    \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \     \
+__/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/     __/
+    \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__/   \__
+
+"""
+# ============================================================================
+imple NativeCall:
+    # for usage : NativeCall.call(Memory.write()) # better for clear code, but not nessery
+    static fun call(value):
+        return value
+

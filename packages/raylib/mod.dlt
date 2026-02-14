@@ -1,0 +1,6 @@
+# ============================
+#  Raylib Module Entry Point
+# ============================
+# This is the required entry point (mod.dlt) for the Raylib module
+
+import raylib

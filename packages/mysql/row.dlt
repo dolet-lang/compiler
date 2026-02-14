@@ -1,0 +1,183 @@
+# MySQL Row Data Access
+# =====================
+# Provides access to individual row data from query results
+
+struct MySQLRow:
+    data: i64 = 0
+    lengths: i64 = 0
+    num_fields: u32 = 0
+    result_handle: i64 = 0
+    valid: i32 = 0
+    
+    # Check if row is valid
+    fun is_valid() -> i32:
+        return self.valid
+    
+    # Check if row is empty (invalid or no data)
+    fun is_empty() -> i32:
+        if self.valid == 0:
+            return 1
+        if self.data == 0:
+            return 1
+        return 0
+    
+    # Get string value by column index
+    fun get(index: u32) -> str:
+        if self.valid == 0:
+            return ""
+        if index >= self.num_fields:
+            return ""
+        
+        field_ptr: i64 = Memory.read_i64(self.data + ((index as i64) * 8))
+        if field_ptr == 0:
+            return ""
+        
+        return field_ptr as str
+    
+    # Get i32 value by column index
+    # Note: Returns 0 for non-numeric strings
+    fun get_i32(index: u32) -> i32:
+        value: str = self.get(index)
+        if value == "":
+            return 0
+        # Simple string to int conversion
+        # For now, return 0 - full implementation needs atoi
+        return 0
+    
+    # Get i64 value by column index
+    # Note: Returns 0 for non-numeric strings
+    fun get_i64(index: u32) -> i64:
+        value: str = self.get(index)
+        if value == "":
+            return 0
+        # Simple string to int conversion
+        # For now, return 0 - full implementation needs atol
+        return 0
+
+    
+    # Get f32 value by column index
+    # Note: Returns 0.0 for non-numeric strings
+    fun get_f32(index: u32) -> f32:
+        value: str = self.get(index)
+        if value == "":
+            return 0.0
+        # Simple string to float conversion
+        # For now, return 0.0 - full implementation needs atof
+        return 0.0
+    
+    # Get f64 value by column index
+    # Note: Returns 0.0 for non-numeric strings
+    fun get_f64(index: u32) -> f64:
+        value: str = self.get(index)
+        if value == "":
+            return 0.0
+        # Simple string to float conversion
+        # For now, return 0.0 - full implementation needs atof
+        return 0.0
+    
+    # Get bool value by column index (1, true, TRUE = true)
+    fun get_bool(index: u32) -> i32:
+        value: str = self.get(index)
+        if value == "1":
+            return 1
+        if value == "true":
+            return 1
+        if value == "TRUE":
+            return 1
+        return 0
+    
+    # Check if value at index is NULL
+    fun is_null(index: u32) -> i32:
+        if self.valid == 0:
+            return 1
+        if index >= self.num_fields:
+            return 1
+        
+        field_ptr: i64 = Memory.read_i64(self.data + ((index as i64) * 8))
+        if field_ptr == 0:
+            return 1
+        return 0
+    
+    # Get field length at index
+    fun get_length(index: u32) -> u64:
+        if self.valid == 0:
+            return 0
+        if self.lengths == 0:
+            return 0
+        if index >= self.num_fields:
+            return 0
+        
+        return Memory.read_i64(self.lengths + ((index as i64) * 8)) as u64
+    
+    # Get string value by column name
+    fun get_string(name: str) -> str:
+        index: i32 = self.find_field_index(name)
+        if index < 0:
+            return ""
+        return self.get(index as u32)
+    
+    # Get i32 value by column name
+    fun get_int(name: str) -> i32:
+        index: i32 = self.find_field_index(name)
+        if index < 0:
+            return 0
+        return self.get_i32(index as u32)
+    
+    # Get i64 value by column name
+    fun get_long(name: str) -> i64:
+        index: i32 = self.find_field_index(name)
+        if index < 0:
+            return 0
+        return self.get_i64(index as u32)
+    
+    # Get f32 value by column name
+    fun get_float(name: str) -> f32:
+        index: i32 = self.find_field_index(name)
+        if index < 0:
+            return 0.0
+        return self.get_f32(index as u32)
+    
+    # Get f64 value by column name
+    fun get_double(name: str) -> f64:
+        index: i32 = self.find_field_index(name)
+        if index < 0:
+            return 0.0
+        return self.get_f64(index as u32)
+    
+    # Check if value is NULL by column name
+    fun is_null_by_name(name: str) -> i32:
+        index: i32 = self.find_field_index(name)
+        if index < 0:
+            return 1
+        return self.is_null(index as u32)
+    
+    # Find field index by name (returns -1 if not found)
+    fun find_field_index(name: str) -> i32:
+        if self.result_handle == 0:
+            return -1
+        
+        mysql_field_seek(self.result_handle, 0)
+        
+        i: u32 = 0
+        while i < self.num_fields:
+            field: i64 = mysql_fetch_field(self.result_handle)
+            if field == 0:
+                i = i + 1
+                continue
+            
+            field_name_ptr: i64 = Memory.read_i64(field)
+            if field_name_ptr == 0:
+                i = i + 1
+                continue
+            
+            field_name: str = field_name_ptr as str
+            if field_name == name:
+                return i as i32
+            
+            i = i + 1
+        
+        return -1
+    
+    # Get number of fields in row
+    fun get_field_count() -> u32:
+        return self.num_fields

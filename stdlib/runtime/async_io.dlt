@@ -1,0 +1,116 @@
+# ============================================================================
+# AsyncIO - Unified async I/O module
+# Exports all async I/O primitives for convenient access
+# Requirements: 4.1, 4.2, 4.3, 4.4 - Async I/O primitives
+# ============================================================================
+
+# This module provides a unified interface for async I/O operations.
+# It combines:
+# - AsyncFile: Async file I/O wrappers (Requirement 4.1)
+# - AsyncSocket: Async socket I/O wrappers (Requirement 4.2)
+# - IOPoller: Platform-specific I/O polling (Requirements 4.3, 4.4)
+#
+# Usage:
+#   # Async file operations
+#   result: AsyncFileResult = await async_read_file("data.txt")
+#   if result.is_ok():
+#       data: i64 = result.get_data()
+#       # Process data...
+#       Memory.free(data)
+#
+#   # Async socket operations
+#   server: AsyncTcpServer = await async_tcp_listen("0.0.0.0", 8080)
+#   while server.is_running():
+#       client_result: AsyncSocketResult = await server.accept()
+#       if client_result.is_ok():
+#           client_sock: i64 = client_result.get_socket()
+#           # Handle client...
+#
+#   # I/O polling integration with event loop
+#   poller: IOPoller = IOPoller.new()
+#   loop: EventLoop = EventLoop.with_io_poller(poller as i64)
+#   loop.run()
+
+# Re-export async file types and functions
+# (These are defined in async_file.dlt)
+# - AsyncFileResult
+# - AsyncFile
+# - async_read_file(path: str) -> AsyncFileResult
+# - async_write_file(path: str, content: str) -> AsyncFileResult
+# - async_append_file(path: str, content: str) -> AsyncFileResult
+
+# Re-export async socket types and functions
+# (These are defined in async_socket.dlt)
+# - AsyncSocketResult
+# - AsyncSocket
+# - AsyncTcpClient
+# - AsyncTcpServer
+# - async_tcp_listen(host: str, port: i32) -> AsyncTcpServer
+# - async_socket_send(sock: i64, data: str) -> AsyncSocketResult
+# - async_socket_recv(sock: i64, max_size: i32) -> AsyncSocketResult
+
+# Re-export I/O polling types
+# (These are defined in io_poller.dlt)
+# - IOEvent
+# - FdSet
+# - TimeVal
+# - IOPoller
+
+# ============================================================================
+# Convenience Functions for Common Async I/O Patterns
+# ============================================================================
+
+# Read a file and return its content as a string
+# Returns empty string on error
+async fun read_file_string(path: str) -> str:
+    result: AsyncFileResult = await async_read_file(path)
+    if result.is_ok():
+        return result.get_data() as str
+    return ""
+
+# Write a string to a file, creating it if it doesn't exist
+# Returns true on success, false on error
+async fun write_file_string(path: str, content: str) -> bool:
+    result: AsyncFileResult = await async_write_file(path, content)
+    return result.is_ok()
+
+# Append a string to a file
+# Returns true on success, false on error
+async fun append_file_string(path: str, content: str) -> bool:
+    result: AsyncFileResult = await async_append_file(path, content)
+    return result.is_ok()
+
+# Create a TCP server and return it
+# Returns a server that may or may not be running (check is_running())
+async fun create_tcp_server(host: str, port: i32) -> AsyncTcpServer:
+    return await async_tcp_listen(host, port)
+
+# Send a string over a socket and return success status
+async fun send_string(sock: i64, data: str) -> bool:
+    result: AsyncSocketResult = await async_socket_send(sock, data)
+    return result.is_ok()
+
+# Receive a string from a socket
+# Returns empty string on error
+async fun recv_string(sock: i64, max_size: i32) -> str:
+    result: AsyncSocketResult = await async_socket_recv(sock, max_size)
+    if result.is_ok():
+        return result.get_data() as str
+    return ""
+
+# ============================================================================
+# Event Loop Integration Helpers
+# ============================================================================
+
+# Create an event loop with I/O polling enabled
+fun create_async_event_loop() -> EventLoop:
+    poller: IOPoller = IOPoller.new()
+    loop: EventLoop = EventLoop.with_io_poller(poller as i64)
+    return loop
+
+# Run an async function to completion with I/O support
+# This is the main entry point for async programs
+fun run_async(future_ptr: i64) -> i64:
+    loop: EventLoop = create_async_event_loop()
+    return loop.run_until_complete(future_ptr)
+

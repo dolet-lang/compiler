@@ -1,0 +1,537 @@
+
+# ============================================================================
+# Math - Pure Dolet math library (100% no C dependency)
+# Provides: all math functions as standalone (for LLVM silicon lowering)
+#           + Math struct with utility functions
+# Hardware silicon: @sqrt -> sqrtss, @fabs -> andps (no library needed)
+# Pure Dolet: sinf, cosf, tanf, asinf, acosf, atanf, atan2f, etc.
+# ============================================================================
+
+# ==================== Standalone functions ====================
+# LLVM lowers silicon functions (@sin, @cos, etc.) to calls to these.
+# By defining them here in pure Dolet, we eliminate msvcrt dependency.
+
+# ---------- trunc (f32/f64) ----------
+
+fun truncf(x: f32) -> f32:
+    n: i64 = x as i64
+    return n as f32
+
+fun trunc(x: f64) -> f64:
+    n: i64 = x as i64
+    return n as f64
+
+# ---------- floor (f32/f64) ----------
+
+fun floorf(x: f32) -> f32:
+    t: f32 = truncf(x)
+    if x < t:
+        return t - 1.0
+    return t
+
+fun floor(x: f64) -> f64:
+    t: f64 = trunc(x)
+    if x < t:
+        return t - 1.0
+    return t
+
+# ---------- ceil (f32/f64) ----------
+
+fun ceilf(x: f32) -> f32:
+    t: f32 = truncf(x)
+    if x > t:
+        return t + 1.0
+    return t
+
+fun ceil(x: f64) -> f64:
+    t: f64 = trunc(x)
+    if x > t:
+        return t + 1.0
+    return t
+
+# ---------- round (f32/f64) ----------
+
+fun roundf(x: f32) -> f32:
+    if x >= 0.0:
+        return floorf(x + 0.5)
+    return ceilf(x - 0.5)
+
+fun round(x: f64) -> f64:
+    if x >= 0.0:
+        return floor(x + 0.5)
+    return ceil(x - 0.5)
+
+# ---------- fmod (f32/f64) ----------
+
+fun fmodf(x: f32, y: f32) -> f32:
+    return x - truncf(x / y) * y
+
+fun fmod(x: f64, y: f64) -> f64:
+    return x - trunc(x / y) * y
+
+# ---------- sin (f32) ----------
+# Range reduction to [-pi/2, pi/2] + degree-9 minimax polynomial
+
+fun sinf(x: f32) -> f32:
+    pi: f32 = 3.14159265
+    two_pi: f32 = 6.28318530
+    half_pi: f32 = 1.57079632
+    v: f32 = x - truncf(x / two_pi) * two_pi
+    if v > pi:
+        v = v - two_pi
+    if v < (0.0 - pi):
+        v = v + two_pi
+    if v > half_pi:
+        v = pi - v
+    else:
+        neg_half_pi: f32 = 0.0 - half_pi
+        if v < neg_half_pi:
+            v = (0.0 - pi) - v
+    v2: f32 = v * v
+    return v * (1.0 + v2 * (0.0 - 0.16666667 + v2 * (0.008333334 + v2 * (0.0 - 0.00019841270 + v2 * 0.0000027557316))))
+
+# ---------- sin (f64) ----------
+
+fun sin(x: f64) -> f64:
+    pi: f64 = 3.14159265358979323846
+    two_pi: f64 = 6.28318530717958647692
+    half_pi: f64 = 1.57079632679489661923
+    v: f64 = x - trunc(x / two_pi) * two_pi
+    if v > pi:
+        v = v - two_pi
+    if v < (0.0 - pi):
+        v = v + two_pi
+    if v > half_pi:
+        v = pi - v
+    else:
+        neg_half_pi: f64 = 0.0 - half_pi
+        if v < neg_half_pi:
+            v = (0.0 - pi) - v
+    v2: f64 = v * v
+    return v * (1.0 + v2 * (0.0 - 0.16666666666666632 + v2 * (0.00833333333332249 + v2 * (0.0 - 0.00019841269841201 + v2 * (0.0000027557319223986 + v2 * (0.0 - 0.000000025050760253407 + v2 * 0.00000000015896910952442))))))
+
+# ---------- cos (f32/f64) ----------
+
+fun cosf(x: f32) -> f32:
+    half_pi: f32 = 1.57079632
+    return sinf(x + half_pi)
+
+fun cos(x: f64) -> f64:
+    half_pi: f64 = 1.57079632679489661923
+    return sin(x + half_pi)
+
+# ---------- tan (f32/f64) ----------
+
+fun tanf(x: f32) -> f32:
+    return sinf(x) / cosf(x)
+
+fun tan(x: f64) -> f64:
+    return sin(x) / cos(x)
+
+# ---------- atan (f32) ----------
+# Polynomial for |x| <= 1, identity atan(x) = pi/2 - atan(1/x) for |x| > 1
+
+fun atanf(x: f32) -> f32:
+    half_pi: f32 = 1.57079632
+    v: f32 = x
+    neg: bool = v < 0.0
+    if neg:
+        v = 0.0 - v
+    invert: bool = v > 1.0
+    if invert:
+        v = 1.0 / v
+    v2: f32 = v * v
+    r: f32 = v * (1.0 + v2 * (0.0 - 0.3333333 + v2 * (0.2 + v2 * (0.0 - 0.142857142 + v2 * (0.111111111 + v2 * (0.0 - 0.0909090 + v2 * 0.0769231))))))
+    if invert:
+        r = half_pi - r
+    if neg:
+        r = 0.0 - r
+    return r
+
+# ---------- atan (f64) ----------
+
+fun atan(x: f64) -> f64:
+    half_pi: f64 = 1.57079632679489661923
+    v: f64 = x
+    neg: bool = v < 0.0
+    if neg:
+        v = 0.0 - v
+    invert: bool = v > 1.0
+    if invert:
+        v = 1.0 / v
+    v2: f64 = v * v
+    r: f64 = v * (1.0 + v2 * (0.0 - 0.3333333333333330 + v2 * (0.2000000000000000 + v2 * (0.0 - 0.1428571428571428 + v2 * (0.1111111111111111 + v2 * (0.0 - 0.0909090909090909 + v2 * (0.0769230769230769 + v2 * (0.0 - 0.0666666666666666))))))))
+    if invert:
+        r = half_pi - r
+    if neg:
+        r = 0.0 - r
+    return r
+
+# ---------- atan2 (f32/f64) ----------
+
+fun atan2f(y: f32, x: f32) -> f32:
+    pi: f32 = 3.14159265
+    if x > 0.0:
+        return atanf(y / x)
+    if x < 0.0:
+        if y >= 0.0:
+            return atanf(y / x) + pi
+        return atanf(y / x) - pi
+    if y > 0.0:
+        return 1.57079632
+    if y < 0.0:
+        return 0.0 - 1.57079632
+    return 0.0
+
+fun atan2(y: f64, x: f64) -> f64:
+    pi: f64 = 3.14159265358979323846
+    if x > 0.0:
+        return atan(y / x)
+    if x < 0.0:
+        if y >= 0.0:
+            return atan(y / x) + pi
+        return atan(y / x) - pi
+    if y > 0.0:
+        return 1.57079632679489661923
+    if y < 0.0:
+        return 0.0 - 1.57079632679489661923
+    return 0.0
+
+# ---------- asin (f32/f64) ----------
+# asin(x) = atan2(x, sqrt(1 - x*x))
+
+fun asinf(x: f32) -> f32:
+    return atan2f(x, @sqrt(1.0 - x * x))
+
+fun asin(x: f64) -> f64:
+    return atan2(x, @sqrt(1.0 - x * x))
+
+# ---------- acos (f32/f64) ----------
+# acos(x) = pi/2 - asin(x)
+
+fun acosf(x: f32) -> f32:
+    return 1.57079632 - asinf(x)
+
+fun acos(x: f64) -> f64:
+    return 1.57079632679489661923 - asin(x)
+
+# ---------- exp (f32) ----------
+# Range reduction: x = n*ln2 + r, exp(x) = 2^n * exp(r)
+
+fun expf(x: f32) -> f32:
+    if x > 88.0:
+        return 3.40282347e+38
+    if x < (0.0 - 88.0):
+        return 0.0
+    ln2: f32 = 0.6931472
+    n_f: f32 = truncf(x / ln2 + 0.5)
+    if x < 0.0:
+        n_f = truncf(x / ln2 - 0.5)
+    n: i32 = n_f as i32
+    r: f32 = x - n_f * ln2
+    er: f32 = 1.0 + r * (1.0 + r * (0.5 + r * (0.16666667 + r * (0.041666668 + r * (0.008333334 + r * 0.001388889)))))
+    i: i32 = 0
+    if n > 0:
+        while i < n:
+            er = er * 2.0
+            i = i + 1
+    else:
+        abs_n: i32 = 0 - n
+        while i < abs_n:
+            er = er * 0.5
+            i = i + 1
+    return er
+
+# ---------- exp (f64) ----------
+
+fun exp(x: f64) -> f64:
+    if x > 709.0:
+        return 1.7976931348623157e+308
+    if x < (0.0 - 709.0):
+        return 0.0
+    ln2: f64 = 0.69314718055994530942
+    n_f: f64 = trunc(x / ln2 + 0.5)
+    if x < 0.0:
+        n_f = trunc(x / ln2 - 0.5)
+    n: i32 = n_f as i32
+    r: f64 = x - n_f * ln2
+    er: f64 = 1.0 + r * (1.0 + r * (0.5 + r * (0.16666666666666666 + r * (0.04166666666666666 + r * (0.008333333333333333 + r * (0.001388888888888889 + r * 0.000198412698412698))))))
+    i: i32 = 0
+    if n > 0:
+        while i < n:
+            er = er * 2.0
+            i = i + 1
+    else:
+        abs_n: i32 = 0 - n
+        while i < abs_n:
+            er = er * 0.5
+            i = i + 1
+    return er
+
+# ---------- log (f32) ----------
+# Range reduction: x = m * 2^e, m in [1,2), log(x) = e*ln2 + log(m)
+# log(m) via series: let t=(m-1)/(m+1), log(m) = 2*(t + t^3/3 + t^5/5 + ...)
+
+fun logf(x: f32) -> f32:
+    if x <= 0.0:
+        return 0.0 - 3.40282347e+38
+    ln2: f32 = 0.6931472
+    e: i32 = 0
+    m: f32 = x
+    while m >= 2.0:
+        m = m * 0.5
+        e = e + 1
+    while m < 1.0:
+        m = m * 2.0
+        e = e - 1
+    t: f32 = (m - 1.0) / (m + 1.0)
+    t2: f32 = t * t
+    log_m: f32 = 2.0 * t * (1.0 + t2 * (0.3333333 + t2 * (0.2 + t2 * (0.142857142 + t2 * 0.111111111))))
+    return (e as f32) * ln2 + log_m
+
+# ---------- log (f64) ----------
+
+fun log(x: f64) -> f64:
+    if x <= 0.0:
+        return 0.0 - 1.7976931348623157e+308
+    ln2: f64 = 0.69314718055994530942
+    e: i32 = 0
+    m: f64 = x
+    while m >= 2.0:
+        m = m * 0.5
+        e = e + 1
+    while m < 1.0:
+        m = m * 2.0
+        e = e - 1
+    t: f64 = (m - 1.0) / (m + 1.0)
+    t2: f64 = t * t
+    log_m: f64 = 2.0 * t * (1.0 + t2 * (0.3333333333333330 + t2 * (0.2000000000000000 + t2 * (0.1428571428571428 + t2 * (0.1111111111111111 + t2 * 0.0909090909090909)))))
+    return (e as f64) * ln2 + log_m
+
+# ---------- log2 / log10 (f32/f64) ----------
+
+fun log2f(x: f32) -> f32:
+    return logf(x) * 1.44269504
+
+fun log2(x: f64) -> f64:
+    return log(x) * 1.44269504088896340736
+
+fun log10f(x: f32) -> f32:
+    return logf(x) * 0.43429448
+
+fun log10(x: f64) -> f64:
+    return log(x) * 0.43429448190325182765
+
+# ---------- exp2 (f32/f64) ----------
+
+fun exp2f(x: f32) -> f32:
+    return expf(x * 0.6931472)
+
+fun exp2(x: f64) -> f64:
+    return exp(x * 0.69314718055994530942)
+
+# ---------- pow (f32/f64) ----------
+# pow(x, y) = exp(y * log(x))
+
+fun powf(x: f32, y: f32) -> f32:
+    if y == 0.0:
+        return 1.0
+    if x == 0.0:
+        return 0.0
+    if x < 0.0:
+        n: i32 = y as i32
+        abs_x: f32 = 0.0 - x
+        result: f32 = expf(y * logf(abs_x))
+        n_mod2: i32 = n - (n / 2) * 2
+        if n_mod2 != 0:
+            return 0.0 - result
+        return result
+    return expf(y * logf(x))
+
+fun pow(x: f64, y: f64) -> f64:
+    if y == 0.0:
+        return 1.0
+    if x == 0.0:
+        return 0.0
+    if x < 0.0:
+        n: i32 = y as i32
+        abs_x: f64 = 0.0 - x
+        result: f64 = exp(y * log(abs_x))
+        n_mod2: i32 = n - (n / 2) * 2
+        if n_mod2 != 0:
+            return 0.0 - result
+        return result
+    return exp(y * log(x))
+
+# ---------- fabsf (f32) ----------
+# Backup if @fabs isn't used directly
+
+fun fabsf(x: f32) -> f32:
+    if x < 0.0:
+        return 0.0 - x
+    return x
+
+fun fabs(x: f64) -> f64:
+    if x < 0.0:
+        return 0.0 - x
+    return x
+
+# ---------- sqrtf (f32) ----------
+# Backup - normally @sqrt is hardware (sqrtss)
+
+fun sqrtf(x: f32) -> f32:
+    return @sqrt(x)
+
+fun sqrt(x: f64) -> f64:
+    return @sqrt(x)
+
+
+# ==================== Math Struct (high-level API) ====================
+
+struct Math:
+    # ========== Constants ==========
+
+    static fun PI() -> f64:
+        return 3.14159265358979323846
+
+    static fun PI_F32() -> f32:
+        return 3.14159265
+
+    static fun TAU() -> f64:
+        return 6.28318530717958647692
+
+    static fun E() -> f64:
+        return 2.71828182845904523536
+
+    # ========== Angle Conversions ==========
+
+    static fun radians(degrees: f32) -> f32:
+        return degrees * 3.14159265 / 180.0
+
+    static fun degrees(radians: f32) -> f32:
+        return radians * 180.0 / 3.14159265
+
+    # ========== Integer Math ==========
+
+    static fun abs_i32(x: i32) -> i32:
+        if x < 0:
+            return 0 - x
+        return x
+
+    static fun abs_i64(x: i64) -> i64:
+        if x < 0:
+            return 0 - x
+        return x
+
+    static fun min_i32(a: i32, b: i32) -> i32:
+        if a < b:
+            return a
+        return b
+
+    static fun max_i32(a: i32, b: i32) -> i32:
+        if a > b:
+            return a
+        return b
+
+    static fun min_i64(a: i64, b: i64) -> i64:
+        if a < b:
+            return a
+        return b
+
+    static fun max_i64(a: i64, b: i64) -> i64:
+        if a > b:
+            return a
+        return b
+
+    static fun clamp_i32(value: i32, min_val: i32, max_val: i32) -> i32:
+        if value < min_val:
+            return min_val
+        if value > max_val:
+            return max_val
+        return value
+
+    static fun clamp_i64(value: i64, min_val: i64, max_val: i64) -> i64:
+        if value < min_val:
+            return min_val
+        if value > max_val:
+            return max_val
+        return value
+
+    static fun sign_i32(x: i32) -> i32:
+        if x > 0:
+            return 1
+        if x < 0:
+            return 0 - 1
+        return 0
+
+    # ========== Float Math ==========
+
+    static fun min_f32(a: f32, b: f32) -> f32:
+        if a < b:
+            return a
+        return b
+
+    static fun max_f32(a: f32, b: f32) -> f32:
+        if a > b:
+            return a
+        return b
+
+    static fun clamp_f32(value: f32, min_val: f32, max_val: f32) -> f32:
+        if value < min_val:
+            return min_val
+        if value > max_val:
+            return max_val
+        return value
+
+    static fun sign_f32(x: f32) -> f32:
+        if x > 0.0:
+            return 1.0
+        if x < 0.0:
+            return 0.0 - 1.0
+        return 0.0
+
+    # ========== Interpolation ==========
+
+    static fun lerp_f32(a: f32, b: f32, t: f32) -> f32:
+        return a + (b - a) * t
+
+    static fun smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32:
+        t: f32 = Math.clamp_f32((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    # ========== Power (integer exponent) ==========
+
+    static fun pow_i32(base: i32, exponent: i32) -> i32:
+        result: i32 = 1
+        i: i32 = 0
+        while i < exponent:
+            result = result * base
+            i = i + 1
+        return result
+
+    # ========== Modulo (float) ==========
+
+    static fun fmod_f32(x: f32, y: f32) -> f32:
+        return fmodf(x, y)
+
+    # ========== Map / Remap ==========
+
+    static fun map_f32(value: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32:
+        return out_min + (value - in_min) * (out_max - out_min) / (in_max - in_min)
+
+    # ========== Comparison ==========
+
+    static fun approx_equal_f32(a: f32, b: f32, epsilon: f32) -> bool:
+        diff: f32 = a - b
+        if diff < 0.0:
+            diff = 0.0 - diff
+        return diff < epsilon
+
+    # ========== Wrap ==========
+
+    static fun wrap_f32(value: f32, min_val: f32, max_val: f32) -> f32:
+        range_val: f32 = max_val - min_val
+        return min_val + fmodf(fmodf(value - min_val, range_val) + range_val, range_val)
+
+    static fun wrap_angle(angle: f32) -> f32:
+        return Math.wrap_f32(angle, 0.0 - 180.0, 180.0)

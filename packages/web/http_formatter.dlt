@@ -1,0 +1,240 @@
+# ============================================================================
+# HttpFormatter - HTTP response formatting for Dolet Web Framework
+# Internal module - provides HTTP response formatting without importing net
+# Requirements: 8.1, 8.2
+# ============================================================================
+
+# HttpFormatter struct - HTTP response formatting utilities
+# Requirements: 8.1, 8.2
+struct HttpFormatter:
+    # ========== Status Text Mapping ==========
+    
+    # Get status text for HTTP status code
+    # Returns: human-readable status text for the given code
+    # Requirements: 8.1
+    static fun status_text(code: i32) -> str:
+        if code == 200:
+            return "OK"
+        if code == 201:
+            return "Created"
+        if code == 204:
+            return "No Content"
+        if code == 301:
+            return "Moved Permanently"
+        if code == 302:
+            return "Found"
+        if code == 304:
+            return "Not Modified"
+        if code == 400:
+            return "Bad Request"
+        if code == 401:
+            return "Unauthorized"
+        if code == 403:
+            return "Forbidden"
+        if code == 404:
+            return "Not Found"
+        if code == 405:
+            return "Method Not Allowed"
+        if code == 500:
+            return "Internal Server Error"
+        if code == 502:
+            return "Bad Gateway"
+        if code == 503:
+            return "Service Unavailable"
+        return "Unknown"
+    
+    # ========== HTTP Response Formatting ==========
+    
+    # Format HTTP response with status, content-type, and body
+    # Returns: formatted HTTP/1.1 response string
+    # Format: HTTP/1.1 {status} {status_text}\r\n
+    #         Content-Type: {content_type}\r\n
+    #         Content-Length: {body_len}\r\n
+    #         \r\n
+    #         {body}
+    # Requirements: 8.1, 8.2
+    static fun format(status: i32, content_type: str, body: str) -> str:
+        # Calculate body length
+        body_len: i64 = Memory.strlen(body)
+        body_len_str: str = Convert.i64_to_str(body_len)
+        
+        # Get status text
+        status_txt: str = HttpFormatter.status_text(status)
+        status_str: str = Convert.i32_to_str(status)
+        
+        # Calculate string lengths
+        status_str_len: i64 = Memory.strlen(status_str)
+        status_txt_len: i64 = Memory.strlen(status_txt)
+        content_type_len: i64 = Memory.strlen(content_type)
+        body_len_str_len: i64 = Memory.strlen(body_len_str)
+
+        # Calculate total size needed
+        # "HTTP/1.1 " = 9
+        # status_str + " " + status_txt + "\r\n" 
+        # "Content-Type: " = 14
+        # content_type + "\r\n"
+        # "Content-Length: " = 16
+        # body_len_str + "\r\n"
+        # "\r\n" = 2
+        # body
+        total_len: i64 = 9 + status_str_len + 1 + status_txt_len + 2 + 14 + content_type_len + 2 + 16 + body_len_str_len + 2 + 2 + body_len
+        
+        result: i64 = Memory.malloc(total_len + 1)
+        pos: i64 = 0
+        i: i64 = 0
+        c: i8 = 0 as i8
+        
+        # "HTTP/1.1 "
+        Memory.write_i8(result + pos, 72 as i8)  # H
+        pos = pos + 1
+        Memory.write_i8(result + pos, 84 as i8)  # T
+        pos = pos + 1
+        Memory.write_i8(result + pos, 84 as i8)  # T
+        pos = pos + 1
+        Memory.write_i8(result + pos, 80 as i8)  # P
+        pos = pos + 1
+        Memory.write_i8(result + pos, 47 as i8)  # /
+        pos = pos + 1
+        Memory.write_i8(result + pos, 49 as i8)  # 1
+        pos = pos + 1
+        Memory.write_i8(result + pos, 46 as i8)  # .
+        pos = pos + 1
+        Memory.write_i8(result + pos, 49 as i8)  # 1
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+        
+        # status code
+        i = 0
+        while i < status_str_len:
+            c = Memory.read_i8((status_str as i64) + i)
+            Memory.write_i8(result + pos, c)
+            pos = pos + 1
+            i = i + 1
+        
+        # space
+        Memory.write_i8(result + pos, 32 as i8)
+        pos = pos + 1
+        
+        # status text
+        i = 0
+        while i < status_txt_len:
+            c = Memory.read_i8((status_txt as i64) + i)
+            Memory.write_i8(result + pos, c)
+            pos = pos + 1
+            i = i + 1
+        
+        # \r\n
+        Memory.write_i8(result + pos, 13 as i8)
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)
+        pos = pos + 1
+
+        # "Content-Type: "
+        Memory.write_i8(result + pos, 67 as i8)  # C
+        pos = pos + 1
+        Memory.write_i8(result + pos, 111 as i8) # o
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 45 as i8)  # -
+        pos = pos + 1
+        Memory.write_i8(result + pos, 84 as i8)  # T
+        pos = pos + 1
+        Memory.write_i8(result + pos, 121 as i8) # y
+        pos = pos + 1
+        Memory.write_i8(result + pos, 112 as i8) # p
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 58 as i8)  # :
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+        
+        # content_type
+        i = 0
+        while i < content_type_len:
+            c = Memory.read_i8((content_type as i64) + i)
+            Memory.write_i8(result + pos, c)
+            pos = pos + 1
+            i = i + 1
+        
+        # \r\n
+        Memory.write_i8(result + pos, 13 as i8)
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)
+        pos = pos + 1
+        
+        # "Content-Length: "
+        Memory.write_i8(result + pos, 67 as i8)  # C
+        pos = pos + 1
+        Memory.write_i8(result + pos, 111 as i8) # o
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 45 as i8)  # -
+        pos = pos + 1
+        Memory.write_i8(result + pos, 76 as i8)  # L
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 103 as i8) # g
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 104 as i8) # h
+        pos = pos + 1
+        Memory.write_i8(result + pos, 58 as i8)  # :
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+
+        # body length string
+        i = 0
+        while i < body_len_str_len:
+            c = Memory.read_i8((body_len_str as i64) + i)
+            Memory.write_i8(result + pos, c)
+            pos = pos + 1
+            i = i + 1
+        
+        # \r\n\r\n (end of headers)
+        Memory.write_i8(result + pos, 13 as i8)
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)
+        pos = pos + 1
+        Memory.write_i8(result + pos, 13 as i8)
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)
+        pos = pos + 1
+        
+        # body content
+        i = 0
+        while i < body_len:
+            c = Memory.read_i8((body as i64) + i)
+            Memory.write_i8(result + pos, c)
+            pos = pos + 1
+            i = i + 1
+        
+        # null terminator
+        Memory.write_i8(result + pos, 0 as i8)
+        
+        return result as str

@@ -1,0 +1,137 @@
+# ============================
+#  Keyboard Key Constants
+# ============================
+# Named constants for all keyboard keys using Win32 Virtual Key codes
+# Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8
+
+# ----- Letter Keys (A-Z): 65-90 -----
+# Requirements: 1.1
+KEY_A: i32 = 65
+KEY_B: i32 = 66
+KEY_C: i32 = 67
+KEY_D: i32 = 68
+KEY_E: i32 = 69
+KEY_F: i32 = 70
+KEY_G: i32 = 71
+KEY_H: i32 = 72
+KEY_I: i32 = 73
+KEY_J: i32 = 74
+KEY_K: i32 = 75
+KEY_L: i32 = 76
+KEY_M: i32 = 77
+KEY_N: i32 = 78
+KEY_O: i32 = 79
+KEY_P: i32 = 80
+KEY_Q: i32 = 81
+KEY_R: i32 = 82
+KEY_S: i32 = 83
+KEY_T: i32 = 84
+KEY_U: i32 = 85
+KEY_V: i32 = 86
+KEY_W: i32 = 87
+KEY_X: i32 = 88
+KEY_Y: i32 = 89
+KEY_Z: i32 = 90
+
+# ----- Number Keys (0-9): 48-57 -----
+# Requirements: 1.2
+KEY_0: i32 = 48
+KEY_1: i32 = 49
+KEY_2: i32 = 50
+KEY_3: i32 = 51
+KEY_4: i32 = 52
+KEY_5: i32 = 53
+KEY_6: i32 = 54
+KEY_7: i32 = 55
+KEY_8: i32 = 56
+KEY_9: i32 = 57
+
+
+# ----- Function Keys (F1-F12): 112-123 -----
+# Requirements: 1.3
+KEY_F1: i32 = 112
+KEY_F2: i32 = 113
+KEY_F3: i32 = 114
+KEY_F4: i32 = 115
+KEY_F5: i32 = 116
+KEY_F6: i32 = 117
+KEY_F7: i32 = 118
+KEY_F8: i32 = 119
+KEY_F9: i32 = 120
+KEY_F10: i32 = 121
+KEY_F11: i32 = 122
+KEY_F12: i32 = 123
+
+# ----- Arrow Keys -----
+# Requirements: 1.4
+KEY_LEFT: i32 = 37
+KEY_UP: i32 = 38
+KEY_RIGHT: i32 = 39
+KEY_DOWN: i32 = 40
+
+# ----- Modifier Keys -----
+# Requirements: 1.5, 8.4
+KEY_SHIFT: i32 = 16
+KEY_CTRL: i32 = 17
+KEY_ALT: i32 = 18
+KEY_LSHIFT: i32 = 160
+KEY_RSHIFT: i32 = 161
+KEY_LCTRL: i32 = 162
+KEY_RCTRL: i32 = 163
+KEY_LALT: i32 = 164
+KEY_RALT: i32 = 165
+KEY_LWIN: i32 = 91
+KEY_RWIN: i32 = 92
+
+# ----- Special Keys -----
+# Requirements: 1.6
+KEY_ESCAPE: i32 = 27
+KEY_SPACE: i32 = 32
+KEY_ENTER: i32 = 13
+KEY_TAB: i32 = 9
+KEY_BACKSPACE: i32 = 8
+KEY_DELETE: i32 = 46
+KEY_INSERT: i32 = 45
+KEY_HOME: i32 = 36
+KEY_END: i32 = 35
+KEY_PAGEUP: i32 = 33
+KEY_PAGEDOWN: i32 = 34
+KEY_CAPSLOCK: i32 = 20
+KEY_NUMLOCK: i32 = 144
+KEY_SCROLLLOCK: i32 = 145
+KEY_PRINTSCREEN: i32 = 44
+KEY_PAUSE: i32 = 19
+
+
+# ----- Numpad Keys -----
+# Requirements: 1.7
+KEY_NUMPAD0: i32 = 96
+KEY_NUMPAD1: i32 = 97
+KEY_NUMPAD2: i32 = 98
+KEY_NUMPAD3: i32 = 99
+KEY_NUMPAD4: i32 = 100
+KEY_NUMPAD5: i32 = 101
+KEY_NUMPAD6: i32 = 102
+KEY_NUMPAD7: i32 = 103
+KEY_NUMPAD8: i32 = 104
+KEY_NUMPAD9: i32 = 105
+KEY_NUMPAD_ADD: i32 = 107
+KEY_NUMPAD_SUBTRACT: i32 = 109
+KEY_NUMPAD_MULTIPLY: i32 = 106
+KEY_NUMPAD_DIVIDE: i32 = 111
+KEY_NUMPAD_DECIMAL: i32 = 110
+KEY_NUMPAD_ENTER: i32 = 13
+
+# ----- Punctuation Keys -----
+# Requirements: 1.8
+KEY_COMMA: i32 = 188
+KEY_PERIOD: i32 = 190
+KEY_SLASH: i32 = 191
+KEY_SEMICOLON: i32 = 186
+KEY_QUOTE: i32 = 222
+KEY_BRACKET_LEFT: i32 = 219
+KEY_BRACKET_RIGHT: i32 = 221
+KEY_BACKSLASH: i32 = 220
+KEY_MINUS: i32 = 189
+KEY_EQUALS: i32 = 187
+KEY_GRAVE: i32 = 192

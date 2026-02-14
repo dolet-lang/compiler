@@ -1,0 +1,377 @@
+# ============================================================================
+# AsyncSocket - Async socket I/O wrappers for non-blocking network operations
+# Wraps existing NetOps with Future for async/await support
+# Requirements: 4.2 - Non-blocking socket I/O
+# ============================================================================
+
+# AsyncSocketResult - Result type for async socket operations
+struct AsyncSocketResult:
+    success: bool = false
+    data: i64 = 0           # Pointer to data (for recv operations)
+    bytes_count: i32 = 0    # Number of bytes sent/received
+    socket: i64 = -1        # Socket handle (for accept operations)
+    error_msg: str = ""     # Error message if failed
+
+imple AsyncSocketResult:
+    # Create a successful result with data
+    static fun ok(data_ptr: i64, count: i32) -> AsyncSocketResult:
+        r: AsyncSocketResult = AsyncSocketResult()
+        r.success = true
+        r.data = data_ptr
+        r.bytes_count = count
+        r.socket = -1
+        r.error_msg = ""
+        return r
+    
+    # Create a successful result with just byte count (for send operations)
+    static fun ok_count(count: i32) -> AsyncSocketResult:
+        r: AsyncSocketResult = AsyncSocketResult()
+        r.success = true
+        r.data = 0
+        r.bytes_count = count
+        r.socket = -1
+        r.error_msg = ""
+        return r
+    
+    # Create a successful result with socket handle (for accept operations)
+    static fun ok_socket(sock: i64) -> AsyncSocketResult:
+        r: AsyncSocketResult = AsyncSocketResult()
+        r.success = true
+        r.data = 0
+        r.bytes_count = 0
+        r.socket = sock
+        r.error_msg = ""
+        return r
+    
+    # Create an error result
+    static fun err(msg: str) -> AsyncSocketResult:
+        r: AsyncSocketResult = AsyncSocketResult()
+        r.success = false
+        r.data = 0
+        r.bytes_count = 0
+        r.socket = -1
+        r.error_msg = msg
+        return r
+    
+    # Check if operation succeeded
+    fun is_ok(self) -> bool:
+        return self.success
+    
+    # Check if operation failed
+    fun is_err(self) -> bool:
+        return not self.success
+    
+    # Get the data pointer (only valid if is_ok())
+    fun get_data(self) -> i64:
+        return self.data
+    
+    # Get the byte count
+    fun get_bytes_count(self) -> i32:
+        return self.bytes_count
+    
+    # Get the socket handle (only valid for accept results)
+    fun get_socket(self) -> i64:
+        return self.socket
+    
+    # Get the error message (only valid if is_err())
+    fun get_error(self) -> str:
+        return self.error_msg
+
+
+# AsyncSocket - Async socket wrapper for TCP connections
+struct AsyncSocket:
+    handle: i64 = -1        # Underlying socket handle
+    is_open: bool = false   # Whether socket is open
+    is_bound: bool = false  # Whether socket is bound to address
+    is_listening: bool = false  # Whether socket is listening
+
+imple AsyncSocket:
+    # ========== Initialization ==========
+    
+    # Initialize Winsock (must be called before any socket operations)
+    static fun init() -> i32:
+        return NetOps.net_init()
+    
+    # ========== Async Factory Methods ==========
+    
+    # Create a new TCP socket asynchronously
+    static async fun create() -> AsyncSocket:
+        sock: AsyncSocket = AsyncSocket()
+        
+        # Ensure Winsock is initialized
+        init_result: i32 = NetOps.net_init()
+        if init_result != 0:
+            sock.handle = -1
+            sock.is_open = false
+            return sock
+        
+        # Create the socket
+        h: i64 = NetOps.net_socket_create()
+        
+        if h == -1:
+            sock.handle = -1
+            sock.is_open = false
+        else:
+            sock.handle = h
+            sock.is_open = true
+        
+        return sock
+    
+    # ========== Async Server Operations ==========
+    
+    # Bind socket to address and port asynchronously
+    async fun bind(self, host: str, port: i32) -> AsyncSocketResult:
+        if not self.is_open:
+            return AsyncSocketResult.err("Socket not open")
+        
+        if self.handle == -1:
+            return AsyncSocketResult.err("Invalid socket handle")
+        
+        result: i32 = NetOps.net_socket_bind(self.handle, host, port)
+        
+        if result != 0:
+            return AsyncSocketResult.err("Bind operation failed")
+        
+        self.is_bound = true
+        return AsyncSocketResult.ok_count(0)
+    
+    # Start listening for connections asynchronously
+    async fun listen(self, backlog: i32) -> AsyncSocketResult:
+        if not self.is_open:
+            return AsyncSocketResult.err("Socket not open")
+        
+        if not self.is_bound:
+            return AsyncSocketResult.err("Socket not bound")
+        
+        result: i32 = NetOps.net_socket_listen(self.handle, backlog)
+        
+        if result != 0:
+            return AsyncSocketResult.err("Listen operation failed")
+        
+        self.is_listening = true
+        return AsyncSocketResult.ok_count(0)
+    
+    # Accept incoming connection asynchronously
+    # Returns: Future<AsyncSocketResult> with client socket
+    async fun accept(self) -> AsyncSocketResult:
+        if not self.is_open:
+            return AsyncSocketResult.err("Socket not open")
+        
+        if not self.is_listening:
+            return AsyncSocketResult.err("Socket not listening")
+        
+        # Accept connection
+        # In a real async implementation, this would yield to event loop
+        # when no connection is pending
+        client_sock: i64 = NetOps.net_socket_accept(self.handle)
+        
+        if client_sock == -1:
+            return AsyncSocketResult.err("Accept operation failed")
+        
+        return AsyncSocketResult.ok_socket(client_sock)
+    
+    # ========== Async Data Transfer Operations ==========
+    
+    # Send data over socket asynchronously
+    # Returns: Future<AsyncSocketResult> with bytes sent count
+    async fun send(self, data: str) -> AsyncSocketResult:
+        if not self.is_open:
+            return AsyncSocketResult.err("Socket not open")
+        
+        if self.handle == -1:
+            return AsyncSocketResult.err("Invalid socket handle")
+        
+        # Perform the send operation
+        # In a real async implementation, this would yield when buffer is full
+        bytes_sent: i32 = NetOps.net_socket_send(self.handle, data)
+        
+        if bytes_sent < 0:
+            return AsyncSocketResult.err("Send operation failed")
+        
+        return AsyncSocketResult.ok_count(bytes_sent)
+    
+    # Receive data from socket asynchronously
+    # Returns: Future<AsyncSocketResult> with data and byte count
+    async fun recv(self, buffer: i64, size: i32) -> AsyncSocketResult:
+        if not self.is_open:
+            return AsyncSocketResult.err("Socket not open")
+        
+        if self.handle == -1:
+            return AsyncSocketResult.err("Invalid socket handle")
+        
+        # Perform the receive operation
+        # In a real async implementation, this would yield when no data available
+        bytes_recv: i32 = NetOps.net_socket_recv(self.handle, buffer, size)
+        
+        if bytes_recv < 0:
+            return AsyncSocketResult.err("Receive operation failed")
+        
+        return AsyncSocketResult.ok(buffer, bytes_recv)
+    
+    # Receive data into newly allocated buffer asynchronously
+    # Caller must free the returned buffer
+    async fun recv_alloc(self, max_size: i32) -> AsyncSocketResult:
+        if not self.is_open:
+            return AsyncSocketResult.err("Socket not open")
+        
+        if self.handle == -1:
+            return AsyncSocketResult.err("Invalid socket handle")
+        
+        # Allocate buffer
+        buffer: i64 = Memory.malloc((max_size + 1) as i64)
+        if buffer == 0:
+            return AsyncSocketResult.err("Failed to allocate buffer")
+        
+        # Zero the buffer
+        Memory.zero(buffer, max_size + 1)
+        
+        # Receive data
+        bytes_recv: i32 = NetOps.net_socket_recv(self.handle, buffer, max_size)
+        
+        if bytes_recv < 0:
+            Memory.free(buffer)
+            return AsyncSocketResult.err("Receive operation failed")
+        
+        # Null terminate
+        Memory.write_i8(buffer + (bytes_recv as i64), 0 as i8)
+        
+        return AsyncSocketResult.ok(buffer, bytes_recv)
+    
+    # ========== Sync Helper Methods ==========
+    
+    # Check if socket is valid and open
+    fun is_valid(self) -> bool:
+        return self.is_open and self.handle != -1
+    
+    # Get the underlying socket handle
+    fun get_handle(self) -> i64:
+        return self.handle
+    
+    # Close socket
+    fun close(self):
+        if self.is_open and self.handle != -1:
+            NetOps.net_socket_close(self.handle)
+            self.is_open = false
+            self.is_bound = false
+            self.is_listening = false
+            self.handle = -1
+
+
+# AsyncTcpClient - Convenience wrapper for TCP client connections
+struct AsyncTcpClient:
+    socket: AsyncSocket
+
+imple AsyncTcpClient:
+    # Create a new TCP client and connect to server
+    static async fun connect(host: str, port: i32) -> AsyncTcpClient:
+        client: AsyncTcpClient = AsyncTcpClient()
+        client.socket = await AsyncSocket.create()
+        
+        # Note: NetOps doesn't have a connect function yet
+        # This would need to be added for full client support
+        # For now, the socket is created but not connected
+        
+        return client
+    
+    # Send data to server
+    async fun send(self, data: str) -> AsyncSocketResult:
+        return await self.socket.send(data)
+    
+    # Receive data from server
+    async fun recv(self, buffer: i64, size: i32) -> AsyncSocketResult:
+        return await self.socket.recv(buffer, size)
+    
+    # Receive data into allocated buffer
+    async fun recv_alloc(self, max_size: i32) -> AsyncSocketResult:
+        return await self.socket.recv_alloc(max_size)
+    
+    # Check if connected
+    fun is_connected(self) -> bool:
+        return self.socket.is_valid()
+    
+    # Close connection
+    fun close(self):
+        self.socket.close()
+
+
+# AsyncTcpServer - Convenience wrapper for TCP server
+struct AsyncTcpServer:
+    socket: AsyncSocket
+    host: str = ""
+    port: i32 = 0
+
+imple AsyncTcpServer:
+    # Create and start a TCP server
+    static async fun start(host: str, port: i32, backlog: i32) -> AsyncTcpServer:
+        server: AsyncTcpServer = AsyncTcpServer()
+        server.host = host
+        server.port = port
+        
+        # Create socket
+        server.socket = await AsyncSocket.create()
+        
+        if not server.socket.is_valid():
+            return server
+        
+        # Bind to address
+        bind_result: AsyncSocketResult = await server.socket.bind(host, port)
+        if bind_result.is_err():
+            server.socket.close()
+            return server
+        
+        # Start listening
+        listen_result: AsyncSocketResult = await server.socket.listen(backlog)
+        if listen_result.is_err():
+            server.socket.close()
+            return server
+        
+        return server
+    
+    # Accept incoming connection
+    # Returns: AsyncSocketResult with client socket handle
+    async fun accept(self) -> AsyncSocketResult:
+        return await self.socket.accept()
+    
+    # Check if server is running
+    fun is_running(self) -> bool:
+        return self.socket.is_valid() and self.socket.is_listening
+    
+    # Stop the server
+    fun stop(self):
+        self.socket.close()
+
+
+# ========== Convenience Async Functions ==========
+
+# Create a TCP server and start listening
+async fun async_tcp_listen(host: str, port: i32) -> AsyncTcpServer:
+    return await AsyncTcpServer.start(host, port, 10)
+
+# Send data on a socket handle
+async fun async_socket_send(sock: i64, data: str) -> AsyncSocketResult:
+    # Create a temporary AsyncSocket wrapper
+    wrapper: AsyncSocket = AsyncSocket()
+    wrapper.handle = sock
+    wrapper.is_open = true
+    
+    result: AsyncSocketResult = await wrapper.send(data)
+    
+    # Don't close - we don't own this socket
+    wrapper.is_open = false
+    
+    return result
+
+# Receive data from a socket handle
+async fun async_socket_recv(sock: i64, max_size: i32) -> AsyncSocketResult:
+    # Create a temporary AsyncSocket wrapper
+    wrapper: AsyncSocket = AsyncSocket()
+    wrapper.handle = sock
+    wrapper.is_open = true
+    
+    result: AsyncSocketResult = await wrapper.recv_alloc(max_size)
+    
+    # Don't close - we don't own this socket
+    wrapper.is_open = false
+    
+    return result
+

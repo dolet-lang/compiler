@@ -1,0 +1,215 @@
+# Matrix Helper Functions
+# Part of Qubic Game Engine
+# Requirements: 7.1, 7.2, 7.3, 7.4
+#
+# Provides standalone matrix functions for MVP calculation:
+# - create_identity_matrix(): Creates a 4x4 identity matrix
+# - create_translation_matrix(): Creates a translation matrix
+# - create_perspective_matrix(): Creates a perspective projection matrix
+# - multiply_4x4_matrices(): Multiplies two 4x4 matrices
+#
+# All matrices are stored in column-major order (OpenGL/Vulkan convention)
+# Layout: [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15]
+# Where columns are: [0-3], [4-7], [8-11], [12-15]
+
+# Create a 4x4 identity matrix
+# Returns a pointer to 64 bytes of memory containing the identity matrix
+# Returns 0 on allocation failure
+# Requirements: 7.1
+fun create_identity_matrix() -> i64:
+    matrix_ptr: i64 = Memory.malloc_zeroed(64)
+    zero: i64 = 0
+    if matrix_ptr == zero:
+        return zero
+    
+    # Initialize to zero
+    Memory.set(matrix_ptr, 0, 64)
+    
+    # Set diagonal elements to 1.0
+    # Column 0, Row 0 (offset 0)
+    Memory.write_f32(matrix_ptr + 0, 1.0)
+    # Column 1, Row 1 (offset 20 = 5 * 4)
+    Memory.write_f32(matrix_ptr + 20, 1.0)
+    # Column 2, Row 2 (offset 40 = 10 * 4)
+    Memory.write_f32(matrix_ptr + 40, 1.0)
+    # Column 3, Row 3 (offset 60 = 15 * 4)
+    Memory.write_f32(matrix_ptr + 60, 1.0)
+    
+    return matrix_ptr
+
+# Create a 4x4 translation matrix
+# Parameters: tx, ty, tz - translation values
+# Returns a pointer to 64 bytes of memory containing the translation matrix
+# Returns 0 on allocation failure
+# Requirements: 7.1
+fun create_translation_matrix(tx: f32, ty: f32, tz: f32) -> i64:
+    matrix_ptr: i64 = Memory.malloc_zeroed(64)
+    zero: i64 = 0
+    if matrix_ptr == zero:
+        return zero
+
+    # Initialize to zero
+    Memory.set(matrix_ptr, 0, 64)
+    
+    # Set diagonal elements to 1.0
+    Memory.write_f32(matrix_ptr + 0, 1.0)
+    Memory.write_f32(matrix_ptr + 20, 1.0)
+    Memory.write_f32(matrix_ptr + 40, 1.0)
+    Memory.write_f32(matrix_ptr + 60, 1.0)
+    
+    # Set translation in column 3 (offsets 48, 52, 56)
+    Memory.write_f32(matrix_ptr + 48, tx)
+    Memory.write_f32(matrix_ptr + 52, ty)
+    Memory.write_f32(matrix_ptr + 56, tz)
+    
+    return matrix_ptr
+
+# Create a 4x4 perspective projection matrix
+# Parameters:
+#   fov_degrees - Field of view in degrees
+#   aspect_ratio - Width / Height
+#   near_plane - Near clipping plane distance
+#   far_plane - Far clipping plane distance
+# Returns a pointer to 64 bytes of memory containing the projection matrix
+# Returns 0 on allocation failure
+# Requirements: 7.3
+fun create_perspective_matrix(fov_degrees: f32, aspect_ratio: f32, near_plane: f32, far_plane: f32) -> i64:
+    matrix_ptr: i64 = Memory.malloc_zeroed(64)
+    zero: i64 = 0
+    if matrix_ptr == zero:
+        return zero
+    
+    # Initialize to zero
+    Memory.set(matrix_ptr, 0, 64)
+    
+    # Convert FOV to radians
+    pi: f32 = 3.14159265359
+    fov_rad: f32 = fov_degrees * pi / 180.0
+    half_fov: f32 = fov_rad / 2.0
+    
+    # Calculate tan(fov/2)
+    tan_half_fov: f32 = @sin(half_fov) / @cos(half_fov)
+    
+    # f = 1 / tan(fov/2) = cot(fov/2)
+    f: f32 = 1.0 / tan_half_fov
+    
+    # Calculate range inverse
+    range_inv: f32 = 1.0 / (near_plane - far_plane)
+    
+    # Set matrix elements (Vulkan-style perspective with Y-flip)
+    # Column 0, Row 0: f / aspect
+    Memory.write_f32(matrix_ptr + 0, f / aspect_ratio)
+    
+    # Column 1, Row 1: -f (negative for Vulkan Y-flip)
+    Memory.write_f32(matrix_ptr + 20, -f)
+    
+    # Column 2, Row 2: far / (near - far)
+    Memory.write_f32(matrix_ptr + 40, far_plane * range_inv)
+    
+    # Column 2, Row 3: -1.0 (perspective divide)
+    Memory.write_f32(matrix_ptr + 44, -1.0)
+    
+    # Column 3, Row 2: (near * far) / (near - far)
+    Memory.write_f32(matrix_ptr + 56, near_plane * far_plane * range_inv)
+    
+    return matrix_ptr
+
+# Multiply two 4x4 matrices: result = a * b
+# Parameters:
+#   a - Pointer to first 4x4 matrix (64 bytes)
+#   b - Pointer to second 4x4 matrix (64 bytes)
+# Returns a pointer to 64 bytes of memory containing the result matrix
+# Returns 0 on allocation failure or if inputs are null
+# Requirements: 7.4
+fun multiply_4x4_matrices(a: i64, b: i64) -> i64:
+    zero: i64 = 0
+    if a == zero || b == zero:
+        return zero
+    
+    result: i64 = Memory.malloc_zeroed(64)
+    if result == zero:
+        return zero
+    
+    # Read all elements from matrix a (column-major)
+    a0: f32 = Memory.read_f32(a + 0)
+    a1: f32 = Memory.read_f32(a + 4)
+    a2: f32 = Memory.read_f32(a + 8)
+    a3: f32 = Memory.read_f32(a + 12)
+    a4: f32 = Memory.read_f32(a + 16)
+    a5: f32 = Memory.read_f32(a + 20)
+    a6: f32 = Memory.read_f32(a + 24)
+    a7: f32 = Memory.read_f32(a + 28)
+    a8: f32 = Memory.read_f32(a + 32)
+    a9: f32 = Memory.read_f32(a + 36)
+    a10: f32 = Memory.read_f32(a + 40)
+    a11: f32 = Memory.read_f32(a + 44)
+    a12: f32 = Memory.read_f32(a + 48)
+    a13: f32 = Memory.read_f32(a + 52)
+    a14: f32 = Memory.read_f32(a + 56)
+    a15: f32 = Memory.read_f32(a + 60)
+    
+    # Read all elements from matrix b (column-major)
+    b0: f32 = Memory.read_f32(b + 0)
+    b1: f32 = Memory.read_f32(b + 4)
+    b2: f32 = Memory.read_f32(b + 8)
+    b3: f32 = Memory.read_f32(b + 12)
+    b4: f32 = Memory.read_f32(b + 16)
+    b5: f32 = Memory.read_f32(b + 20)
+    b6: f32 = Memory.read_f32(b + 24)
+    b7: f32 = Memory.read_f32(b + 28)
+    b8: f32 = Memory.read_f32(b + 32)
+    b9: f32 = Memory.read_f32(b + 36)
+    b10: f32 = Memory.read_f32(b + 40)
+    b11: f32 = Memory.read_f32(b + 44)
+    b12: f32 = Memory.read_f32(b + 48)
+    b13: f32 = Memory.read_f32(b + 52)
+    b14: f32 = Memory.read_f32(b + 56)
+    b15: f32 = Memory.read_f32(b + 60)
+
+    # Compute result matrix (column-major order)
+    # result = a * b
+    # For column-major: result[col][row] = sum(a[k][row] * b[col][k]) for k=0..3
+    
+    # Column 0
+    r0: f32 = a0 * b0 + a4 * b1 + a8 * b2 + a12 * b3
+    r1: f32 = a1 * b0 + a5 * b1 + a9 * b2 + a13 * b3
+    r2: f32 = a2 * b0 + a6 * b1 + a10 * b2 + a14 * b3
+    r3: f32 = a3 * b0 + a7 * b1 + a11 * b2 + a15 * b3
+    
+    # Column 1
+    r4: f32 = a0 * b4 + a4 * b5 + a8 * b6 + a12 * b7
+    r5: f32 = a1 * b4 + a5 * b5 + a9 * b6 + a13 * b7
+    r6: f32 = a2 * b4 + a6 * b5 + a10 * b6 + a14 * b7
+    r7: f32 = a3 * b4 + a7 * b5 + a11 * b6 + a15 * b7
+    
+    # Column 2
+    r8: f32 = a0 * b8 + a4 * b9 + a8 * b10 + a12 * b11
+    r9: f32 = a1 * b8 + a5 * b9 + a9 * b10 + a13 * b11
+    r10: f32 = a2 * b8 + a6 * b9 + a10 * b10 + a14 * b11
+    r11: f32 = a3 * b8 + a7 * b9 + a11 * b10 + a15 * b11
+    
+    # Column 3
+    r12: f32 = a0 * b12 + a4 * b13 + a8 * b14 + a12 * b15
+    r13: f32 = a1 * b12 + a5 * b13 + a9 * b14 + a13 * b15
+    r14: f32 = a2 * b12 + a6 * b13 + a10 * b14 + a14 * b15
+    r15: f32 = a3 * b12 + a7 * b13 + a11 * b14 + a15 * b15
+    
+    # Write result matrix
+    Memory.write_f32(result + 0, r0)
+    Memory.write_f32(result + 4, r1)
+    Memory.write_f32(result + 8, r2)
+    Memory.write_f32(result + 12, r3)
+    Memory.write_f32(result + 16, r4)
+    Memory.write_f32(result + 20, r5)
+    Memory.write_f32(result + 24, r6)
+    Memory.write_f32(result + 28, r7)
+    Memory.write_f32(result + 32, r8)
+    Memory.write_f32(result + 36, r9)
+    Memory.write_f32(result + 40, r10)
+    Memory.write_f32(result + 44, r11)
+    Memory.write_f32(result + 48, r12)
+    Memory.write_f32(result + 52, r13)
+    Memory.write_f32(result + 56, r14)
+    Memory.write_f32(result + 60, r15)
+    
+    return result

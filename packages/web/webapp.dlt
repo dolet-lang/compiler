@@ -1,0 +1,116 @@
+# ============================================================================
+# WebApp - Main web application struct for Dolet Web Framework
+# Wires together: WebSocket, HttpParser, Router, Response
+# Requirements: 1.1, 1.2, 1.3, 1.4
+# ============================================================================
+
+# WebApp struct - main entry point for creating web applications
+# Provides high-level API for route registration and server management
+# Requirements: 1.1, 1.2, 1.3, 1.4
+struct WebApp:
+    port: i32 = 0              # Server port number
+    server_socket: i64 = -1    # Server socket handle
+    
+    # ========== Factory Method ==========
+    
+    # Create new WebApp instance configured for the specified port
+    # Returns: new WebApp instance with port set
+    # Requirements: 1.1
+    static fun create(port: i32) -> WebApp:
+        app: WebApp = WebApp()
+        app.port = port
+        app.server_socket = -1
+        return app
+    
+    # ========== Route Registration ==========
+    
+    # Register a GET route handler for the specified path
+    # Requirements: 2.1
+    fun get(path: str, handler: i64):
+        WebRouter.add("GET", path, handler)
+    
+    # Register a POST route handler for the specified path
+    # Requirements: 2.2
+    fun post(path: str, handler: i64):
+        WebRouter.add("POST", path, handler)
+    
+    # ========== Server Operations ==========
+    
+    # Start listening for HTTP connections and handle requests
+    # This method runs the main server loop
+    # Requirements: 1.2, 1.3, 1.4
+    fun run():
+        # Bind to port using internal WebSocket wrapper
+        self.server_socket = WebSocket.bind("0.0.0.0", self.port)
+        
+        if self.server_socket == -1:
+            return
+        
+        # Main server loop - runs forever
+        while true:
+            # Accept incoming connection
+            client: i64 = WebSocket.accept(self.server_socket)
+            
+            if client == -1:
+                continue
+            
+            # Allocate buffer for reading request
+            buffer: i64 = Memory.malloc(8192)
+            
+            # Read data from client
+            bytes_read: i32 = WebSocket.read(client, buffer, 8191)
+            
+            if bytes_read <= 0:
+                Memory.free(buffer)
+                WebSocket.close(client)
+                continue
+            
+            # Null-terminate the buffer
+            Memory.write_i8(buffer + (bytes_read as i64), 0 as i8)
+            
+            # Parse HTTP request using HttpParser
+            data: str = buffer as str
+            req: Request = HttpParser.parse(data)
+            
+            # Store client socket in headers field for later use
+            req.headers = client
+            
+            # Free buffer (data has been copied into Request fields)
+            Memory.free(buffer)
+            
+            # Check if request is valid (has method)
+            if Memory.strlen(req.method) == 0:
+                response: str = HttpFormatter.format(400, "text/plain", "Bad Request")
+                WebSocket.write(client, response)
+                WebSocket.close(client)
+                continue
+            
+            # Find matching handler using Router
+            handler: i64 = WebRouter.match(req.method, req.path)
+            
+            if handler == 0:
+                response: str = HttpFormatter.format(404, "text/plain", "Not Found")
+                WebSocket.write(client, response)
+                WebSocket.close(client)
+                continue
+            
+            # Set the matched route pattern on the request for parameter extraction
+            req.route_pattern = WebRouter.get_matched_pattern()
+            
+            # Call handler to get response
+            handler_fn: fun(Request) -> str = handler as fun(Request) -> str
+            response: str = handler_fn(req)
+            
+            # Send response to client
+            WebSocket.write(client, response)
+            
+            # Close client connection
+            WebSocket.close(client)
+    
+    # ========== Utility Methods ==========
+    
+    # Stop the server (close server socket)
+    fun stop():
+        if self.server_socket != -1:
+            WebSocket.close(self.server_socket)
+            self.server_socket = -1

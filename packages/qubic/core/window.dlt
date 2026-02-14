@@ -1,0 +1,2712 @@
+# Qubic Engine - Window
+# Handles GLFW window creation and Vulkan rendering integration
+#
+# Clean Initialization Pattern:
+#   - Window only initializes Vulkan rendering infrastructure (Requirement 6.4)
+#   - NO automatic mesh or geometry creation (Requirements 6.1, 6.2)
+#   - Users must explicitly add objects via add_to_scene() (Requirement 6.3)
+#   - mainloop() without meshes renders only the clear color (Requirement 6.5)
+#
+# Scene Management:
+#   - set_camera(camera): Set the active Camera3D for rendering
+#   - add_to_scene(node): Add a MeshInstance3D to the render list
+#   - remove_from_scene(node): Remove a node from the render list
+#   - clear_scene(): Remove all nodes from the render list
+#
+# Requirements: 5.9, 6.1, 6.2, 6.3, 6.4, 6.5
+
+import glfw
+import vulkan
+import matrix_helpers
+
+# Initial capacity for renderables array (16 items)
+
+# ===== Window =====
+# THE Window class SHALL only initialize Vulkan rendering infrastructure, not scene content (Requirement 6.4)
+# WHEN the engine initializes, THE engine SHALL NOT create any mesh or geometry automatically (Requirement 6.1)
+# WHEN the engine initializes, THE engine SHALL NOT create any cube or default objects (Requirement 6.2)
+
+struct Window:
+    # GLFW window handle
+    window_handle: i64 = 0
+    window_title: str = "Qubic Engine"
+    window_width: i32 = 800
+    window_height: i32 = 600
+    is_open: i32 = 0
+    
+    # Vulkan state - stored as raw values for simplicity
+    vk_instance: i64 = 0
+    vk_physical_device: i64 = 0
+    vk_device: i64 = 0
+    vk_graphics_queue: i64 = 0
+    vk_present_queue: i64 = 0
+    vk_graphics_queue_family: i32 = -1
+    vk_present_queue_family: i32 = -1
+    
+    # Surface and swapchain
+    vk_surface: i64 = 0
+    vk_swapchain: i64 = 0
+    vk_swapchain_images: i64 = 0
+    vk_swapchain_image_views: i64 = 0
+    vk_swapchain_image_count: i32 = 0
+    vk_swapchain_format: i32 = 0
+    
+    # Render resources
+    vk_render_pass: i64 = 0
+    vk_framebuffers: i64 = 0
+    vk_command_pool: i64 = 0
+    vk_command_buffers: i64 = 0
+    vk_pipeline_layout: i64 = 0
+    vk_graphics_pipeline: i64 = 0
+    
+    # Sync objects
+    vk_image_available_semaphores: i64 = 0
+    vk_render_finished_semaphores: i64 = 0
+    vk_in_flight_fences: i64 = 0
+    vk_max_frames_in_flight: i32 = 2
+    vk_current_frame: i32 = 0
+    
+    # Pre-allocated frame buffers for draw_frame
+    frame_fence_array: i64 = 0
+    frame_image_index_ptr: i64 = 0
+    frame_submit_info: i64 = 0
+    frame_wait_semaphores: i64 = 0
+    frame_wait_stages: i64 = 0
+    frame_signal_semaphores: i64 = 0
+    frame_command_buffers_arr: i64 = 0
+    frame_present_info: i64 = 0
+    frame_wait_sems_present: i64 = 0
+    frame_swapchains_arr: i64 = 0
+    frame_image_indices_arr: i64 = 0
+    frame_buffers_initialized: i32 = 0
+    
+    vulkan_initialized: i32 = 0
+    vulkan_enabled: i32 = 1 #vulkan_enabled is setted as default! so not requires to use the enable_vulkan() in user_files
+
+    
+    # Scene management (Requirements 6.4, 6.5)
+    active_camera: i64 = 0
+    renderables: i64 = 0
+    renderable_count: i32 = 0
+    renderable_capacity: i32 = 0
+    
+    # Camera matrices (cached for rendering)
+    camera_view_matrix: i64 = 0
+    camera_projection_matrix: i64 = 0
+    mvp_matrix: i64 = 0
+    
+    # Frame timing
+    last_frame_time: f64 = 0.0
+    delta_time: f32 = 0.0
+    
+    # Shader modules (Requirements 3.1, 3.2, 3.4)
+    vk_vert_shader_module: i64 = 0
+    vk_frag_shader_module: i64 = 0
+    shaders_loaded: i32 = 0
+    
+    # Vertex buffer management (Requirements 5.1, 5.2, 5.3, 5.4)
+    mesh_vertex_buffers: i64 = 0      # Array of VkBuffer handles
+    mesh_vertex_memories: i64 = 0     # Array of VkDeviceMemory handles
+    mesh_vertex_counts: i64 = 0       # Array of vertex counts (i32)
+    mesh_node_pointers: i64 = 0       # Array of MeshInstance3D pointers (for transforms)
+    mesh_buffer_count: i32 = 0        # Number of vertex buffers created
+    mesh_buffer_capacity: i32 = 0     # Capacity of vertex buffer arrays
+
+
+imple Window:
+    
+    # ============================================
+    # Window Configuration Methods
+    # ============================================
+    
+    fun title(self, new_title: str):
+        self.window_title = new_title
+        if self.window_handle != 0:
+            glfwSetWindowTitle(self.window_handle, new_title)
+    
+    fun set_size(self, size_str: str):
+        self.window_width = 1200
+        self.window_height = 700
+    
+    fun set_size(self, width: i32, height: i32):
+        self.window_width = width
+        self.window_height = height
+        if self.window_handle != 0:
+            glfwSetWindowSize(self.window_handle, width, height)
+    
+    fun enable_vulkan(self):
+        self.vulkan_enabled = 1
+    
+    # ============================================
+    # Scene Management Methods
+    # ============================================
+    
+    fun set_camera(self, camera: Camera3D):
+        # Store the camera pointer for MVP calculation
+        # When a struct is passed as parameter, it's passed as a pointer
+        self.active_camera = camera
+    
+    fun get_camera(self) -> i64:
+        return self.active_camera
+    
+    fun _ensure_renderable_capacity(self):
+        if self.renderables == 0:
+            self.renderables = Memory.malloc_zeroed(16 * 8)
+            if self.renderables != 0:
+                Memory.set(self.renderables, 0, 16 * 8)
+                self.renderable_capacity = 16
+        else:
+            if self.renderable_count >= self.renderable_capacity:
+                new_capacity: i32 = self.renderable_capacity * 2
+                new_array: i64 = Memory.malloc_zeroed(new_capacity * 8)
+                if new_array != 0:
+                    Memory.copy(new_array, self.renderables, self.renderable_capacity * 8)
+                    Memory.free(self.renderables)
+                    self.renderables = new_array
+                    self.renderable_capacity = new_capacity
+    
+    fun add_to_scene(self, node: i64):
+        # Legacy method - assumes 36 vertices (cube) for backward compatibility
+        self.add_mesh_to_scene(node, 36)
+    
+    fun add_mesh_to_scene(self, vertices: i64, vertex_count: i32):
+        # Legacy method - no transform support
+        self._add_mesh_internal(vertices, vertex_count, 0)
+    
+    # Add MeshInstance3D to scene with transform support
+    # node_ptr should be the address of MeshInstance3D as i64
+    fun add_mesh_instance(self, node_ptr: i64, vertices: i64, vertex_count: i32):
+        self._add_mesh_internal(vertices, vertex_count, node_ptr)
+    
+    # Internal method to add mesh with optional node pointer
+    fun _add_mesh_internal(self, vertices: i64, vertex_count: i32, node_ptr: i64):
+        if vertices == 0 || vertex_count <= 0:
+            return
+        self._ensure_renderable_capacity()
+        if self.renderables != 0:
+            offset: i64 = self.renderable_count * 8
+            Memory.write_ptr(self.renderables + offset, vertices)
+            self.renderable_count = self.renderable_count + 1
+        
+        # Create vertex buffer for this mesh (Requirements 5.1, 5.2)
+        if self.vulkan_initialized == 1:
+            buffer_index: i32 = self._create_vertex_buffer_with_node(vertices, vertex_count, node_ptr)
+            if buffer_index >= 0:
+                print("Vertex buffer created for mesh")
+                # Update scene_index in MeshInstance3D if provided
+                if node_ptr != 0:
+                    # scene_index is at offset after is_in_scene
+                    # MeshInstance3D layout: ... is_in_scene (4 bytes), scene_index (4 bytes)
+                    Memory.write_i32(node_ptr + 100, buffer_index)
+            else:
+                print("Warning: Failed to create vertex buffer for mesh")
+    
+    fun remove_from_scene(self, node: i64):
+        if node == 0 || self.renderables == 0 || self.renderable_count == 0:
+            return
+        
+        i: i32 = 0
+        found_index: i32 = -1
+        while i < self.renderable_count:
+            offset: i64 = i * 8
+            current: i64 = Memory.read_ptr(self.renderables + offset)
+            if current == node:
+                found_index = i
+                i = self.renderable_count
+            else:
+                i = i + 1
+        
+        if found_index >= 0:
+            j: i32 = found_index
+            while j < self.renderable_count - 1:
+                src_offset: i64 = (j + 1) * 8
+                dst_offset: i64 = j * 8
+                next_node: i64 = Memory.read_ptr(self.renderables + src_offset)
+                Memory.write_ptr(self.renderables + dst_offset, next_node)
+                j = j + 1
+            self.renderable_count = self.renderable_count - 1
+    
+    fun get_renderable_count(self) -> i32:
+        return self.renderable_count
+    
+    fun clear_scene(self):
+        self.renderable_count = 0
+
+    # ============================================
+    # Window Lifecycle Methods
+    # ============================================
+    
+    fun init(self) -> i32:
+        init_result: i32 = glfwInit()
+        if init_result == 0:
+            print("Error: Failed to initialize GLFW")
+            return 0
+        
+        glfwWindowHint(139265, 0)  # GLFW_CLIENT_API = GLFW_NO_API
+        glfwWindowHint(131075, 0)  # GLFW_RESIZABLE = GLFW_FALSE
+        
+        self.window_handle = glfwCreateWindow(self.window_width, self.window_height, self.window_title, 0, 0)
+        
+        if self.window_handle == 0:
+            print("Error: Failed to create GLFW window")
+            glfwTerminate()
+            return 0
+        
+        self.is_open = 1
+        print("Window created successfully!")
+        
+        if self.vulkan_enabled == 1:
+            vk_result: i32 = self._init_vulkan()
+            if vk_result == 0:
+                print("Warning: Vulkan initialization failed - rendering disabled")
+                self.vulkan_initialized = 0
+            else:
+                self.vulkan_initialized = 1
+                print("Vulkan rendering enabled!")
+        
+        return 1
+
+    # ============================================
+    # Vulkan Initialization
+    # ============================================
+    
+    fun _init_vulkan(self) -> i32:
+        print("Initializing Vulkan rendering...")
+        
+        # Step 1: Get required GLFW extensions
+        ext_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if ext_count_ptr == 0:
+            print("Error: Failed to allocate extension count")
+            return 0
+        
+        Memory.write_i32(ext_count_ptr, 0)
+        extensions: i64 = glfwGetRequiredInstanceExtensions(ext_count_ptr)
+        ext_count: i32 = Memory.read_i32(ext_count_ptr)
+        Memory.free(ext_count_ptr)
+        
+        if extensions == 0:
+            print("Error: Failed to get GLFW required extensions")
+            return 0
+        
+        # Step 2: Create Vulkan instance
+        app_info: i64 = Memory.malloc_zeroed(64)
+        if app_info == 0:
+            return 0
+        Memory.set(app_info, 0, 64)
+        Memory.write_i32(app_info, 0)
+        Memory.write_ptr(app_info + 8, 0)
+        Memory.write_ptr(app_info + 16, 0)
+        Memory.write_i32(app_info + 24, 1)
+        Memory.write_ptr(app_info + 32, 0)
+        Memory.write_i32(app_info + 40, 1)
+        Memory.write_i32(app_info + 44, 4194304)
+        
+        instance_info: i64 = Memory.malloc_zeroed(128)
+        if instance_info == 0:
+            Memory.free(app_info)
+            return 0
+        Memory.set(instance_info, 0, 128)
+        Memory.write_i32(instance_info, 1)
+        Memory.write_ptr(instance_info + 8, 0)
+        Memory.write_i32(instance_info + 16, 0)
+        Memory.write_ptr(instance_info + 24, app_info)
+        Memory.write_i32(instance_info + 32, 0)
+        Memory.write_ptr(instance_info + 40, 0)
+        Memory.write_i32(instance_info + 48, ext_count)
+        Memory.write_ptr(instance_info + 56, extensions)
+        
+        instance_ptr: i64 = Memory.malloc_zeroed(8)
+        if instance_ptr == 0:
+            Memory.free(app_info)
+            Memory.free(instance_info)
+            return 0
+        Memory.set(instance_ptr, 0, 8)
+        
+        vk_result: i32 = vkCreateInstance(instance_info, 0, instance_ptr)
+        if vk_result != 0:
+            print("Error: vkCreateInstance failed")
+            Memory.free(instance_ptr)
+            Memory.free(instance_info)
+            Memory.free(app_info)
+            return 0
+        
+        self.vk_instance = Memory.read_ptr(instance_ptr)
+        print("Vulkan instance created!")
+        Memory.free(instance_ptr)
+        Memory.free(instance_info)
+        Memory.free(app_info)
+        
+        # Step 3: Create surface
+        surface_ptr: i64 = Memory.malloc_zeroed(8)
+        if surface_ptr == 0:
+            return 0
+        Memory.set(surface_ptr, 0, 8)
+        
+        surface_result: i32 = glfwCreateWindowSurface(self.vk_instance, self.window_handle, 0, surface_ptr)
+        if surface_result != 0:
+            print("Error: Failed to create Vulkan surface")
+            Memory.free(surface_ptr)
+            return 0
+        
+        self.vk_surface = Memory.read_ptr(surface_ptr)
+        print("Vulkan surface created!")
+        Memory.free(surface_ptr)
+        
+        # Step 4: Enumerate physical devices
+        device_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if device_count_ptr == 0:
+            return 0
+        Memory.write_i32(device_count_ptr, 0)
+        
+        vkEnumeratePhysicalDevices(self.vk_instance, device_count_ptr, 0)
+        device_count: i32 = Memory.read_i32(device_count_ptr)
+        
+        if device_count == 0:
+            print("Error: No Vulkan devices found")
+            Memory.free(device_count_ptr)
+            return 0
+        
+        devices_ptr: i64 = Memory.malloc_zeroed(device_count * 8)
+        if devices_ptr == 0:
+            Memory.free(device_count_ptr)
+            return 0
+        
+        vkEnumeratePhysicalDevices(self.vk_instance, device_count_ptr, devices_ptr)
+        self.vk_physical_device = Memory.read_ptr(devices_ptr)
+        print("Physical device selected!")
+        Memory.free(devices_ptr)
+        Memory.free(device_count_ptr)
+        
+        # Step 5: Find queue families
+        queue_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if queue_count_ptr == 0:
+            return 0
+        Memory.write_i32(queue_count_ptr, 0)
+        vkGetPhysicalDeviceQueueFamilyProperties(self.vk_physical_device, queue_count_ptr, 0)
+        queue_count: i32 = Memory.read_i32(queue_count_ptr)
+        
+        if queue_count == 0:
+            Memory.free(queue_count_ptr)
+            return 0
+        
+        properties_size: i64 = (queue_count as i64) * 24
+        properties: i64 = Memory.malloc_zeroed(properties_size)
+        if properties == 0:
+            Memory.free(queue_count_ptr)
+            return 0
+        Memory.set(properties, 0, properties_size)
+        vkGetPhysicalDeviceQueueFamilyProperties(self.vk_physical_device, queue_count_ptr, properties)
+        
+        i: i32 = 0
+        while i < queue_count:
+            queue_flags: i32 = Memory.read_i32(properties + (i * 24))
+            if (queue_flags % 2) != 0:
+                self.vk_graphics_queue_family = i
+            
+            present_support_ptr: i64 = Memory.malloc_zeroed(4)
+            if present_support_ptr != 0:
+                Memory.write_i32(present_support_ptr, 0)
+                vkGetPhysicalDeviceSurfaceSupportKHR(self.vk_physical_device, i, self.vk_surface, present_support_ptr)
+                present_support: i32 = Memory.read_i32(present_support_ptr)
+                if present_support != 0:
+                    self.vk_present_queue_family = i
+                Memory.free(present_support_ptr)
+            i = i + 1
+        
+        Memory.free(properties)
+        Memory.free(queue_count_ptr)
+        
+        if self.vk_graphics_queue_family == -1 || self.vk_present_queue_family == -1:
+            print("Error: Required queue families not found")
+            return 0
+        print("Queue families found!")
+        
+        # Step 6: Create logical device
+        priority_ptr: i64 = Memory.malloc_zeroed(4)
+        if priority_ptr == 0:
+            return 0
+        Memory.write_f32(priority_ptr, 1.0)
+        
+        queue_create_info: i64 = Memory.malloc_zeroed(64)
+        if queue_create_info == 0:
+            Memory.free(priority_ptr)
+            return 0
+        Memory.set(queue_create_info, 0, 64)
+        Memory.write_i32(queue_create_info, 2)
+        Memory.write_ptr(queue_create_info + 8, 0)
+        Memory.write_i32(queue_create_info + 16, 0)
+        Memory.write_i32(queue_create_info + 20, self.vk_graphics_queue_family)
+        Memory.write_i32(queue_create_info + 24, 1)
+        Memory.write_ptr(queue_create_info + 32, priority_ptr)
+        
+        ext_names_ptr: i64 = Memory.malloc_zeroed(8)
+        if ext_names_ptr == 0:
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+        swapchain_ext_name: str = "VK_KHR_swapchain"
+        Memory.write_ptr(ext_names_ptr, swapchain_ext_name)
+        
+        device_create_info: i64 = Memory.malloc_zeroed(128)
+        if device_create_info == 0:
+            Memory.free(ext_names_ptr)
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+        Memory.set(device_create_info, 0, 128)
+        Memory.write_i32(device_create_info, 3)
+        Memory.write_ptr(device_create_info + 8, 0)
+        Memory.write_i32(device_create_info + 16, 0)
+        Memory.write_i32(device_create_info + 20, 1)
+        Memory.write_ptr(device_create_info + 24, queue_create_info)
+        Memory.write_i32(device_create_info + 32, 0)
+        Memory.write_ptr(device_create_info + 40, 0)
+        Memory.write_i32(device_create_info + 48, 1)
+        Memory.write_ptr(device_create_info + 56, ext_names_ptr)
+        Memory.write_ptr(device_create_info + 64, 0)
+        
+        device_ptr: i64 = Memory.malloc_zeroed(8)
+        if device_ptr == 0:
+            Memory.free(device_create_info)
+            Memory.free(ext_names_ptr)
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+        Memory.set(device_ptr, 0, 8)
+        
+        create_result: i32 = vkCreateDevice(self.vk_physical_device, device_create_info, 0, device_ptr)
+        if create_result != 0:
+            print("Error: Failed to create logical device")
+            Memory.free(device_ptr)
+            Memory.free(device_create_info)
+            Memory.free(ext_names_ptr)
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+        
+        self.vk_device = Memory.read_ptr(device_ptr)
+        print("Logical device created!")
+        
+        graphics_queue_ptr: i64 = Memory.malloc_zeroed(8)
+        if graphics_queue_ptr != 0:
+            Memory.set(graphics_queue_ptr, 0, 8)
+            vkGetDeviceQueue(self.vk_device, self.vk_graphics_queue_family, 0, graphics_queue_ptr)
+            self.vk_graphics_queue = Memory.read_ptr(graphics_queue_ptr)
+            Memory.free(graphics_queue_ptr)
+        
+        present_queue_ptr: i64 = Memory.malloc_zeroed(8)
+        if present_queue_ptr != 0:
+            Memory.set(present_queue_ptr, 0, 8)
+            vkGetDeviceQueue(self.vk_device, self.vk_present_queue_family, 0, present_queue_ptr)
+            self.vk_present_queue = Memory.read_ptr(present_queue_ptr)
+            Memory.free(present_queue_ptr)
+        
+        Memory.free(device_ptr)
+        Memory.free(device_create_info)
+        Memory.free(ext_names_ptr)
+        Memory.free(queue_create_info)
+        Memory.free(priority_ptr)
+        
+        # Continue with swapchain creation
+        swap_result: i32 = self._create_swapchain()
+        if swap_result == 0:
+            return 0
+        
+        # Create render pass
+        rp_result: i32 = self._create_render_pass()
+        if rp_result == 0:
+            return 0
+        
+        # Create framebuffers
+        fb_result: i32 = self._create_framebuffers()
+        if fb_result == 0:
+            return 0
+        
+        # Create command pool and buffers
+        cmd_result: i32 = self._create_command_resources()
+        if cmd_result == 0:
+            return 0
+        
+        # Create sync objects
+        sync_result: i32 = self._create_sync_objects()
+        if sync_result == 0:
+            return 0
+        
+        # Create graphics pipeline
+        pipe_result: i32 = self._create_pipeline()
+        if pipe_result == 0:
+            print("Warning: Pipeline creation failed - will render clear color only")
+        
+        print("Vulkan initialization complete!")
+        return 1
+
+    fun _create_swapchain(self) -> i32:
+        print("Creating swapchain...")
+        
+        capabilities: i64 = Memory.malloc_zeroed(64)
+        if capabilities == 0:
+            return 0
+        Memory.set(capabilities, 0, 64)
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.vk_physical_device, self.vk_surface, capabilities)
+        
+        min_image_count: i32 = Memory.read_i32(capabilities)
+        max_image_count: i32 = Memory.read_i32(capabilities + 4)
+        image_count: i32 = min_image_count + 1
+        if max_image_count > 0 && image_count > max_image_count:
+            image_count = max_image_count
+        self.vk_swapchain_image_count = image_count
+        
+        format_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if format_count_ptr == 0:
+            Memory.free(capabilities)
+            return 0
+        Memory.write_i32(format_count_ptr, 0)
+        vkGetPhysicalDeviceSurfaceFormatsKHR(self.vk_physical_device, self.vk_surface, format_count_ptr, 0)
+        format_count: i32 = Memory.read_i32(format_count_ptr)
+        
+        formats: i64 = Memory.malloc_zeroed(format_count * 8)
+        if formats == 0:
+            Memory.free(format_count_ptr)
+            Memory.free(capabilities)
+            return 0
+        vkGetPhysicalDeviceSurfaceFormatsKHR(self.vk_physical_device, self.vk_surface, format_count_ptr, formats)
+        
+        surface_format: i32 = Memory.read_i32(formats)
+        color_space: i32 = Memory.read_i32(formats + 4)
+        self.vk_swapchain_format = surface_format
+        
+        Memory.free(formats)
+        Memory.free(format_count_ptr)
+        
+        create_info: i64 = Memory.malloc_zeroed(128)
+        if create_info == 0:
+            Memory.free(capabilities)
+            return 0
+        Memory.set(create_info, 0, 128)
+        Memory.write_i32(create_info, 1000001000)
+        Memory.write_ptr(create_info + 8, 0)
+        Memory.write_i32(create_info + 16, 0)
+        Memory.write_ptr(create_info + 24, self.vk_surface)
+        Memory.write_i32(create_info + 32, image_count)
+        Memory.write_i32(create_info + 36, surface_format)
+        Memory.write_i32(create_info + 40, color_space)
+        Memory.write_i32(create_info + 44, self.window_width)
+        Memory.write_i32(create_info + 48, self.window_height)
+        Memory.write_i32(create_info + 52, 1)
+        Memory.write_i32(create_info + 56, 16)
+        Memory.write_i32(create_info + 60, 0)
+        Memory.write_i32(create_info + 64, 1)
+        Memory.write_ptr(create_info + 72, 0)
+        Memory.write_i32(create_info + 80, 1)  # preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+        Memory.write_i32(create_info + 84, 1)  # compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+        Memory.write_i32(create_info + 88, 2)  # presentMode = VK_PRESENT_MODE_FIFO_KHR
+        Memory.write_i32(create_info + 92, 1)  # clipped = VK_TRUE
+        Memory.write_ptr(create_info + 96, 0)
+        
+        swapchain_ptr: i64 = Memory.malloc_zeroed(8)
+        if swapchain_ptr == 0:
+            Memory.free(create_info)
+            Memory.free(capabilities)
+            return 0
+        Memory.set(swapchain_ptr, 0, 8)
+        
+        swap_result: i32 = vkCreateSwapchainKHR(self.vk_device, create_info, 0, swapchain_ptr)
+        if swap_result != 0:
+            print("Error: Failed to create swapchain")
+            Memory.free(swapchain_ptr)
+            Memory.free(create_info)
+            Memory.free(capabilities)
+            return 0
+        
+        self.vk_swapchain = Memory.read_ptr(swapchain_ptr)
+        print("Swapchain created!")
+        
+        img_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if img_count_ptr != 0:
+            Memory.write_i32(img_count_ptr, 0)
+            vkGetSwapchainImagesKHR(self.vk_device, self.vk_swapchain, img_count_ptr, 0)
+            actual_img_count: i32 = Memory.read_i32(img_count_ptr)
+            self.vk_swapchain_image_count = actual_img_count
+            
+            self.vk_swapchain_images = Memory.malloc_zeroed(actual_img_count * 8)
+            if self.vk_swapchain_images != 0:
+                vkGetSwapchainImagesKHR(self.vk_device, self.vk_swapchain, img_count_ptr, self.vk_swapchain_images)
+            Memory.free(img_count_ptr)
+        
+        Memory.free(swapchain_ptr)
+        Memory.free(create_info)
+        Memory.free(capabilities)
+        
+        # Create image views
+        self.vk_swapchain_image_views = Memory.malloc_zeroed(self.vk_swapchain_image_count * 8)
+        if self.vk_swapchain_image_views == 0:
+            return 0
+        
+        j: i32 = 0
+        while j < self.vk_swapchain_image_count:
+            image: i64 = Memory.read_ptr(self.vk_swapchain_images + (j * 8))
+            
+            view_info: i64 = Memory.malloc_zeroed(128)
+            if view_info == 0:
+                return 0
+            Memory.set(view_info, 0, 128)
+            Memory.write_i32(view_info, 15)
+            Memory.write_ptr(view_info + 8, 0)
+            Memory.write_i32(view_info + 16, 0)
+            Memory.write_ptr(view_info + 24, image)
+            Memory.write_i32(view_info + 32, 1)
+            Memory.write_i32(view_info + 36, self.vk_swapchain_format)
+            Memory.write_i32(view_info + 40, 0)
+            Memory.write_i32(view_info + 44, 0)
+            Memory.write_i32(view_info + 48, 0)
+            Memory.write_i32(view_info + 52, 0)
+            Memory.write_i32(view_info + 56, 1)
+            Memory.write_i32(view_info + 60, 0)
+            Memory.write_i32(view_info + 64, 1)
+            Memory.write_i32(view_info + 68, 0)
+            Memory.write_i32(view_info + 72, 1)
+            
+            view_ptr: i64 = Memory.malloc_zeroed(8)
+            if view_ptr != 0:
+                Memory.set(view_ptr, 0, 8)
+                vkCreateImageView(self.vk_device, view_info, 0, view_ptr)
+                view_handle: i64 = Memory.read_ptr(view_ptr)
+                Memory.write_ptr(self.vk_swapchain_image_views + (j * 8), view_handle)
+                Memory.free(view_ptr)
+            Memory.free(view_info)
+            j = j + 1
+        
+        print("Image views created!")
+        return 1
+    
+    fun _create_render_pass(self) -> i32:
+        print("Creating render pass...")
+        
+        color_attachment: i64 = Memory.malloc_zeroed(64)
+        if color_attachment == 0:
+            return 0
+        Memory.set(color_attachment, 0, 64)
+        Memory.write_i32(color_attachment, 0)
+        Memory.write_i32(color_attachment + 4, self.vk_swapchain_format)
+        Memory.write_i32(color_attachment + 8, 1)
+        Memory.write_i32(color_attachment + 12, 1)
+        Memory.write_i32(color_attachment + 16, 0)
+        Memory.write_i32(color_attachment + 20, 0)
+        Memory.write_i32(color_attachment + 24, 0)
+        Memory.write_i32(color_attachment + 28, 0)
+        Memory.write_i32(color_attachment + 32, 2)
+        
+        color_attachment_ref: i64 = Memory.malloc_zeroed(16)
+        if color_attachment_ref == 0:
+            Memory.free(color_attachment)
+            return 0
+        Memory.set(color_attachment_ref, 0, 16)
+        Memory.write_i32(color_attachment_ref, 0)
+        Memory.write_i32(color_attachment_ref + 4, 2)
+        
+        subpass: i64 = Memory.malloc_zeroed(128)
+        if subpass == 0:
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        Memory.set(subpass, 0, 128)
+        Memory.write_i32(subpass, 0)
+        Memory.write_i32(subpass + 4, 0)
+        Memory.write_i32(subpass + 8, 0)
+        Memory.write_ptr(subpass + 16, 0)
+        Memory.write_i32(subpass + 24, 1)
+        Memory.write_ptr(subpass + 32, color_attachment_ref)
+        Memory.write_ptr(subpass + 40, 0)
+        Memory.write_ptr(subpass + 48, 0)
+        Memory.write_i32(subpass + 56, 0)
+        Memory.write_ptr(subpass + 64, 0)
+        
+        dependency: i64 = Memory.malloc_zeroed(32)
+        if dependency == 0:
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        Memory.set(dependency, 0, 32)
+        Memory.write_i32(dependency, -1)       # srcSubpass = VK_SUBPASS_EXTERNAL
+        Memory.write_i32(dependency + 4, 0)    # dstSubpass = 0
+        Memory.write_i32(dependency + 8, 1024) # srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        Memory.write_i32(dependency + 12, 1024) # dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        Memory.write_i32(dependency + 16, 0)   # srcAccessMask = 0
+        Memory.write_i32(dependency + 20, 256) # dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+        Memory.write_i32(dependency + 24, 0)   # dependencyFlags = 0
+        
+        render_pass_info: i64 = Memory.malloc_zeroed(128)
+        if render_pass_info == 0:
+            Memory.free(dependency)
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        Memory.set(render_pass_info, 0, 128)
+        Memory.write_i32(render_pass_info, 38)
+        Memory.write_ptr(render_pass_info + 8, 0)
+        Memory.write_i32(render_pass_info + 16, 0)
+        Memory.write_i32(render_pass_info + 20, 1)
+        Memory.write_ptr(render_pass_info + 24, color_attachment)
+        Memory.write_i32(render_pass_info + 32, 1)
+        Memory.write_ptr(render_pass_info + 40, subpass)
+        Memory.write_i32(render_pass_info + 48, 1)
+        Memory.write_ptr(render_pass_info + 56, dependency)
+        
+        render_pass_ptr: i64 = Memory.malloc_zeroed(8)
+        if render_pass_ptr == 0:
+            Memory.free(render_pass_info)
+            Memory.free(dependency)
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        Memory.set(render_pass_ptr, 0, 8)
+        
+        result: i32 = vkCreateRenderPass(self.vk_device, render_pass_info, 0, render_pass_ptr)
+        if result != 0:
+            print("Error: Failed to create render pass")
+            Memory.free(render_pass_ptr)
+            Memory.free(render_pass_info)
+            Memory.free(dependency)
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        
+        self.vk_render_pass = Memory.read_ptr(render_pass_ptr)
+        print("Render pass created!")
+        
+        Memory.free(render_pass_ptr)
+        Memory.free(render_pass_info)
+        Memory.free(dependency)
+        Memory.free(subpass)
+        Memory.free(color_attachment_ref)
+        Memory.free(color_attachment)
+        return 1
+
+    fun _create_framebuffers(self) -> i32:
+        print("Creating framebuffers...")
+        
+        self.vk_framebuffers = Memory.malloc_zeroed(self.vk_swapchain_image_count * 8)
+        if self.vk_framebuffers == 0:
+            return 0
+        
+        k: i32 = 0
+        while k < self.vk_swapchain_image_count:
+            image_view: i64 = Memory.read_ptr(self.vk_swapchain_image_views + (k * 8))
+            
+            attachments: i64 = Memory.malloc_zeroed(8)
+            if attachments == 0:
+                return 0
+            Memory.write_ptr(attachments, image_view)
+            
+            framebuffer_info: i64 = Memory.malloc_zeroed(128)
+            if framebuffer_info == 0:
+                Memory.free(attachments)
+                return 0
+            Memory.set(framebuffer_info, 0, 128)
+            Memory.write_i32(framebuffer_info, 37)
+            Memory.write_ptr(framebuffer_info + 8, 0)
+            Memory.write_i32(framebuffer_info + 16, 0)
+            Memory.write_ptr(framebuffer_info + 24, self.vk_render_pass)
+            Memory.write_i32(framebuffer_info + 32, 1)
+            Memory.write_ptr(framebuffer_info + 40, attachments)
+            Memory.write_i32(framebuffer_info + 48, self.window_width)
+            Memory.write_i32(framebuffer_info + 52, self.window_height)
+            Memory.write_i32(framebuffer_info + 56, 1)
+            
+            framebuffer_ptr: i64 = Memory.malloc_zeroed(8)
+            if framebuffer_ptr == 0:
+                Memory.free(framebuffer_info)
+                Memory.free(attachments)
+                return 0
+            Memory.set(framebuffer_ptr, 0, 8)
+            
+            result: i32 = vkCreateFramebuffer(self.vk_device, framebuffer_info, 0, framebuffer_ptr)
+            if result != 0:
+                Memory.free(framebuffer_ptr)
+                Memory.free(framebuffer_info)
+                Memory.free(attachments)
+                return 0
+            
+            framebuffer_handle: i64 = Memory.read_ptr(framebuffer_ptr)
+            Memory.write_ptr(self.vk_framebuffers + (k * 8), framebuffer_handle)
+            
+            Memory.free(framebuffer_ptr)
+            Memory.free(framebuffer_info)
+            Memory.free(attachments)
+            k = k + 1
+        
+        print("Framebuffers created!")
+        return 1
+    
+    fun _create_command_resources(self) -> i32:
+        print("Creating command resources...")
+        
+        pool_info: i64 = Memory.malloc_zeroed(32)
+        if pool_info == 0:
+            return 0
+        Memory.set(pool_info, 0, 32)
+        Memory.write_i32(pool_info, 39)
+        Memory.write_ptr(pool_info + 8, 0)
+        Memory.write_i32(pool_info + 16, 2)
+        Memory.write_i32(pool_info + 20, self.vk_graphics_queue_family)
+        
+        pool_ptr: i64 = Memory.malloc_zeroed(8)
+        if pool_ptr == 0:
+            Memory.free(pool_info)
+            return 0
+        Memory.set(pool_ptr, 0, 8)
+        
+        result: i32 = vkCreateCommandPool(self.vk_device, pool_info, 0, pool_ptr)
+        if result != 0:
+            Memory.free(pool_ptr)
+            Memory.free(pool_info)
+            return 0
+        
+        self.vk_command_pool = Memory.read_ptr(pool_ptr)
+        Memory.free(pool_ptr)
+        Memory.free(pool_info)
+        
+        self.vk_command_buffers = Memory.malloc_zeroed(self.vk_max_frames_in_flight * 8)
+        if self.vk_command_buffers == 0:
+            return 0
+        
+        alloc_info: i64 = Memory.malloc_zeroed(64)
+        if alloc_info == 0:
+            return 0
+        Memory.set(alloc_info, 0, 64)
+        Memory.write_i32(alloc_info, 40)
+        Memory.write_ptr(alloc_info + 8, 0)
+        Memory.write_ptr(alloc_info + 16, self.vk_command_pool)
+        Memory.write_i32(alloc_info + 24, 0)
+        Memory.write_i32(alloc_info + 28, self.vk_max_frames_in_flight)
+        
+        result2: i32 = vkAllocateCommandBuffers(self.vk_device, alloc_info, self.vk_command_buffers)
+        Memory.free(alloc_info)
+        
+        if result2 != 0:
+            return 0
+        
+        print("Command resources created!")
+        return 1
+    
+    fun _create_sync_objects(self) -> i32:
+        print("Creating sync objects...")
+        
+        self.vk_image_available_semaphores = Memory.malloc_zeroed(self.vk_max_frames_in_flight * 8)
+        self.vk_render_finished_semaphores = Memory.malloc_zeroed(self.vk_max_frames_in_flight * 8)
+        self.vk_in_flight_fences = Memory.malloc_zeroed(self.vk_max_frames_in_flight * 8)
+        
+        if self.vk_image_available_semaphores == 0 || self.vk_render_finished_semaphores == 0 || self.vk_in_flight_fences == 0:
+            return 0
+        
+        semaphore_info: i64 = Memory.malloc_zeroed(32)
+        if semaphore_info == 0:
+            return 0
+        Memory.set(semaphore_info, 0, 32)
+        Memory.write_i32(semaphore_info, 9)
+        Memory.write_ptr(semaphore_info + 8, 0)
+        Memory.write_i32(semaphore_info + 16, 0)
+        
+        fence_info: i64 = Memory.malloc_zeroed(32)
+        if fence_info == 0:
+            Memory.free(semaphore_info)
+            return 0
+        Memory.set(fence_info, 0, 32)
+        Memory.write_i32(fence_info, 8)
+        Memory.write_ptr(fence_info + 8, 0)
+        Memory.write_i32(fence_info + 16, 1)
+        
+        m: i32 = 0
+        while m < self.vk_max_frames_in_flight:
+            sem_ptr: i64 = Memory.malloc_zeroed(8)
+            if sem_ptr != 0:
+                Memory.set(sem_ptr, 0, 8)
+                vkCreateSemaphore(self.vk_device, semaphore_info, 0, sem_ptr)
+                sem: i64 = Memory.read_ptr(sem_ptr)
+                Memory.write_ptr(self.vk_image_available_semaphores + (m * 8), sem)
+                Memory.free(sem_ptr)
+            
+            sem_ptr2: i64 = Memory.malloc_zeroed(8)
+            if sem_ptr2 != 0:
+                Memory.set(sem_ptr2, 0, 8)
+                vkCreateSemaphore(self.vk_device, semaphore_info, 0, sem_ptr2)
+                sem2: i64 = Memory.read_ptr(sem_ptr2)
+                Memory.write_ptr(self.vk_render_finished_semaphores + (m * 8), sem2)
+                Memory.free(sem_ptr2)
+            
+            fence_ptr: i64 = Memory.malloc_zeroed(8)
+            if fence_ptr != 0:
+                Memory.set(fence_ptr, 0, 8)
+                vkCreateFence(self.vk_device, fence_info, 0, fence_ptr)
+                fence: i64 = Memory.read_ptr(fence_ptr)
+                Memory.write_ptr(self.vk_in_flight_fences + (m * 8), fence)
+                Memory.free(fence_ptr)
+            
+            m = m + 1
+        
+        Memory.free(fence_info)
+        Memory.free(semaphore_info)
+        
+        print("Sync objects created!")
+        return 1
+    
+    # ============================================
+    # Shader Module Loading (Requirements 3.1, 3.2, 3.3, 3.4)
+    # ============================================
+    
+    fun _load_shader_module(self, filepath: str) -> i64:
+        # Open SPIR-V file using File.open (resolves path relative to executable)
+        shader_file: File = File.open(filepath, "r")
+        if not shader_file.is_open:
+            print("Error: Failed to open shader file:")
+            print(filepath)
+            zero_result: i64 = 0
+            return zero_result
+        
+        # Get file size
+        file_size: i64 = shader_file.get_size()
+        
+        if file_size <= 0:
+            print("Error: Shader file is empty or invalid")
+            shader_file.close()
+            zero_result2: i64 = 0
+            return zero_result2
+        
+        # Allocate buffer and read file content
+        # SPIR-V requires 4-byte alignment
+        buffer: i64 = Memory.malloc_zeroed(file_size)
+        if buffer == 0:
+            print("Error: Failed to allocate memory for shader")
+            shader_file.close()
+            zero_result3: i64 = 0
+            return zero_result3
+        
+        bytes_read: i32 = shader_file.read_bytes(buffer, file_size as i32)
+        shader_file.close()
+        
+        if bytes_read != (file_size as i32):
+            print("Error: Failed to read shader file completely")
+            Memory.free(buffer)
+            zero_result4: i64 = 0
+            return zero_result4
+        
+        # Create VkShaderModuleCreateInfo
+        # VkStructureType VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO = 16
+        create_info: i64 = Memory.malloc_zeroed(40)
+        if create_info == 0:
+            Memory.free(buffer)
+            zero_result5: i64 = 0
+            return zero_result5
+        Memory.set(create_info, 0, 40)
+        Memory.write_i32(create_info, 16)        # sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
+        Memory.write_ptr(create_info + 8, 0)     # pNext = NULL
+        Memory.write_i32(create_info + 16, 0)    # flags = 0
+        Memory.write_i64(create_info + 24, file_size)  # codeSize
+        Memory.write_ptr(create_info + 32, buffer)     # pCode
+        
+        # Create VkShaderModule
+        shader_module_ptr: i64 = Memory.malloc_zeroed(8)
+        if shader_module_ptr == 0:
+            Memory.free(create_info)
+            Memory.free(buffer)
+            zero_result6: i64 = 0
+            return zero_result6
+        Memory.set(shader_module_ptr, 0, 8)
+        
+        result: i32 = vkCreateShaderModule(self.vk_device, create_info, 0, shader_module_ptr)
+        
+        shader_module: i64 = 0
+        if result == 0:
+            shader_module = Memory.read_ptr(shader_module_ptr)
+        else:
+            print("Error: vkCreateShaderModule failed")
+        
+        Memory.free(shader_module_ptr)
+        Memory.free(create_info)
+        Memory.free(buffer)
+        
+        return shader_module
+    
+    fun _load_shaders(self) -> i32:
+        # Load vertex shader from file (Requirement 3.1)
+        # Using generic shader with MVP push constants and vertex buffer input
+        print("Loading shaders from files...")
+        
+        # Try to load vertex shader
+        self.vk_vert_shader_module = self._load_shader_module("shaders/generic_vert.spv")
+        if self.vk_vert_shader_module == 0:
+            print("Warning: Failed to load vertex shader from shaders/generic_vert.spv")
+            return 0
+        print("Vertex shader loaded!")
+        
+        # Try to load fragment shader
+        self.vk_frag_shader_module = self._load_shader_module("shaders/generic_frag.spv")
+        if self.vk_frag_shader_module == 0:
+            print("Warning: Failed to load fragment shader from shaders/generic_frag.spv")
+            # Clean up vertex shader if fragment fails
+            if self.vk_vert_shader_module != 0:
+                vkDestroyShaderModule(self.vk_device, self.vk_vert_shader_module, 0)
+                self.vk_vert_shader_module = 0
+            return 0
+        print("Fragment shader loaded!")
+        
+        self.shaders_loaded = 1
+        return 1
+    
+    # Create shader module from raw data (for embedded shaders)
+    fun _create_shader_module_from_data(self, data: i64, size: i64) -> i64:
+        # Create VkShaderModuleCreateInfo
+        create_info: i64 = Memory.malloc_zeroed(40)
+        if create_info == 0:
+            zero_result: i64 = 0
+            return zero_result
+        Memory.set(create_info, 0, 40)
+        Memory.write_i32(create_info, 16)        # sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
+        Memory.write_ptr(create_info + 8, 0)     # pNext = NULL
+        Memory.write_i32(create_info + 16, 0)    # flags = 0
+        Memory.write_i64(create_info + 24, size) # codeSize
+        Memory.write_ptr(create_info + 32, data) # pCode
+        
+        # Create VkShaderModule
+        shader_module_ptr: i64 = Memory.malloc_zeroed(8)
+        if shader_module_ptr == 0:
+            Memory.free(create_info)
+            zero_result2: i64 = 0
+            return zero_result2
+        Memory.set(shader_module_ptr, 0, 8)
+        
+        result: i32 = vkCreateShaderModule(self.vk_device, create_info, 0, shader_module_ptr)
+        
+        if result == 0:
+            shader_module: i64 = Memory.read_ptr(shader_module_ptr)
+            Memory.free(shader_module_ptr)
+            Memory.free(create_info)
+            return shader_module
+        else:
+            print("Error: vkCreateShaderModule failed")
+            Memory.free(shader_module_ptr)
+            Memory.free(create_info)
+            zero_result3: i64 = 0
+            return zero_result3
+    
+    # ============================================
+    # Vertex Buffer Management (Requirements 5.1, 5.2, 5.3, 5.4)
+    # ============================================
+    
+    fun _find_memory_type(self, type_filter: i32, properties: i32) -> i32:
+        # Query physical device memory properties
+        # VkPhysicalDeviceMemoryProperties is 520 bytes:
+        # - memoryTypeCount (4 bytes)
+        # - memoryTypes[32] (32 * 8 = 256 bytes) - each VkMemoryType is 8 bytes (propertyFlags + heapIndex)
+        # - memoryHeapCount (4 bytes)
+        # - memoryHeaps[16] (16 * 16 = 256 bytes)
+        mem_properties: i64 = Memory.malloc_zeroed(520)
+        if mem_properties == 0:
+            return -1
+        Memory.set(mem_properties, 0, 520)
+        
+        vkGetPhysicalDeviceMemoryProperties(self.vk_physical_device, mem_properties)
+        
+        memory_type_count: i32 = Memory.read_i32(mem_properties)
+        
+        # Find memory type with required properties
+        i: i32 = 0
+        while i < memory_type_count:
+            # Check if this memory type is in the type_filter bitmask
+            # Using bitwise AND: (type_filter & (1 << i)) != 0
+            type_bit: i32 = 1
+            shift: i32 = 0
+            while shift < i:
+                type_bit = type_bit * 2
+                shift = shift + 1
+            
+            # Check if bit i is set in type_filter using integer division
+            type_filter_shifted: i32 = type_filter / type_bit
+            type_bit_set: i32 = type_filter_shifted % 2
+            
+            if type_bit_set == 1:
+                # This memory type is in the filter, check properties
+                # memoryTypes array starts at offset 4, each entry is 8 bytes
+                # propertyFlags is at offset 0 of each VkMemoryType
+                mem_type_offset: i64 = 4 + (i * 8)
+                mem_type_flags: i32 = Memory.read_i32(mem_properties + mem_type_offset)
+                
+                # Check if all required properties are present
+                # (mem_type_flags & properties) == properties
+                # We need to check each bit of properties is set in mem_type_flags
+                props_match: i32 = 1
+                
+                # Check VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT (bit 1, value 2)
+                if properties >= 2:
+                    host_visible_required: i32 = (properties / 2) % 2
+                    host_visible_present: i32 = (mem_type_flags / 2) % 2
+                    if host_visible_required == 1 && host_visible_present == 0:
+                        props_match = 0
+                
+                # Check VK_MEMORY_PROPERTY_HOST_COHERENT_BIT (bit 2, value 4)
+                if properties >= 4:
+                    host_coherent_required: i32 = (properties / 4) % 2
+                    host_coherent_present: i32 = (mem_type_flags / 4) % 2
+                    if host_coherent_required == 1 && host_coherent_present == 0:
+                        props_match = 0
+                
+                if props_match == 1:
+                    Memory.free(mem_properties)
+                    return i
+            
+            i = i + 1
+        
+        Memory.free(mem_properties)
+        return -1
+    
+    fun _ensure_vertex_buffer_capacity(self):
+        if self.mesh_vertex_buffers == 0:
+            # Initial allocation for 16 buffers
+            self.mesh_vertex_buffers = Memory.malloc_zeroed(16 * 8)
+            self.mesh_vertex_memories = Memory.malloc_zeroed(16 * 8)
+            self.mesh_vertex_counts = Memory.malloc_zeroed(16 * 4)
+            self.mesh_node_pointers = Memory.malloc_zeroed(16 * 8)
+            if self.mesh_vertex_buffers != 0:
+                Memory.set(self.mesh_vertex_buffers, 0, 16 * 8)
+            if self.mesh_vertex_memories != 0:
+                Memory.set(self.mesh_vertex_memories, 0, 16 * 8)
+            if self.mesh_vertex_counts != 0:
+                Memory.set(self.mesh_vertex_counts, 0, 16 * 4)
+            if self.mesh_node_pointers != 0:
+                Memory.set(self.mesh_node_pointers, 0, 16 * 8)
+            self.mesh_buffer_capacity = 16
+        else:
+            if self.mesh_buffer_count >= self.mesh_buffer_capacity:
+                new_capacity: i32 = self.mesh_buffer_capacity * 2
+                
+                # Reallocate buffers array
+                new_buffers: i64 = Memory.malloc_zeroed(new_capacity * 8)
+                if new_buffers != 0:
+                    Memory.copy(new_buffers, self.mesh_vertex_buffers, self.mesh_buffer_capacity * 8)
+                    Memory.free(self.mesh_vertex_buffers)
+                    self.mesh_vertex_buffers = new_buffers
+                
+                # Reallocate memories array
+                new_memories: i64 = Memory.malloc_zeroed(new_capacity * 8)
+                if new_memories != 0:
+                    Memory.copy(new_memories, self.mesh_vertex_memories, self.mesh_buffer_capacity * 8)
+                    Memory.free(self.mesh_vertex_memories)
+                    self.mesh_vertex_memories = new_memories
+                
+                # Reallocate counts array
+                new_counts: i64 = Memory.malloc_zeroed(new_capacity * 4)
+                if new_counts != 0:
+                    Memory.copy(new_counts, self.mesh_vertex_counts, self.mesh_buffer_capacity * 4)
+                    Memory.free(self.mesh_vertex_counts)
+                    self.mesh_vertex_counts = new_counts
+                
+                # Reallocate node pointers array
+                new_nodes: i64 = Memory.malloc_zeroed(new_capacity * 8)
+                if new_nodes != 0:
+                    Memory.copy(new_nodes, self.mesh_node_pointers, self.mesh_buffer_capacity * 8)
+                    Memory.free(self.mesh_node_pointers)
+                    self.mesh_node_pointers = new_nodes
+                
+                self.mesh_buffer_capacity = new_capacity
+    
+    fun _create_vertex_buffer(self, vertices: i64, vertex_count: i32) -> i32:
+        if vertices == 0 || vertex_count <= 0:
+            return -1
+        
+        # Calculate buffer size: 24 bytes per vertex (6 floats: pos xyz + color rgb)
+        buffer_size: i64 = vertex_count * 24
+        
+        # Create VkBuffer with vertex buffer usage
+        # VkBufferCreateInfo structure
+        buffer_info: i64 = Memory.malloc_zeroed(56)
+        if buffer_info == 0:
+            return -1
+        Memory.set(buffer_info, 0, 56)
+        Memory.write_i32(buffer_info, 12)                # sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO
+        Memory.write_ptr(buffer_info + 8, 0)             # pNext
+        Memory.write_i32(buffer_info + 16, 0)            # flags
+        Memory.write_i64(buffer_info + 24, buffer_size)  # size
+        Memory.write_i32(buffer_info + 32, 128)          # usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT (0x80)
+        Memory.write_i32(buffer_info + 36, 0)            # sharingMode = VK_SHARING_MODE_EXCLUSIVE
+        Memory.write_i32(buffer_info + 40, 0)            # queueFamilyIndexCount
+        Memory.write_ptr(buffer_info + 48, 0)            # pQueueFamilyIndices
+        
+        buffer_ptr: i64 = Memory.malloc_zeroed(8)
+        if buffer_ptr == 0:
+            Memory.free(buffer_info)
+            return -1
+        Memory.set(buffer_ptr, 0, 8)
+        
+        result: i32 = vkCreateBuffer(self.vk_device, buffer_info, 0, buffer_ptr)
+        if result != 0:
+            print("Error: Failed to create vertex buffer")
+            Memory.free(buffer_ptr)
+            Memory.free(buffer_info)
+            return -1
+        
+        buffer_handle: i64 = Memory.read_ptr(buffer_ptr)
+        Memory.free(buffer_ptr)
+        Memory.free(buffer_info)
+        
+        # Get memory requirements
+        mem_requirements: i64 = Memory.malloc_zeroed(24)
+        if mem_requirements == 0:
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(mem_requirements, 0, 24)
+        
+        vkGetBufferMemoryRequirements(self.vk_device, buffer_handle, mem_requirements)
+        
+        req_size: i64 = Memory.read_i64(mem_requirements)
+        req_alignment: i64 = Memory.read_i64(mem_requirements + 8)
+        req_memory_type_bits: i32 = Memory.read_i32(mem_requirements + 16)
+        
+        Memory.free(mem_requirements)
+        
+        # Find suitable memory type (host visible + host coherent)
+        # VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = 2
+        # VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = 4
+        memory_type_index: i32 = self._find_memory_type(req_memory_type_bits, 6)
+        if memory_type_index == -1:
+            print("Error: Failed to find suitable memory type for vertex buffer")
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        # Allocate device memory
+        alloc_info: i64 = Memory.malloc_zeroed(32)
+        if alloc_info == 0:
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(alloc_info, 0, 32)
+        Memory.write_i32(alloc_info, 5)                  # sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO
+        Memory.write_ptr(alloc_info + 8, 0)              # pNext
+        Memory.write_i64(alloc_info + 16, req_size)      # allocationSize
+        Memory.write_i32(alloc_info + 24, memory_type_index)  # memoryTypeIndex
+        
+        memory_ptr: i64 = Memory.malloc_zeroed(8)
+        if memory_ptr == 0:
+            Memory.free(alloc_info)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(memory_ptr, 0, 8)
+        
+        alloc_result: i32 = vkAllocateMemory(self.vk_device, alloc_info, 0, memory_ptr)
+        if alloc_result != 0:
+            print("Error: Failed to allocate vertex buffer memory")
+            Memory.free(memory_ptr)
+            Memory.free(alloc_info)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        memory_handle: i64 = Memory.read_ptr(memory_ptr)
+        Memory.free(memory_ptr)
+        Memory.free(alloc_info)
+        
+        # Bind memory to buffer
+        bind_result: i32 = vkBindBufferMemory(self.vk_device, buffer_handle, memory_handle, 0)
+        if bind_result != 0:
+            print("Error: Failed to bind vertex buffer memory")
+            vkFreeMemory(self.vk_device, memory_handle, 0)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        # Map memory, copy vertex data, unmap
+        data_ptr_ptr: i64 = Memory.malloc_zeroed(8)
+        if data_ptr_ptr == 0:
+            vkFreeMemory(self.vk_device, memory_handle, 0)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(data_ptr_ptr, 0, 8)
+        
+        map_result: i32 = vkMapMemory(self.vk_device, memory_handle, 0, buffer_size, 0, data_ptr_ptr)
+        if map_result != 0:
+            print("Error: Failed to map vertex buffer memory")
+            Memory.free(data_ptr_ptr)
+            vkFreeMemory(self.vk_device, memory_handle, 0)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        data_ptr: i64 = Memory.read_ptr(data_ptr_ptr)
+        Memory.copy(data_ptr, vertices, buffer_size)
+        vkUnmapMemory(self.vk_device, memory_handle)
+        Memory.free(data_ptr_ptr)
+        
+        # Store buffer handle and vertex count
+        self._ensure_vertex_buffer_capacity()
+        
+        buffer_index: i32 = self.mesh_buffer_count
+        Memory.write_ptr(self.mesh_vertex_buffers + (buffer_index * 8), buffer_handle)
+        Memory.write_ptr(self.mesh_vertex_memories + (buffer_index * 8), memory_handle)
+        Memory.write_i32(self.mesh_vertex_counts + (buffer_index * 4), vertex_count)
+        Memory.write_ptr(self.mesh_node_pointers + (buffer_index * 8), 0)  # No node pointer
+        self.mesh_buffer_count = self.mesh_buffer_count + 1
+        
+        return buffer_index
+    
+    # Create vertex buffer with associated MeshInstance3D node pointer
+    fun _create_vertex_buffer_with_node(self, vertices: i64, vertex_count: i32, node_ptr: i64) -> i32:
+        if vertices == 0 || vertex_count <= 0:
+            return -1
+        
+        # Calculate buffer size: 24 bytes per vertex (6 floats: pos xyz + color rgb)
+        buffer_size: i64 = vertex_count * 24
+        
+        # Create VkBuffer with vertex buffer usage
+        buffer_info: i64 = Memory.malloc_zeroed(56)
+        if buffer_info == 0:
+            return -1
+        Memory.set(buffer_info, 0, 56)
+        Memory.write_i32(buffer_info, 12)                # sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO
+        Memory.write_ptr(buffer_info + 8, 0)             # pNext
+        Memory.write_i32(buffer_info + 16, 0)            # flags
+        Memory.write_i64(buffer_info + 24, buffer_size)  # size
+        Memory.write_i32(buffer_info + 32, 128)          # usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+        Memory.write_i32(buffer_info + 36, 0)            # sharingMode = VK_SHARING_MODE_EXCLUSIVE
+        Memory.write_i32(buffer_info + 40, 0)            # queueFamilyIndexCount
+        Memory.write_ptr(buffer_info + 48, 0)            # pQueueFamilyIndices
+        
+        buffer_ptr: i64 = Memory.malloc_zeroed(8)
+        if buffer_ptr == 0:
+            Memory.free(buffer_info)
+            return -1
+        Memory.set(buffer_ptr, 0, 8)
+        
+        result: i32 = vkCreateBuffer(self.vk_device, buffer_info, 0, buffer_ptr)
+        if result != 0:
+            Memory.free(buffer_ptr)
+            Memory.free(buffer_info)
+            return -1
+        
+        buffer_handle: i64 = Memory.read_ptr(buffer_ptr)
+        Memory.free(buffer_ptr)
+        Memory.free(buffer_info)
+        
+        # Get memory requirements
+        mem_requirements: i64 = Memory.malloc_zeroed(24)
+        if mem_requirements == 0:
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(mem_requirements, 0, 24)
+        
+        vkGetBufferMemoryRequirements(self.vk_device, buffer_handle, mem_requirements)
+        
+        req_size: i64 = Memory.read_i64(mem_requirements)
+        req_memory_type_bits: i32 = Memory.read_i32(mem_requirements + 16)
+        Memory.free(mem_requirements)
+        
+        # Find suitable memory type
+        memory_type_index: i32 = self._find_memory_type(req_memory_type_bits, 6)
+        if memory_type_index == -1:
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        # Allocate device memory
+        alloc_info: i64 = Memory.malloc_zeroed(32)
+        if alloc_info == 0:
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(alloc_info, 0, 32)
+        Memory.write_i32(alloc_info, 5)
+        Memory.write_ptr(alloc_info + 8, 0)
+        Memory.write_i64(alloc_info + 16, req_size)
+        Memory.write_i32(alloc_info + 24, memory_type_index)
+        
+        memory_ptr: i64 = Memory.malloc_zeroed(8)
+        if memory_ptr == 0:
+            Memory.free(alloc_info)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(memory_ptr, 0, 8)
+        
+        alloc_result: i32 = vkAllocateMemory(self.vk_device, alloc_info, 0, memory_ptr)
+        if alloc_result != 0:
+            Memory.free(memory_ptr)
+            Memory.free(alloc_info)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        memory_handle: i64 = Memory.read_ptr(memory_ptr)
+        Memory.free(memory_ptr)
+        Memory.free(alloc_info)
+        
+        # Bind memory to buffer
+        bind_result: i32 = vkBindBufferMemory(self.vk_device, buffer_handle, memory_handle, 0)
+        if bind_result != 0:
+            vkFreeMemory(self.vk_device, memory_handle, 0)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        # Map memory, copy vertex data, unmap
+        data_ptr_ptr: i64 = Memory.malloc_zeroed(8)
+        if data_ptr_ptr == 0:
+            vkFreeMemory(self.vk_device, memory_handle, 0)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        Memory.set(data_ptr_ptr, 0, 8)
+        
+        map_result: i32 = vkMapMemory(self.vk_device, memory_handle, 0, buffer_size, 0, data_ptr_ptr)
+        if map_result != 0:
+            Memory.free(data_ptr_ptr)
+            vkFreeMemory(self.vk_device, memory_handle, 0)
+            vkDestroyBuffer(self.vk_device, buffer_handle, 0)
+            return -1
+        
+        data_ptr: i64 = Memory.read_ptr(data_ptr_ptr)
+        Memory.copy(data_ptr, vertices, buffer_size)
+        vkUnmapMemory(self.vk_device, memory_handle)
+        Memory.free(data_ptr_ptr)
+        
+        # Store buffer handle, vertex count, and node pointer
+        self._ensure_vertex_buffer_capacity()
+        
+        buffer_index: i32 = self.mesh_buffer_count
+        Memory.write_ptr(self.mesh_vertex_buffers + (buffer_index * 8), buffer_handle)
+        Memory.write_ptr(self.mesh_vertex_memories + (buffer_index * 8), memory_handle)
+        Memory.write_i32(self.mesh_vertex_counts + (buffer_index * 4), vertex_count)
+        Memory.write_ptr(self.mesh_node_pointers + (buffer_index * 8), node_ptr)
+        self.mesh_buffer_count = self.mesh_buffer_count + 1
+        
+        return buffer_index
+    
+    fun _create_pipeline(self) -> i32:
+        print("Creating graphics pipeline...")
+        
+        # Step 1: Load shaders (Requirement 4.5)
+        shader_result: i32 = self._load_shaders()
+        if shader_result == 0:
+            print("Warning: Shader loading failed - will render clear color only")
+            return 0
+        
+        # Step 2: Create pipeline layout with push constants (Requirement 4.4)
+        # Push constant range: 64 bytes for MVP matrix (vertex shader stage)
+        push_constant_range: i64 = Memory.malloc_zeroed(16)
+        if push_constant_range == 0:
+            return 0
+        Memory.set(push_constant_range, 0, 16)
+        Memory.write_i32(push_constant_range, 1)      # stageFlags = VK_SHADER_STAGE_VERTEX_BIT
+        Memory.write_i32(push_constant_range + 4, 0)  # offset = 0
+        Memory.write_i32(push_constant_range + 8, 64) # size = 64 bytes (4x4 matrix)
+        
+        layout_info: i64 = Memory.malloc_zeroed(48)
+        if layout_info == 0:
+            Memory.free(push_constant_range)
+            return 0
+        Memory.set(layout_info, 0, 48)
+        Memory.write_i32(layout_info, 30)                    # sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
+        Memory.write_i64(layout_info + 8, 0)                 # pNext
+        Memory.write_i32(layout_info + 16, 0)                # flags
+        Memory.write_i32(layout_info + 20, 0)                # setLayoutCount
+        Memory.write_i64(layout_info + 24, 0)                # pSetLayouts
+        Memory.write_i32(layout_info + 32, 1)                # pushConstantRangeCount
+        Memory.write_i64(layout_info + 40, push_constant_range)  # pPushConstantRanges
+        
+        layout_ptr: i64 = Memory.malloc_zeroed(8)
+        if layout_ptr == 0:
+            Memory.free(layout_info)
+            Memory.free(push_constant_range)
+            return 0
+        Memory.set(layout_ptr, 0, 8)
+        
+        layout_result: i32 = vkCreatePipelineLayout(self.vk_device, layout_info, 0, layout_ptr)
+        if layout_result != 0:
+            print("Error: Failed to create pipeline layout")
+            Memory.free(layout_ptr)
+            Memory.free(layout_info)
+            Memory.free(push_constant_range)
+            return 0
+        
+        self.vk_pipeline_layout = Memory.read_i64(layout_ptr)
+        print("Pipeline layout created!")
+        
+        Memory.free(layout_ptr)
+        Memory.free(layout_info)
+        Memory.free(push_constant_range)
+        
+        # Step 3: Create shader stage info structures
+        # Vertex shader stage
+        vert_stage_info: i64 = Memory.malloc_zeroed(48)
+        if vert_stage_info == 0:
+            return 0
+        Memory.set(vert_stage_info, 0, 48)
+        Memory.write_i32(vert_stage_info, 18)                    # sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO
+        Memory.write_ptr(vert_stage_info + 8, 0)                 # pNext
+        Memory.write_i32(vert_stage_info + 16, 0)                # flags
+        Memory.write_i32(vert_stage_info + 20, 1)                # stage = VK_SHADER_STAGE_VERTEX_BIT
+        Memory.write_ptr(vert_stage_info + 24, self.vk_vert_shader_module)  # module
+        main_name: str = "main"
+        Memory.write_ptr(vert_stage_info + 32, main_name)        # pName = "main"
+        Memory.write_ptr(vert_stage_info + 40, 0)                # pSpecializationInfo
+        
+        # Fragment shader stage
+        frag_stage_info: i64 = Memory.malloc_zeroed(48)
+        if frag_stage_info == 0:
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(frag_stage_info, 0, 48)
+        Memory.write_i32(frag_stage_info, 18)                    # sType
+        Memory.write_ptr(frag_stage_info + 8, 0)                 # pNext
+        Memory.write_i32(frag_stage_info + 16, 0)                # flags
+        Memory.write_i32(frag_stage_info + 20, 16)               # stage = VK_SHADER_STAGE_FRAGMENT_BIT
+        Memory.write_ptr(frag_stage_info + 24, self.vk_frag_shader_module)  # module
+        Memory.write_ptr(frag_stage_info + 32, main_name)        # pName = "main"
+        Memory.write_ptr(frag_stage_info + 40, 0)                # pSpecializationInfo
+        
+        # Array of shader stages
+        shader_stages: i64 = Memory.malloc_zeroed(96)
+        if shader_stages == 0:
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.copy(shader_stages, vert_stage_info, 48)
+        Memory.copy(shader_stages + 48, frag_stage_info, 48)
+        
+        # Step 4: Configure vertex input state (Requirement 4.1)
+        # Binding 0: stride 24 bytes (6 floats: pos xyz + color rgb)
+        # VkVertexInputBindingDescription: 12 bytes (binding, stride, inputRate)
+        binding_desc: i64 = Memory.malloc_zeroed(12)
+        if binding_desc == 0:
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(binding_desc, 0, 12)
+        Memory.write_i32(binding_desc, 0)       # binding = 0
+        Memory.write_i32(binding_desc + 4, 24)  # stride = 24 bytes (6 floats * 4 bytes)
+        Memory.write_i32(binding_desc + 8, 0)   # inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+        
+        # VkVertexInputAttributeDescription: 16 bytes each (location, binding, format, offset)
+        # Attribute 0: position (vec3) at offset 0
+        # Attribute 1: color (vec3) at offset 12
+        attr_descs: i64 = Memory.malloc_zeroed(32)
+        if attr_descs == 0:
+            Memory.free(binding_desc)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(attr_descs, 0, 32)
+        # Attribute 0: position
+        Memory.write_i32(attr_descs, 0)          # location = 0
+        Memory.write_i32(attr_descs + 4, 0)      # binding = 0
+        Memory.write_i32(attr_descs + 8, 106)    # format = VK_FORMAT_R32G32B32_SFLOAT
+        Memory.write_i32(attr_descs + 12, 0)     # offset = 0
+        # Attribute 1: color
+        Memory.write_i32(attr_descs + 16, 1)     # location = 1
+        Memory.write_i32(attr_descs + 20, 0)     # binding = 0
+        Memory.write_i32(attr_descs + 24, 106)   # format = VK_FORMAT_R32G32B32_SFLOAT
+        Memory.write_i32(attr_descs + 28, 12)    # offset = 12 bytes (after position)
+        
+        vertex_input_info: i64 = Memory.malloc_zeroed(48)
+        if vertex_input_info == 0:
+            Memory.free(attr_descs)
+            Memory.free(binding_desc)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(vertex_input_info, 0, 48)
+        Memory.write_i32(vertex_input_info, 19)              # sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+        Memory.write_ptr(vertex_input_info + 8, 0)           # pNext
+        Memory.write_i32(vertex_input_info + 16, 0)          # flags
+        Memory.write_i32(vertex_input_info + 20, 1)          # vertexBindingDescriptionCount = 1
+        Memory.write_ptr(vertex_input_info + 24, binding_desc)   # pVertexBindingDescriptions
+        Memory.write_i32(vertex_input_info + 32, 2)          # vertexAttributeDescriptionCount = 2
+        Memory.write_ptr(vertex_input_info + 40, attr_descs) # pVertexAttributeDescriptions
+        
+        # Step 5: Configure input assembly (Requirement 4.2)
+        # Triangle list topology
+        # VkPipelineInputAssemblyStateCreateInfo:
+        # - sType (4 bytes) + padding (4 bytes) = offset 0
+        # - pNext (8 bytes) = offset 8
+        # - flags (4 bytes) = offset 16
+        # - topology (4 bytes) = offset 20
+        # - primitiveRestartEnable (4 bytes) = offset 24
+        input_assembly: i64 = Memory.malloc_zeroed(32)
+        if input_assembly == 0:
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(input_assembly, 0, 32)
+        Memory.write_i32(input_assembly, 20)      # sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
+        Memory.write_ptr(input_assembly + 8, 0)   # pNext = NULL
+        Memory.write_i32(input_assembly + 16, 0)  # flags = 0
+        Memory.write_i32(input_assembly + 20, 3)  # topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+        Memory.write_i32(input_assembly + 24, 0)  # primitiveRestartEnable = VK_FALSE
+        
+        # Step 6: Configure viewport and scissor
+        viewport: i64 = Memory.malloc_zeroed(24)
+        if viewport == 0:
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(viewport, 0, 24)
+        Memory.write_f32(viewport, 0.0)                           # x
+        Memory.write_f32(viewport + 4, 0.0)                       # y
+        width_f: f32 = self.window_width
+        height_f: f32 = self.window_height
+        Memory.write_f32(viewport + 8, width_f)                   # width
+        Memory.write_f32(viewport + 12, height_f)                 # height
+        Memory.write_f32(viewport + 16, 0.0)                      # minDepth
+        Memory.write_f32(viewport + 20, 1.0)                      # maxDepth
+        
+        scissor: i64 = Memory.malloc_zeroed(16)
+        if scissor == 0:
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(scissor, 0, 16)
+        Memory.write_i32(scissor, 0)                  # offset.x
+        Memory.write_i32(scissor + 4, 0)              # offset.y
+        Memory.write_i32(scissor + 8, self.window_width)   # extent.width
+        Memory.write_i32(scissor + 12, self.window_height) # extent.height
+        
+        viewport_state: i64 = Memory.malloc_zeroed(48)
+        if viewport_state == 0:
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(viewport_state, 0, 48)
+        Memory.write_i32(viewport_state, 22)             # sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO
+        Memory.write_ptr(viewport_state + 8, 0)          # pNext
+        Memory.write_i32(viewport_state + 16, 0)         # flags
+        Memory.write_i32(viewport_state + 20, 1)         # viewportCount
+        Memory.write_ptr(viewport_state + 24, 0)         # pViewports = NULL (dynamic)
+        Memory.write_i32(viewport_state + 32, 1)         # scissorCount
+        Memory.write_ptr(viewport_state + 40, 0)         # pScissors = NULL (dynamic)
+        
+        # Create dynamic state for viewport and scissor
+        dynamic_states: i64 = Memory.malloc_zeroed(8)
+        if dynamic_states == 0:
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.write_i32(dynamic_states, 0)      # VK_DYNAMIC_STATE_VIEWPORT
+        Memory.write_i32(dynamic_states + 4, 1)  # VK_DYNAMIC_STATE_SCISSOR
+        
+        dynamic_state_info: i64 = Memory.malloc_zeroed(32)
+        if dynamic_state_info == 0:
+            Memory.free(dynamic_states)
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(dynamic_state_info, 0, 32)
+        Memory.write_i32(dynamic_state_info, 27)              # sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO
+        Memory.write_ptr(dynamic_state_info + 8, 0)           # pNext
+        Memory.write_i32(dynamic_state_info + 16, 0)          # flags
+        Memory.write_i32(dynamic_state_info + 20, 2)          # dynamicStateCount = 2
+        Memory.write_ptr(dynamic_state_info + 24, dynamic_states)  # pDynamicStates
+        
+        # Step 7: Configure rasterization (Requirement 4.3)
+        # Backface culling enabled, counter-clockwise front face
+        rasterizer: i64 = Memory.malloc_zeroed(64)
+        if rasterizer == 0:
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(rasterizer, 0, 64)
+        Memory.write_i32(rasterizer, 23)             # sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO
+        Memory.write_ptr(rasterizer + 8, 0)          # pNext
+        Memory.write_i32(rasterizer + 16, 0)         # flags
+        Memory.write_i32(rasterizer + 20, 0)         # depthClampEnable = VK_FALSE
+        Memory.write_i32(rasterizer + 24, 0)         # rasterizerDiscardEnable = VK_FALSE
+        Memory.write_i32(rasterizer + 28, 0)         # polygonMode = VK_POLYGON_MODE_FILL
+        Memory.write_i32(rasterizer + 32, 1)         # cullMode = VK_CULL_MODE_BACK_BIT
+        Memory.write_i32(rasterizer + 36, 1)         # frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+        Memory.write_i32(rasterizer + 40, 0)         # depthBiasEnable = VK_FALSE
+        Memory.write_f32(rasterizer + 44, 0.0)       # depthBiasConstantFactor
+        Memory.write_f32(rasterizer + 48, 0.0)       # depthBiasClamp
+        Memory.write_f32(rasterizer + 52, 0.0)       # depthBiasSlopeFactor
+        Memory.write_f32(rasterizer + 56, 1.0)       # lineWidth
+        
+        # Step 8: Configure multisampling (disabled)
+        multisampling: i64 = Memory.malloc_zeroed(48)
+        if multisampling == 0:
+            Memory.free(rasterizer)
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(multisampling, 0, 48)
+        Memory.write_i32(multisampling, 24)          # sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
+        Memory.write_ptr(multisampling + 8, 0)       # pNext
+        Memory.write_i32(multisampling + 16, 0)      # flags
+        Memory.write_i32(multisampling + 20, 1)      # rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
+        Memory.write_i32(multisampling + 24, 0)      # sampleShadingEnable = VK_FALSE
+        Memory.write_f32(multisampling + 28, 1.0)    # minSampleShading
+        Memory.write_ptr(multisampling + 32, 0)      # pSampleMask
+        Memory.write_i32(multisampling + 40, 0)      # alphaToCoverageEnable = VK_FALSE
+        Memory.write_i32(multisampling + 44, 0)      # alphaToOneEnable = VK_FALSE
+        
+        # Step 9: Configure color blending
+        color_blend_attachment: i64 = Memory.malloc_zeroed(32)
+        if color_blend_attachment == 0:
+            Memory.free(multisampling)
+            Memory.free(rasterizer)
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(color_blend_attachment, 0, 32)
+        Memory.write_i32(color_blend_attachment, 0)       # blendEnable = VK_FALSE
+        Memory.write_i32(color_blend_attachment + 4, 0)   # srcColorBlendFactor
+        Memory.write_i32(color_blend_attachment + 8, 0)   # dstColorBlendFactor
+        Memory.write_i32(color_blend_attachment + 12, 0)  # colorBlendOp
+        Memory.write_i32(color_blend_attachment + 16, 0)  # srcAlphaBlendFactor
+        Memory.write_i32(color_blend_attachment + 20, 0)  # dstAlphaBlendFactor
+        Memory.write_i32(color_blend_attachment + 24, 0)  # alphaBlendOp
+        Memory.write_i32(color_blend_attachment + 28, 15) # colorWriteMask = R|G|B|A
+        
+        color_blending: i64 = Memory.malloc_zeroed(56)
+        if color_blending == 0:
+            Memory.free(color_blend_attachment)
+            Memory.free(multisampling)
+            Memory.free(rasterizer)
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(color_blending, 0, 56)
+        Memory.write_i32(color_blending, 26)                     # sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO
+        Memory.write_ptr(color_blending + 8, 0)                  # pNext
+        Memory.write_i32(color_blending + 16, 0)                 # flags
+        Memory.write_i32(color_blending + 20, 0)                 # logicOpEnable = VK_FALSE
+        Memory.write_i32(color_blending + 24, 0)                 # logicOp
+        Memory.write_i32(color_blending + 28, 1)                 # attachmentCount
+        Memory.write_ptr(color_blending + 32, color_blend_attachment)  # pAttachments
+        Memory.write_f32(color_blending + 40, 0.0)               # blendConstants[0]
+        Memory.write_f32(color_blending + 44, 0.0)               # blendConstants[1]
+        Memory.write_f32(color_blending + 48, 0.0)               # blendConstants[2]
+        Memory.write_f32(color_blending + 52, 0.0)               # blendConstants[3]
+        
+        # Step 10: Create graphics pipeline
+        # NOTE: depth stencil disabled - need to add depth buffer to render pass first
+        pipeline_info: i64 = Memory.malloc_zeroed(144)
+        if pipeline_info == 0:
+            Memory.free(color_blending)
+            Memory.free(color_blend_attachment)
+            Memory.free(multisampling)
+            Memory.free(rasterizer)
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(pipeline_info, 0, 144)
+        Memory.write_i32(pipeline_info, 28)                      # sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO
+        Memory.write_ptr(pipeline_info + 8, 0)                   # pNext
+        Memory.write_i32(pipeline_info + 16, 0)                  # flags
+        Memory.write_i32(pipeline_info + 20, 2)                  # stageCount = 2 (vertex + fragment)
+        Memory.write_ptr(pipeline_info + 24, shader_stages)      # pStages
+        Memory.write_ptr(pipeline_info + 32, vertex_input_info)  # pVertexInputState
+        Memory.write_ptr(pipeline_info + 40, input_assembly)     # pInputAssemblyState
+        Memory.write_ptr(pipeline_info + 48, 0)                  # pTessellationState
+        Memory.write_ptr(pipeline_info + 56, viewport_state)     # pViewportState
+        Memory.write_ptr(pipeline_info + 64, rasterizer)         # pRasterizationState
+        Memory.write_ptr(pipeline_info + 72, multisampling)      # pMultisampleState
+        Memory.write_ptr(pipeline_info + 80, 0)                  # pDepthStencilState - disabled (no depth buffer)
+        Memory.write_ptr(pipeline_info + 88, color_blending)     # pColorBlendState
+        Memory.write_ptr(pipeline_info + 96, dynamic_state_info) # pDynamicState
+        Memory.write_ptr(pipeline_info + 104, self.vk_pipeline_layout)  # layout
+        Memory.write_ptr(pipeline_info + 112, self.vk_render_pass)      # renderPass
+        Memory.write_i32(pipeline_info + 120, 0)                 # subpass
+        Memory.write_ptr(pipeline_info + 128, 0)                 # basePipelineHandle
+        Memory.write_i32(pipeline_info + 136, -1)                # basePipelineIndex
+        
+        pipeline_ptr: i64 = Memory.malloc_zeroed(8)
+        if pipeline_ptr == 0:
+            Memory.free(pipeline_info)
+            Memory.free(dynamic_state_info)
+            Memory.free(dynamic_states)
+            Memory.free(color_blending)
+            Memory.free(color_blend_attachment)
+            Memory.free(multisampling)
+            Memory.free(rasterizer)
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        Memory.set(pipeline_ptr, 0, 8)
+        
+        pipeline_result: i32 = vkCreateGraphicsPipelines(self.vk_device, 0, 1, pipeline_info, 0, pipeline_ptr)
+        
+        if pipeline_result != 0:
+            print("Error: Failed to create graphics pipeline")
+            Memory.free(pipeline_ptr)
+            Memory.free(pipeline_info)
+            Memory.free(dynamic_state_info)
+            Memory.free(dynamic_states)
+            Memory.free(color_blending)
+            Memory.free(color_blend_attachment)
+            Memory.free(multisampling)
+            Memory.free(rasterizer)
+            Memory.free(viewport_state)
+            Memory.free(scissor)
+            Memory.free(viewport)
+            Memory.free(input_assembly)
+            Memory.free(vertex_input_info)
+            Memory.free(shader_stages)
+            Memory.free(frag_stage_info)
+            Memory.free(vert_stage_info)
+            return 0
+        
+        self.vk_graphics_pipeline = Memory.read_ptr(pipeline_ptr)
+        print("Graphics pipeline created!")
+        
+        # Cleanup temporary structures
+        Memory.free(pipeline_ptr)
+        Memory.free(pipeline_info)
+        Memory.free(dynamic_state_info)
+        Memory.free(dynamic_states)
+        Memory.free(color_blending)
+        Memory.free(color_blend_attachment)
+        Memory.free(multisampling)
+        Memory.free(rasterizer)
+        Memory.free(viewport_state)
+        Memory.free(scissor)
+        Memory.free(viewport)
+        Memory.free(input_assembly)
+        Memory.free(vertex_input_info)
+        Memory.free(shader_stages)
+        Memory.free(frag_stage_info)
+        Memory.free(vert_stage_info)
+        
+        return 1
+
+    # ============================================
+    # Window Query Methods
+    # ============================================
+    
+    fun should_close(self) -> i32:
+        if self.window_handle == 0:
+            return 1
+        return glfwWindowShouldClose(self.window_handle)
+    
+    fun poll_events(self):
+        glfwPollEvents()
+    
+    fun swap_buffers(self):
+        if self.window_handle != 0:
+            glfwSwapBuffers(self.window_handle)
+    
+    fun get_handle(self) -> i64:
+        return self.window_handle
+    
+    fun get_width(self) -> i32:
+        return self.window_width
+    
+    fun get_height(self) -> i32:
+        return self.window_height
+    
+    fun is_window_open(self) -> i32:
+        return self.is_open
+    
+    # ============================================
+    # Main Loop
+    # ============================================
+    
+    fun mainloop(self):
+        print("Starting main loop...")
+        
+        if self.window_handle == 0:
+            init_result: i32 = self.init()
+            if init_result == 0:
+                print("Error: Failed to initialize window")
+                return
+        
+        if self.renderable_count == 0:
+            print("No meshes in scene - will render clear color only")
+        else:
+            print("Meshes in scene:")
+            print(self.renderable_count)
+        
+        while self.should_close() == 0:
+            self.poll_events()
+            self._render_frame()
+        
+        print("Main loop ended")
+        self.cleanup()
+    
+    fun _render_frame(self):
+        if self.vulkan_initialized == 0:
+            return
+        
+        if self.vk_command_buffers == 0 || self.vk_in_flight_fences == 0:
+            return
+        
+        # Initialize frame buffers if needed
+        if self.frame_buffers_initialized == 0:
+            self.frame_fence_array = Memory.malloc_zeroed(8)
+            self.frame_image_index_ptr = Memory.malloc_zeroed(4)
+            self.frame_submit_info = Memory.malloc_zeroed(96)
+            self.frame_wait_semaphores = Memory.malloc_zeroed(8)
+            self.frame_wait_stages = Memory.malloc_zeroed(4)
+            self.frame_signal_semaphores = Memory.malloc_zeroed(8)
+            self.frame_command_buffers_arr = Memory.malloc_zeroed(8)
+            self.frame_present_info = Memory.malloc_zeroed(96)
+            self.frame_wait_sems_present = Memory.malloc_zeroed(8)
+            self.frame_swapchains_arr = Memory.malloc_zeroed(8)
+            self.frame_image_indices_arr = Memory.malloc_zeroed(4)
+            self.frame_buffers_initialized = 1
+        
+        current_fence: i64 = Memory.read_ptr(self.vk_in_flight_fences + (self.vk_current_frame * 8))
+        
+        Memory.write_ptr(self.frame_fence_array, current_fence)
+        vkWaitForFences(self.vk_device, 1, self.frame_fence_array, 1, -1)
+        vkResetFences(self.vk_device, 1, self.frame_fence_array)
+        
+        Memory.write_i32(self.frame_image_index_ptr, 0)
+        current_semaphore: i64 = Memory.read_ptr(self.vk_image_available_semaphores + (self.vk_current_frame * 8))
+        
+        result: i32 = vkAcquireNextImageKHR(self.vk_device, self.vk_swapchain, -1, current_semaphore, 0, self.frame_image_index_ptr)
+        image_index: i32 = Memory.read_i32(self.frame_image_index_ptr)
+        
+        if result != 0:
+            return
+        
+        command_buffer: i64 = Memory.read_ptr(self.vk_command_buffers + (self.vk_current_frame * 8))
+        vkResetCommandBuffer(command_buffer, 0)
+        
+        framebuffer: i64 = Memory.read_ptr(self.vk_framebuffers + (image_index * 8))
+        
+        # Record command buffer
+        rec_result: i32 = self._record_command_buffer(command_buffer, framebuffer)
+        if rec_result == 0:
+            return
+        
+        # Submit
+        Memory.set(self.frame_submit_info, 0, 96)
+        Memory.write_ptr(self.frame_wait_semaphores, current_semaphore)
+        Memory.write_i32(self.frame_wait_stages, 1024)
+        
+        render_finished_sem: i64 = Memory.read_ptr(self.vk_render_finished_semaphores + (self.vk_current_frame * 8))
+        Memory.write_ptr(self.frame_signal_semaphores, render_finished_sem)
+        Memory.write_ptr(self.frame_command_buffers_arr, command_buffer)
+        
+        Memory.write_i32(self.frame_submit_info, 4)
+        Memory.write_ptr(self.frame_submit_info + 8, 0)
+        Memory.write_i32(self.frame_submit_info + 16, 1)
+        Memory.write_ptr(self.frame_submit_info + 24, self.frame_wait_semaphores)
+        Memory.write_ptr(self.frame_submit_info + 32, self.frame_wait_stages)
+        Memory.write_i32(self.frame_submit_info + 40, 1)
+        Memory.write_ptr(self.frame_submit_info + 48, self.frame_command_buffers_arr)
+        Memory.write_i32(self.frame_submit_info + 56, 1)
+        Memory.write_ptr(self.frame_submit_info + 64, self.frame_signal_semaphores)
+        
+        vkQueueSubmit(self.vk_graphics_queue, 1, self.frame_submit_info, current_fence)
+        
+        # Present
+        Memory.set(self.frame_present_info, 0, 96)
+        Memory.write_ptr(self.frame_wait_sems_present, render_finished_sem)
+        Memory.write_ptr(self.frame_swapchains_arr, self.vk_swapchain)
+        Memory.write_i32(self.frame_image_indices_arr, image_index)
+        
+        Memory.write_i32(self.frame_present_info, 1000001001)
+        Memory.write_ptr(self.frame_present_info + 8, 0)
+        Memory.write_i32(self.frame_present_info + 16, 1)
+        Memory.write_ptr(self.frame_present_info + 24, self.frame_wait_sems_present)
+        Memory.write_i32(self.frame_present_info + 32, 1)
+        Memory.write_ptr(self.frame_present_info + 40, self.frame_swapchains_arr)
+        Memory.write_ptr(self.frame_present_info + 48, self.frame_image_indices_arr)
+        Memory.write_ptr(self.frame_present_info + 56, 0)
+        
+        vkQueuePresentKHR(self.vk_present_queue, self.frame_present_info)
+        
+        self.vk_current_frame = (self.vk_current_frame + 1) % self.vk_max_frames_in_flight
+    
+    fun _record_command_buffer(self, command_buffer: i64, framebuffer: i64) -> i32:
+        begin_info: i64 = Memory.malloc_zeroed(64)
+        if begin_info == 0:
+            return 0
+        Memory.set(begin_info, 0, 64)
+        Memory.write_i32(begin_info, 42)
+        Memory.write_ptr(begin_info + 8, 0)
+        Memory.write_i32(begin_info + 16, 0)
+        Memory.write_ptr(begin_info + 24, 0)
+        
+        result: i32 = vkBeginCommandBuffer(command_buffer, begin_info)
+        Memory.free(begin_info)
+        
+        if result != 0:
+            return 0
+        
+        render_pass_info: i64 = Memory.malloc_zeroed(96)
+        if render_pass_info == 0:
+            return 0
+        Memory.set(render_pass_info, 0, 96)
+        Memory.write_i32(render_pass_info, 43)
+        Memory.write_ptr(render_pass_info + 8, 0)
+        Memory.write_ptr(render_pass_info + 16, self.vk_render_pass)
+        Memory.write_ptr(render_pass_info + 24, framebuffer)
+        Memory.write_i32(render_pass_info + 32, 0)
+        Memory.write_i32(render_pass_info + 36, 0)
+        Memory.write_i32(render_pass_info + 40, self.window_width)
+        Memory.write_i32(render_pass_info + 44, self.window_height)
+        
+        clear_value: i64 = Memory.malloc_zeroed(16)
+        if clear_value != 0:
+            Memory.set(clear_value, 0, 16)
+            Memory.write_f32(clear_value, 0.2)
+            Memory.write_f32(clear_value + 4, 0.3)
+            Memory.write_f32(clear_value + 8, 0.4)
+            Memory.write_f32(clear_value + 12, 1.0)
+            Memory.write_i32(render_pass_info + 48, 1)
+            Memory.write_ptr(render_pass_info + 56, clear_value)
+        
+        vkCmdBeginRenderPass(command_buffer, render_pass_info, 0)
+        
+        # Requirement 6.1: Bind the graphics pipeline after vkCmdBeginRenderPass
+        if self.vk_graphics_pipeline != 0:
+            # VK_PIPELINE_BIND_POINT_GRAPHICS = 0
+            vkCmdBindPipeline(command_buffer, 0, self.vk_graphics_pipeline)
+            
+            # Set dynamic viewport
+            dyn_viewport: i64 = Memory.malloc_zeroed(24)
+            if dyn_viewport != 0:
+                width_f: f32 = self.window_width
+                height_f: f32 = self.window_height
+                Memory.write_f32(dyn_viewport, 0.0)         # x
+                Memory.write_f32(dyn_viewport + 4, 0.0)     # y
+                Memory.write_f32(dyn_viewport + 8, width_f)  # width
+                Memory.write_f32(dyn_viewport + 12, height_f) # height
+                Memory.write_f32(dyn_viewport + 16, 0.0)    # minDepth
+                Memory.write_f32(dyn_viewport + 20, 1.0)    # maxDepth
+                vkCmdSetViewport(command_buffer, 0, 1, dyn_viewport)
+                Memory.free(dyn_viewport)
+            
+            # Set dynamic scissor
+            dyn_scissor: i64 = Memory.malloc_zeroed(16)
+            if dyn_scissor != 0:
+                Memory.write_i32(dyn_scissor, 0)                    # offset.x
+                Memory.write_i32(dyn_scissor + 4, 0)                # offset.y
+                Memory.write_i32(dyn_scissor + 8, self.window_width)   # extent.width
+                Memory.write_i32(dyn_scissor + 12, self.window_height) # extent.height
+                vkCmdSetScissor(command_buffer, 0, 1, dyn_scissor)
+                Memory.free(dyn_scissor)
+            
+            # Render meshes from vertex buffers (Requirements 6.2, 6.3, 6.4)
+            if self.mesh_buffer_count > 0:
+                # Get View and Projection matrices once (shared for all meshes)
+                view_matrix: i64 = self._get_camera_view_matrix()
+                proj_matrix: i64 = self._get_camera_projection_matrix()
+                
+                if view_matrix != 0 && proj_matrix != 0:
+                    # Calculate VP = Projection × View (shared for all meshes)
+                    vp_matrix: i64 = multiply_4x4_matrices(proj_matrix, view_matrix)
+                    
+                    if vp_matrix != 0:
+                        # Render each mesh with its own model matrix
+                        mesh_idx: i32 = 0
+                        while mesh_idx < self.mesh_buffer_count:
+                            # Get vertex buffer for this mesh
+                            buffer_offset: i64 = mesh_idx * 8
+                            vertex_buffer: i64 = Memory.read_ptr(self.mesh_vertex_buffers + buffer_offset)
+                            
+                            # Get vertex count for this mesh
+                            count_offset: i64 = mesh_idx * 4
+                            vertex_count: i32 = Memory.read_i32(self.mesh_vertex_counts + count_offset)
+                            
+                            # Get node pointer for this mesh (for model matrix)
+                            node_ptr: i64 = Memory.read_ptr(self.mesh_node_pointers + buffer_offset)
+                            
+                            if vertex_buffer != 0 && vertex_count > 0:
+                                # Calculate model matrix for this mesh
+                                model_matrix: i64 = self._get_model_matrix_for_node(node_ptr)
+                                
+                                if model_matrix != 0:
+                                    # Calculate MVP = VP × Model
+                                    mvp: i64 = multiply_4x4_matrices(vp_matrix, model_matrix)
+                                    
+                                    if mvp != 0:
+                                        # Push MVP matrix to shader
+                                        vkCmdPushConstants(command_buffer, self.vk_pipeline_layout, 1, 0, 64, mvp)
+                                        
+                                        # Bind vertex buffer
+                                        vb_array: i64 = Memory.malloc_zeroed(8)
+                                        if vb_array != 0:
+                                            Memory.write_ptr(vb_array, vertex_buffer)
+                                            offset_array: i64 = Memory.malloc_zeroed(8)
+                                            if offset_array != 0:
+                                                Memory.write_i64(offset_array, 0)
+                                                vkCmdBindVertexBuffers(command_buffer, 0, 1, vb_array, offset_array)
+                                                Memory.free(offset_array)
+                                            Memory.free(vb_array)
+                                        
+                                        # Draw the mesh
+                                        vkCmdDraw(command_buffer, vertex_count, 1, 0, 0)
+                                        Memory.free(mvp)
+                                    
+                                    Memory.free(model_matrix)
+                            
+                            mesh_idx = mesh_idx + 1
+                        
+                        Memory.free(vp_matrix)
+                    
+                    Memory.free(proj_matrix)
+                    Memory.free(view_matrix)
+            # If no meshes, render only clear color (Requirement 6.5)
+        
+        vkCmdEndRenderPass(command_buffer)
+        
+        result2: i32 = vkEndCommandBuffer(command_buffer)
+        
+        if clear_value != 0:
+            Memory.free(clear_value)
+        Memory.free(render_pass_info)
+        
+        if result2 != 0:
+            return 0
+        
+        return 1
+    
+    # ============================================
+    # MVP Matrix Calculation (Requirements 7.1, 7.2, 7.3, 7.4)
+    # ============================================
+    
+    # Get model matrix for a MeshInstance3D node
+    # If node_ptr is 0, returns identity matrix
+    # MeshInstance3D actual memory layout (verified by testing):
+    #   - Node base fields: 40 bytes - offset 0-39
+    #   - Node3D parent: i64 (8 bytes) - offset 40 (but actual parent at 80)
+    #   - MeshInstance3D fields before transform: 40 bytes - offset 48-87
+    #   - pos_x: f32 (4 bytes) - offset 88
+    #   - pos_y: f32 (4 bytes) - offset 92
+    #   - pos_z: f32 (4 bytes) - offset 96
+    #   - rot_x: f32 (4 bytes) - offset 100
+    #   - rot_y: f32 (4 bytes) - offset 104
+    #   - rot_z: f32 (4 bytes) - offset 108
+    #   - scale_x: f32 (4 bytes) - offset 112
+    #   - scale_y: f32 (4 bytes) - offset 116
+    #   - scale_z: f32 (4 bytes) - offset 120
+    fun _get_model_matrix_for_node(self, node_ptr: i64) -> i64:
+        zero: i64 = 0
+        
+        # If no node, return identity matrix
+        if node_ptr == zero:
+            return create_identity_matrix()
+        
+        # Read local position (corrected offsets)
+        local_x: f32 = Memory.read_f32(node_ptr + 88)
+        local_y: f32 = Memory.read_f32(node_ptr + 92)
+        local_z: f32 = Memory.read_f32(node_ptr + 96)
+        
+        # Read rotation (corrected offsets)
+        rot_x: f32 = Memory.read_f32(node_ptr + 100)
+        rot_y: f32 = Memory.read_f32(node_ptr + 104)
+        rot_z: f32 = Memory.read_f32(node_ptr + 108)
+        
+        # Read scale (corrected offsets)
+        scale_x: f32 = Memory.read_f32(node_ptr + 112)
+        scale_y: f32 = Memory.read_f32(node_ptr + 116)
+        scale_z: f32 = Memory.read_f32(node_ptr + 120)
+        
+        # Check for parent and add parent position
+        # Parent pointer is at offset 80 in MeshInstance3D
+        parent_ptr: i64 = Memory.read_ptr(node_ptr + 80)
+        pos_x: f32 = local_x
+        pos_y: f32 = local_y
+        pos_z: f32 = local_z
+        
+        if parent_ptr != zero:
+            # Parent's position is at offset 88, 92, 96 (same layout)
+            parent_x: f32 = Memory.read_f32(parent_ptr + 88)
+            parent_y: f32 = Memory.read_f32(parent_ptr + 92)
+            parent_z: f32 = Memory.read_f32(parent_ptr + 96)
+            pos_x = pos_x + parent_x
+            pos_y = pos_y + parent_y
+            pos_z = pos_z + parent_z
+        
+        # Allocate model matrix
+        matrix_ptr: i64 = Memory.malloc_zeroed(64)
+        if matrix_ptr == zero:
+            return zero
+        
+        # Convert rotation to radians
+        pi: f32 = 3.14159265359
+        rad_x: f32 = rot_x * pi / 180.0
+        rad_y: f32 = rot_y * pi / 180.0
+        rad_z: f32 = rot_z * pi / 180.0
+        
+        # Calculate rotation matrix components
+        cx: f32 = @cos(rad_x)
+        sx: f32 = @sin(rad_x)
+        cy: f32 = @cos(rad_y)
+        sy: f32 = @sin(rad_y)
+        cz: f32 = @cos(rad_z)
+        sz: f32 = @sin(rad_z)
+        
+        # Combined rotation matrix (ZYX order) with scale
+        r00: f32 = (cy * cz) * scale_x
+        r01: f32 = (sx * sy * cz - cx * sz) * scale_x
+        r02: f32 = (cx * sy * cz + sx * sz) * scale_x
+        r10: f32 = (cy * sz) * scale_y
+        r11: f32 = (sx * sy * sz + cx * cz) * scale_y
+        r12: f32 = (cx * sy * sz - sx * cz) * scale_y
+        r20: f32 = (-sy) * scale_z
+        r21: f32 = (sx * cy) * scale_z
+        r22: f32 = (cx * cy) * scale_z
+        
+        # Write column-major matrix for Vulkan
+        Memory.write_f32(matrix_ptr + 0, r00)
+        Memory.write_f32(matrix_ptr + 4, r01)
+        Memory.write_f32(matrix_ptr + 8, r02)
+        Memory.write_f32(matrix_ptr + 12, 0.0)
+        Memory.write_f32(matrix_ptr + 16, r10)
+        Memory.write_f32(matrix_ptr + 20, r11)
+        Memory.write_f32(matrix_ptr + 24, r12)
+        Memory.write_f32(matrix_ptr + 28, 0.0)
+        Memory.write_f32(matrix_ptr + 32, r20)
+        Memory.write_f32(matrix_ptr + 36, r21)
+        Memory.write_f32(matrix_ptr + 40, r22)
+        Memory.write_f32(matrix_ptr + 44, 0.0)
+        Memory.write_f32(matrix_ptr + 48, pos_x)
+        Memory.write_f32(matrix_ptr + 52, pos_y)
+        Memory.write_f32(matrix_ptr + 56, pos_z)
+        Memory.write_f32(matrix_ptr + 60, 1.0)
+        
+        return matrix_ptr
+    
+    # Calculate MVP matrix for rendering (legacy - uses identity model)
+    # MVP = Projection × View × Model
+    # Model is identity for now (mesh at origin with no rotation/scale)
+    # Requirements: 7.1, 7.2, 7.3, 7.4
+    fun _calculate_mvp(self) -> i64:
+        zero: i64 = 0
+        
+        # Check if we have an active camera
+        if self.active_camera == zero:
+            print("Warning: No active camera for MVP calculation")
+            return zero
+        
+        # Get view matrix from camera (Requirement 7.2)
+        # Camera3D.get_view_matrix() returns a pointer to 64 bytes
+        view_matrix: i64 = self._get_camera_view_matrix()
+        if view_matrix == zero:
+            print("Warning: Failed to get view matrix")
+            return zero
+        
+        # Get projection matrix from camera (Requirement 7.3)
+        proj_matrix: i64 = self._get_camera_projection_matrix()
+        if proj_matrix == zero:
+            print("Warning: Failed to get projection matrix")
+            Memory.free(view_matrix)
+            return zero
+        
+        # Create identity model matrix (Requirement 7.1)
+        model_matrix: i64 = create_identity_matrix()
+        if model_matrix == zero:
+            print("Warning: Failed to create model matrix")
+            Memory.free(proj_matrix)
+            Memory.free(view_matrix)
+            return zero
+        
+        # Calculate MVP = Projection × View × Model (Requirement 7.4)
+        # First: VP = Projection × View
+        vp_matrix: i64 = multiply_4x4_matrices(proj_matrix, view_matrix)
+        if vp_matrix == zero:
+            print("Warning: Failed to compute VP matrix")
+            Memory.free(model_matrix)
+            Memory.free(proj_matrix)
+            Memory.free(view_matrix)
+            return zero
+        
+        # Second: MVP = VP × Model
+        mvp_matrix: i64 = multiply_4x4_matrices(vp_matrix, model_matrix)
+        
+        # Clean up temporary matrices
+        Memory.free(vp_matrix)
+        Memory.free(model_matrix)
+        Memory.free(proj_matrix)
+        Memory.free(view_matrix)
+        
+        if mvp_matrix == zero:
+            print("Warning: Failed to compute MVP matrix")
+        
+        return mvp_matrix
+    
+    # Helper to get view matrix from active camera
+    # This reads camera GLOBAL position and rotation to build a proper view matrix
+    fun _get_camera_view_matrix(self) -> i64:
+        zero: i64 = 0
+        if self.active_camera == zero:
+            return zero
+        
+        # Camera3D actual memory layout (verified by testing):
+        #   - Node base fields + Node3D fields: 88 bytes - offset 0-87
+        #   - pos_x: f32 (4 bytes) - offset 88
+        #   - pos_y: f32 (4 bytes) - offset 92
+        #   - pos_z: f32 (4 bytes) - offset 96
+        #   - rot_x: f32 (4 bytes) - offset 100
+        #   - rot_y: f32 (4 bytes) - offset 104
+        #   - rot_z: f32 (4 bytes) - offset 108
+        #   - parent: i64 (8 bytes) - offset 80
+        
+        # Read camera local position (corrected offsets)
+        cam_local_x: f32 = Memory.read_f32(self.active_camera + 88)
+        cam_local_y: f32 = Memory.read_f32(self.active_camera + 92)
+        cam_local_z: f32 = Memory.read_f32(self.active_camera + 96)
+        
+        # Read camera rotation (corrected offsets)
+        cam_rot_x: f32 = Memory.read_f32(self.active_camera + 100)
+        cam_rot_y: f32 = Memory.read_f32(self.active_camera + 104)
+        cam_rot_z: f32 = Memory.read_f32(self.active_camera + 108)
+        
+        # Check if camera has a parent (parent at offset 80)
+        cam_parent: i64 = Memory.read_ptr(self.active_camera + 80)
+        
+        # Calculate global position (local + parent)
+        cam_pos_x: f32 = cam_local_x
+        cam_pos_y: f32 = cam_local_y
+        cam_pos_z: f32 = cam_local_z
+        
+        if cam_parent != 0:
+            # Parent's position is at offset 88, 92, 96 (same layout)
+            parent_x: f32 = Memory.read_f32(cam_parent + 88)
+            parent_y: f32 = Memory.read_f32(cam_parent + 92)
+            parent_z: f32 = Memory.read_f32(cam_parent + 96)
+            cam_pos_x = cam_pos_x + parent_x
+            cam_pos_y = cam_pos_y + parent_y
+            cam_pos_z = cam_pos_z + parent_z
+        
+        # Allocate view matrix
+        matrix_ptr: i64 = Memory.malloc_zeroed(64)
+        if matrix_ptr == zero:
+            return zero
+        
+        # Build rotation matrix from Euler angles (degrees to radians)
+        pi: f32 = 3.14159265359
+        rad_x: f32 = cam_rot_x * pi / 180.0
+        rad_y: f32 = cam_rot_y * pi / 180.0
+        rad_z: f32 = cam_rot_z * pi / 180.0
+        
+        cx: f32 = @cos(rad_x)
+        sx: f32 = @sin(rad_x)
+        cy: f32 = @cos(rad_y)
+        sy: f32 = @sin(rad_y)
+        cz: f32 = @cos(rad_z)
+        sz: f32 = @sin(rad_z)
+        
+        # Combined rotation matrix (ZYX order)
+        r00: f32 = cy * cz
+        r01: f32 = sx * sy * cz - cx * sz
+        r02: f32 = cx * sy * cz + sx * sz
+        r10: f32 = cy * sz
+        r11: f32 = sx * sy * sz + cx * cz
+        r12: f32 = cx * sy * sz - sx * cz
+        r20: f32 = -sy
+        r21: f32 = sx * cy
+        r22: f32 = cx * cy
+        
+        # Translation (rotate then translate)
+        tx: f32 = -(r00 * cam_pos_x + r10 * cam_pos_y + r20 * cam_pos_z)
+        ty: f32 = -(r01 * cam_pos_x + r11 * cam_pos_y + r21 * cam_pos_z)
+        tz: f32 = -(r02 * cam_pos_x + r12 * cam_pos_y + r22 * cam_pos_z)
+        
+        # Write column-major matrix for Vulkan
+        Memory.write_f32(matrix_ptr + 0, r00)
+        Memory.write_f32(matrix_ptr + 4, r01)
+        Memory.write_f32(matrix_ptr + 8, r02)
+        Memory.write_f32(matrix_ptr + 12, 0.0)
+        Memory.write_f32(matrix_ptr + 16, r10)
+        Memory.write_f32(matrix_ptr + 20, r11)
+        Memory.write_f32(matrix_ptr + 24, r12)
+        Memory.write_f32(matrix_ptr + 28, 0.0)
+        Memory.write_f32(matrix_ptr + 32, r20)
+        Memory.write_f32(matrix_ptr + 36, r21)
+        Memory.write_f32(matrix_ptr + 40, r22)
+        Memory.write_f32(matrix_ptr + 44, 0.0)
+        Memory.write_f32(matrix_ptr + 48, tx)
+        Memory.write_f32(matrix_ptr + 52, ty)
+        Memory.write_f32(matrix_ptr + 56, tz)
+        Memory.write_f32(matrix_ptr + 60, 1.0)
+        
+        return matrix_ptr
+    
+    # Helper to get projection matrix from active camera
+    # This computes a perspective projection matrix for Vulkan
+    # Vulkan uses column-major matrices, so:
+    # mat[col][row] = offset (col * 4 + row) * 4 bytes
+    # mat[0][0] = 0, mat[1][1] = 20, mat[2][2] = 40, mat[3][3] = 60
+    # mat[2][3] = (2*4 + 3) * 4 = 44, mat[3][2] = (3*4 + 2) * 4 = 56
+    fun _get_camera_projection_matrix(self) -> i64:
+        zero: i64 = 0
+        if self.active_camera == zero:
+            return zero
+        
+        matrix_ptr: i64 = Memory.malloc_zeroed(64)
+        if matrix_ptr == zero:
+            return zero
+        
+        Memory.set(matrix_ptr, 0, 64)
+        
+        # Vulkan perspective projection matrix (column-major)
+        # fov=45 degrees, aspect=1.714 (1200/700), near=0.1, far=100
+        # f = 1/tan(fov/2) = 1/tan(22.5°) ≈ 2.414
+        # aspect = 1200/700 ≈ 1.714
+        
+        # [0][0] = f / aspect ≈ 1.408
+        Memory.write_f32(matrix_ptr + 0, 1.408)
+        
+        # [1][1] = f ≈ 2.414 (negated for Vulkan Y-flip)
+        Memory.write_f32(matrix_ptr + 20, -2.414)
+        
+        # [2][2] = far / (near - far) ≈ -1.002
+        Memory.write_f32(matrix_ptr + 40, -1.002)
+        
+        # [2][3] = -1 (for perspective divide)
+        Memory.write_f32(matrix_ptr + 44, -1.0)
+        
+        # [3][2] = (near * far) / (near - far) ≈ -0.1002
+        Memory.write_f32(matrix_ptr + 56, -0.1002)
+        
+        # [3][3] = 0
+        Memory.write_f32(matrix_ptr + 60, 0.0)
+        
+        return matrix_ptr
+    
+    # ============================================
+    # Cleanup
+    # ============================================
+    
+    fun cleanup(self):
+        print("Cleaning up Window resources...")
+        
+        if self.vulkan_initialized == 1:
+            if self.vk_device != 0:
+                vkDeviceWaitIdle(self.vk_device)
+            
+            # Free frame buffers
+            if self.frame_fence_array != 0:
+                Memory.free(self.frame_fence_array)
+            if self.frame_image_index_ptr != 0:
+                Memory.free(self.frame_image_index_ptr)
+            if self.frame_submit_info != 0:
+                Memory.free(self.frame_submit_info)
+            if self.frame_wait_semaphores != 0:
+                Memory.free(self.frame_wait_semaphores)
+            if self.frame_wait_stages != 0:
+                Memory.free(self.frame_wait_stages)
+            if self.frame_signal_semaphores != 0:
+                Memory.free(self.frame_signal_semaphores)
+            if self.frame_command_buffers_arr != 0:
+                Memory.free(self.frame_command_buffers_arr)
+            if self.frame_present_info != 0:
+                Memory.free(self.frame_present_info)
+            if self.frame_wait_sems_present != 0:
+                Memory.free(self.frame_wait_sems_present)
+            if self.frame_swapchains_arr != 0:
+                Memory.free(self.frame_swapchains_arr)
+            if self.frame_image_indices_arr != 0:
+                Memory.free(self.frame_image_indices_arr)
+            
+            # Destroy sync objects
+            n: i32 = 0
+            while n < self.vk_max_frames_in_flight:
+                if self.vk_image_available_semaphores != 0:
+                    sem: i64 = Memory.read_ptr(self.vk_image_available_semaphores + (n * 8))
+                    if sem != 0:
+                        vkDestroySemaphore(self.vk_device, sem, 0)
+                if self.vk_render_finished_semaphores != 0:
+                    sem2: i64 = Memory.read_ptr(self.vk_render_finished_semaphores + (n * 8))
+                    if sem2 != 0:
+                        vkDestroySemaphore(self.vk_device, sem2, 0)
+                if self.vk_in_flight_fences != 0:
+                    fence: i64 = Memory.read_ptr(self.vk_in_flight_fences + (n * 8))
+                    if fence != 0:
+                        vkDestroyFence(self.vk_device, fence, 0)
+                n = n + 1
+            
+            if self.vk_image_available_semaphores != 0:
+                Memory.free(self.vk_image_available_semaphores)
+            if self.vk_render_finished_semaphores != 0:
+                Memory.free(self.vk_render_finished_semaphores)
+            if self.vk_in_flight_fences != 0:
+                Memory.free(self.vk_in_flight_fences)
+            
+            # Destroy command pool
+            if self.vk_command_buffers != 0:
+                Memory.free(self.vk_command_buffers)
+            if self.vk_command_pool != 0:
+                vkDestroyCommandPool(self.vk_device, self.vk_command_pool, 0)
+            
+            # Destroy pipeline
+            if self.vk_graphics_pipeline != 0:
+                vkDestroyPipeline(self.vk_device, self.vk_graphics_pipeline, 0)
+            if self.vk_pipeline_layout != 0:
+                vkDestroyPipelineLayout(self.vk_device, self.vk_pipeline_layout, 0)
+            
+            # Destroy shader modules (Requirement 3.4)
+            if self.vk_vert_shader_module != 0:
+                vkDestroyShaderModule(self.vk_device, self.vk_vert_shader_module, 0)
+                self.vk_vert_shader_module = 0
+            if self.vk_frag_shader_module != 0:
+                vkDestroyShaderModule(self.vk_device, self.vk_frag_shader_module, 0)
+                self.vk_frag_shader_module = 0
+            self.shaders_loaded = 0
+            
+            # Destroy vertex buffers (Requirement 5.4)
+            if self.mesh_vertex_buffers != 0:
+                vb_idx: i32 = 0
+                while vb_idx < self.mesh_buffer_count:
+                    vb: i64 = Memory.read_ptr(self.mesh_vertex_buffers + (vb_idx * 8))
+                    if vb != 0:
+                        vkDestroyBuffer(self.vk_device, vb, 0)
+                    vb_idx = vb_idx + 1
+                Memory.free(self.mesh_vertex_buffers)
+                self.mesh_vertex_buffers = 0
+            
+            # Free vertex buffer memories (Requirement 5.4)
+            if self.mesh_vertex_memories != 0:
+                vm_idx: i32 = 0
+                while vm_idx < self.mesh_buffer_count:
+                    vm: i64 = Memory.read_ptr(self.mesh_vertex_memories + (vm_idx * 8))
+                    if vm != 0:
+                        vkFreeMemory(self.vk_device, vm, 0)
+                    vm_idx = vm_idx + 1
+                Memory.free(self.mesh_vertex_memories)
+                self.mesh_vertex_memories = 0
+            
+            # Free vertex counts array
+            if self.mesh_vertex_counts != 0:
+                Memory.free(self.mesh_vertex_counts)
+                self.mesh_vertex_counts = 0
+            
+            # Free node pointers array
+            if self.mesh_node_pointers != 0:
+                Memory.free(self.mesh_node_pointers)
+                self.mesh_node_pointers = 0
+            
+            self.mesh_buffer_count = 0
+            self.mesh_buffer_capacity = 0
+            
+            # Destroy framebuffers
+            if self.vk_framebuffers != 0:
+                p: i32 = 0
+                while p < self.vk_swapchain_image_count:
+                    fb: i64 = Memory.read_ptr(self.vk_framebuffers + (p * 8))
+                    if fb != 0:
+                        vkDestroyFramebuffer(self.vk_device, fb, 0)
+                    p = p + 1
+                Memory.free(self.vk_framebuffers)
+            
+            # Destroy render pass
+            if self.vk_render_pass != 0:
+                vkDestroyRenderPass(self.vk_device, self.vk_render_pass, 0)
+            
+            # Destroy image views
+            if self.vk_swapchain_image_views != 0:
+                q: i32 = 0
+                while q < self.vk_swapchain_image_count:
+                    view: i64 = Memory.read_ptr(self.vk_swapchain_image_views + (q * 8))
+                    if view != 0:
+                        vkDestroyImageView(self.vk_device, view, 0)
+                    q = q + 1
+                Memory.free(self.vk_swapchain_image_views)
+            
+            # Destroy swapchain
+            if self.vk_swapchain != 0:
+                vkDestroySwapchainKHR(self.vk_device, self.vk_swapchain, 0)
+            
+            if self.vk_swapchain_images != 0:
+                Memory.free(self.vk_swapchain_images)
+            
+            # Destroy surface
+            if self.vk_surface != 0:
+                vkDestroySurfaceKHR(self.vk_instance, self.vk_surface, 0)
+            
+            # Destroy device
+            if self.vk_device != 0:
+                vkDestroyDevice(self.vk_device, 0)
+            
+            # Destroy instance
+            if self.vk_instance != 0:
+                vkDestroyInstance(self.vk_instance, 0)
+            
+            self.vulkan_initialized = 0
+            print("Vulkan resources cleaned up")
+        
+        if self.renderables != 0:
+            Memory.free(self.renderables)
+            self.renderables = 0
+        
+        if self.window_handle != 0:
+            glfwDestroyWindow(self.window_handle)
+            self.window_handle = 0
+            print("GLFW window destroyed")
+        
+        glfwTerminate()
+        print("GLFW terminated")
+        self.is_open = 0
+    
+    fun free(self):
+        self.cleanup()
+    
+    # Check if a key is pressed
+    # Key codes: W=87, A=65, S=83, D=68, Space=32, Escape=256
+    fun is_key_pressed(self, key: i32) -> i32:
+        if self.window_handle == 0:
+            return 0
+        return glfwGetKey(self.window_handle, key)
+
+
+
+

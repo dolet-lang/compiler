@@ -1,0 +1,244 @@
+# list.dlt
+# Dolet List Extension Methods
+# Extends the built-in list type with methods
+#
+# List struct layout: { i32 size, i32 capacity, ptr data }
+# - size: current number of elements (offset 0)
+# - capacity: allocated capacity (offset 4)
+# - data: pointer to element array (offset 8)
+# Each element in data is a pointer (8 bytes)
+
+extend list:
+    # ==================== Query Methods ====================
+    
+    fun size(self) -> i64:
+        addr: i64 = self as i64
+        size_val: i32 = Memory.read_i32(addr)
+        return size_val as i64
+
+    fun capacity(self) -> i64:
+        addr: i64 = self as i64
+        cap_val: i32 = Memory.read_i32(addr + 4)
+        return cap_val as i64
+
+    fun is_empty(self) -> bool:
+        addr: i64 = self as i64
+        size_val: i32 = Memory.read_i32(addr)
+        return size_val == 0
+
+    # ==================== Modification Methods ====================
+    
+    fun clear(self):
+        addr: i64 = self as i64
+        Memory.write_i32(addr, 0)
+
+    fun pop(self) -> i64:
+        addr: i64 = self as i64
+        size_val: i32 = Memory.read_i32(addr)
+        if size_val == 0:
+            return 0
+        new_size: i32 = size_val - 1
+        Memory.write_i32(addr, new_size)
+        data: i64 = Memory.read_i64(addr + 8)
+        offset: i64 = (new_size as i64) * 8
+        element_addr: i64 = data + offset
+        return Memory.read_i64(element_addr)
+
+    # ==================== Internal Helper ====================
+    
+    fun _grow_if_needed(self) -> i64:
+        addr: i64 = self as i64
+        size_val: i32 = Memory.read_i32(addr)
+        cap_val: i32 = Memory.read_i32(addr + 4)
+        data: i64 = Memory.read_i64(addr + 8)
+        
+        if size_val >= cap_val:
+            new_cap: i32 = cap_val * 2
+            if new_cap < 4:
+                new_cap = 4
+            new_size: i64 = (new_cap as i64) * 8
+            new_data: i64 = Memory.malloc(new_size)
+            old_size: i64 = (size_val as i64) * 8
+            Memory.copy(new_data, data, old_size)
+            Memory.free(data)
+            Memory.write_i64(addr + 8, new_data)
+            Memory.write_i32(addr + 4, new_cap)
+            return new_data
+        return data
+
+    # ==================== Append Overloads ====================
+    
+    # Signed integers
+    fun append(self, value: i8):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        # For i8, store value directly (1 byte per element, not pointer)
+        element_addr: i64 = data + (size_val as i64)
+        Memory.write_i8(element_addr, value)
+        Memory.write_i32(addr, size_val + 1)
+
+    fun append(self, value: i16):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(2)
+        Memory.write_i16(value_ptr, value)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    fun append(self, value: i32):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(4)
+        Memory.write_i32(value_ptr, value)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    fun append(self, value: i64):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(8)
+        Memory.write_i64(value_ptr, value)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    # Unsigned integers
+    fun append(self, value: u8):
+        addr: i64 = self as i64
+        size_val: i32 = Memory.read_i32(addr)
+        cap_val: i32 = Memory.read_i32(addr + 4)
+        data: i64 = Memory.read_i64(addr + 8)
+        
+        # Grow if needed (1 byte per element for u8)
+        if size_val >= cap_val:
+            new_cap: i32 = cap_val * 2
+            if new_cap < 4:
+                new_cap = 4
+            new_size: i64 = new_cap as i64  # 1 byte per element
+            new_data: i64 = Memory.malloc(new_size)
+            old_size: i64 = size_val as i64  # 1 byte per element
+            Memory.copy(new_data, data, old_size)
+            Memory.free(data)
+            Memory.write_i64(addr + 8, new_data)
+            Memory.write_i32(addr + 4, new_cap)
+            data = new_data
+        
+        # Store value directly (1 byte per element)
+        element_addr: i64 = data + (size_val as i64)
+        Memory.write_i8(element_addr, value as i8)
+        Memory.write_i32(addr, size_val + 1)
+
+    fun append(self, value: u16):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(2)
+        Memory.write_i16(value_ptr, value as i16)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    fun append(self, value: u32):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(4)
+        Memory.write_i32(value_ptr, value as i32)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    fun append(self, value: u64):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(8)
+        Memory.write_i64(value_ptr, value as i64)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    # Floating point
+    fun append(self, value: f32):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(4)
+        Memory.write_f32(value_ptr, value)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    fun append(self, value: f64):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        value_ptr: i64 = Memory.malloc(8)
+        Memory.write_f64(value_ptr, value)
+        Memory.write_i64(element_addr, value_ptr)
+        Memory.write_i32(addr, size_val + 1)
+
+    # String
+    fun append(self, value: str):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        offset: i64 = (size_val as i64) * 8
+        element_addr: i64 = data + offset
+        Memory.write_i64(element_addr, value as i64)
+        Memory.write_i32(addr, size_val + 1)
+
+    # Bool - stored directly (1 byte per element)
+    fun append(self, value: bool):
+        addr: i64 = self as i64
+        size_val: i32 = Memory.read_i32(addr)
+        cap_val: i32 = Memory.read_i32(addr + 4)
+        data: i64 = Memory.read_i64(addr + 8)
+        
+        # Grow if needed (1 byte per element for bool)
+        if size_val >= cap_val:
+            new_cap: i32 = cap_val * 2
+            if new_cap < 4:
+                new_cap = 4
+            new_size: i64 = new_cap as i64  # 1 byte per element
+            new_data: i64 = Memory.malloc(new_size)
+            old_size: i64 = size_val as i64  # 1 byte per element
+            Memory.copy(new_data, data, old_size)
+            Memory.free(data)
+            Memory.write_i64(addr + 8, new_data)
+            Memory.write_i32(addr + 4, new_cap)
+            data = new_data
+        
+        # Store value directly (1 byte per element)
+        element_addr: i64 = data + (size_val as i64)
+        if value:
+            Memory.write_i8(element_addr, 1)
+        else:
+            Memory.write_i8(element_addr, 0)
+        Memory.write_i32(addr, size_val + 1)
+
+    # Char
+    fun append(self, value: char):
+        addr: i64 = self as i64
+        data: i64 = self._grow_if_needed()
+        size_val: i32 = Memory.read_i32(addr)
+        # For char, store value directly (1 byte per element, not pointer)
+        element_addr: i64 = data + (size_val as i64)
+        Memory.write_i8(element_addr, value as i8)
+        Memory.write_i32(addr, size_val + 1)
+

@@ -1,0 +1,20 @@
+
+
+
+"""
+
+
+لازم دعم WebSocket:
+
+handshake من HTTP
+
+frames
+
+ping/pong
+
+text/binary
+
+client/server
+
+
+"""

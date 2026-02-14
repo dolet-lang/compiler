@@ -1,0 +1,20 @@
+# ===== Qubic Engine - Library Entry Point =====
+# This is the main entry point for the Qubic game engine.
+# It imports and re-exports all public modules.
+#
+# Requirements: 5.10 - THE main qubic_main.dlt SHALL import and re-export all necessary classes
+#
+# The engine follows a clean initialization pattern:
+# - No automatic mesh or geometry creation (Requirements 6.1, 6.2)
+# - User must explicitly create and add objects to scene (Requirement 6.3)
+# - Window only initializes Vulkan infrastructure, not scene content (Requirement 6.4)
+
+# Import the modular qubic engine structure
+# This provides all public classes organized in separate files:
+# - math/: Vector3, Transform3D, Color
+# - nodes/: Node, Node3D, Camera3D, MeshInstance3D
+# - resources/: Mesh, CubeMesh3D, PlaneMesh3D, SphereMesh3D
+# - core/: VulkanContext, SwapchainManager, RenderResources, Window
+import qubic_main
+
+# All symbols from qubic_main are now available to library users

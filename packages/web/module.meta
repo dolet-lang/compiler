@@ -1,0 +1,16 @@
+# Web Module Metadata
+# HTTP server and WebSocket support for Dolet
+
+[info]
+name = web
+version = 1.0.0
+description = HTTP server and WebSocket support for building web applications
+
+[libs]
+# No external libraries needed - uses Windows networking APIs
+
+[dlls]
+# No runtime DLLs to copy
+
+[dependencies]
+# No external dependencies

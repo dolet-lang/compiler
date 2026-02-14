@@ -1,0 +1,64 @@
+# Color - RGBA Color Type
+# Part of Qubic Game Engine
+
+struct Color:
+    r: f32 = 1.0
+    g: f32 = 1.0
+    b: f32 = 1.0
+    a: f32 = 1.0
+
+imple Color:
+    # Static color constructors
+    fun WHITE() -> Color:
+        return Color(r=1.0, g=1.0, b=1.0, a=1.0)
+    
+    fun BLACK() -> Color:
+        return Color(r=0.0, g=0.0, b=0.0, a=1.0)
+    
+    fun RED() -> Color:
+        return Color(r=1.0, g=0.0, b=0.0, a=1.0)
+    
+    fun GREEN() -> Color:
+        return Color(r=0.0, g=1.0, b=0.0, a=1.0)
+    
+    fun BLUE() -> Color:
+        return Color(r=0.0, g=0.0, b=1.0, a=1.0)
+    
+    fun YELLOW() -> Color:
+        return Color(r=1.0, g=1.0, b=0.0, a=1.0)
+    
+    fun CYAN() -> Color:
+        return Color(r=0.0, g=1.0, b=1.0, a=1.0)
+    
+    fun MAGENTA() -> Color:
+        return Color(r=1.0, g=0.0, b=1.0, a=1.0)
+    
+    fun TRANSPARENT() -> Color:
+        return Color(r=0.0, g=0.0, b=0.0, a=0.0)
+    
+    # Create color from RGB values (0-255 range)
+    fun from_rgb(r: i32, g: i32, b: i32) -> Color:
+        rf: f32 = r / 255
+        gf: f32 = g / 255
+        bf: f32 = b / 255
+        return Color(r=rf, g=gf, b=bf, a=1.0)
+    
+    # Create color from RGBA values (0-255 range)
+    fun from_rgba(r: i32, g: i32, b: i32, a: i32) -> Color:
+        rf: f32 = r / 255
+        gf: f32 = g / 255
+        bf: f32 = b / 255
+        af: f32 = a / 255
+        return Color(r=rf, g=gf, b=bf, a=af)
+    
+    # Instance methods
+    fun with_alpha(self, alpha: f32) -> Color:
+        return Color(r=self.r, g=self.g, b=self.b, a=alpha)
+    
+    fun lerp(self, other: Color, t: f32) -> Color:
+        # Linear interpolation between two colors
+        nr: f32 = self.r + (other.r - self.r) * t
+        ng: f32 = self.g + (other.g - self.g) * t
+        nb: f32 = self.b + (other.b - self.b) * t
+        na: f32 = self.a + (other.a - self.a) * t
+        return Color(r=nr, g=ng, b=nb, a=na)

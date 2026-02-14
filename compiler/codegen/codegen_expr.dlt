@@ -1,0 +1,722 @@
+##############################
+# MLIR Codegen Expressions
+# Generates MLIR for all expression AST nodes
+# Depends on: codegen_core.dlt, codegen_types.dlt
+##############################
+
+# ==========================================
+# Main Expression Dispatch
+# ==========================================
+fun gen_expr(node: i64, expected: str) -> str:
+    if node == 0:
+        return emit_zero_ptr()
+
+    nt: i32 = nd_type(node)
+
+    # Integer literal
+    if nt == NODE_INT_LIT:
+        return gen_int_lit(node, expected)
+
+    # Float literal
+    if nt == NODE_FLOAT_LIT:
+        return gen_float_lit(node, expected)
+
+    # String literal
+    if nt == NODE_STR_LIT:
+        return gen_str_lit(node)
+
+    # Bool literal
+    if nt == NODE_BOOL_LIT:
+        return gen_bool_lit(node)
+
+    # Char literal
+    if nt == NODE_CHAR_LIT:
+        return gen_char_lit(node, expected)
+
+    # Null literal
+    if nt == NODE_NULL_LIT:
+        return emit_zero_ptr()
+
+    # Variable reference
+    if nt == NODE_VAR_REF:
+        vn: str = Memory.read_i64(node + 8) as str
+        return gen_var_load(vn, expected)
+
+    # Binary operation
+    if nt == NODE_BINARY_OP:
+        return gen_binary_op(node, expected)
+
+    # Comparison
+    if nt == NODE_COMPARISON:
+        return gen_comparison(node)
+
+    # Logical operation
+    if nt == NODE_LOGICAL_OP:
+        return gen_logical_op(node)
+
+    # Unary operation
+    if nt == NODE_UNARY_OP:
+        return gen_unary_op(node, expected)
+
+    # Cast
+    if nt == NODE_CAST:
+        return gen_cast_expr(node, expected)
+
+    # Parentheses
+    if nt == NODE_PAREN:
+        inner: i64 = Memory.read_i64(node + 8)
+        return gen_expr(inner, expected)
+
+    # Ternary
+    if nt == NODE_TERNARY:
+        return gen_ternary(node, expected)
+
+    # Function call
+    if nt == NODE_FUN_CALL:
+        return gen_fun_call(node)
+
+    # Static method call
+    if nt == NODE_STATIC_METHOD:
+        return gen_static_method_call(node)
+
+    # Instance method call
+    if nt == NODE_INST_METHOD:
+        return gen_instance_method_call(node)
+
+    # Field access
+    if nt == NODE_FIELD_ACCESS:
+        return gen_field_access(node)
+
+    # Self field access
+    if nt == NODE_SELF_FIELD:
+        return gen_self_field_access(node)
+
+    # Self reference
+    if nt == NODE_SELF:
+        return "%self"
+
+    # Static field access
+    if nt == NODE_STATIC_FIELD:
+        return gen_static_field_access(node)
+
+    # Enum access
+    if nt == NODE_ENUM_ACCESS:
+        return gen_enum_access(node)
+
+    # Array access
+    if nt == NODE_ARRAY_ACCESS:
+        return gen_array_access(node, expected)
+
+    # F-string
+    if nt == NODE_FSTRING:
+        return gen_fstring(node)
+
+    # String concat
+    if nt == NODE_STR_CONCAT:
+        return gen_string_concat(node)
+
+    # Is null
+    if nt == NODE_IS_NULL:
+        return gen_is_null(node)
+
+    # Is not null
+    if nt == NODE_IS_NOT_NULL:
+        return gen_is_not_null(node)
+
+    # Array/List literal
+    if nt == NODE_ARRAY_LIT or nt == NODE_LIST_LIT:
+        return gen_list_literal(node)
+
+    # Map literal
+    if nt == NODE_MAP_LIT:
+        return gen_map_literal(node)
+
+    # Struct instantiation
+    if nt == NODE_STRUCT_INST:
+        return gen_struct_instantiation(node)
+
+    # Super method call
+    if nt == NODE_SUPER_METHOD:
+        return gen_super_method_call(node)
+
+    # Match expression (used as expr)
+    if nt == NODE_MATCH:
+        return gen_match_expr(node, expected)
+
+    # Builtin call
+    if nt == NODE_BUILTIN_CALL:
+        return gen_builtin_call(node)
+
+    # Await
+    if nt == NODE_AWAIT:
+        return gen_expr(Memory.read_i64(node + 8), expected)
+
+    # Default: zero
+    return emit_zero_ptr()
+
+# ==========================================
+# Literal Generators
+# ==========================================
+fun gen_int_lit(node: i64, expected: str) -> str:
+    val: i64 = Memory.read_i64(node + 8)
+    mt: str = mlir_type(expected)
+    # If expected is float, emit as float constant
+    if str_eq(mt, "f32") == 1 or str_eq(mt, "f64") == 1:
+        tmp: str = new_tmp()
+        vs: str = Str.concat(Convert.i64_to_str(val), ".0")
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.constant("), vs), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+        return tmp
+    # Always emit as i32 — implicit_cast handles widening to i64 etc.
+    tmp2: str = new_tmp()
+    vs2: str = Convert.i64_to_str(val)
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp2, " = llvm.mlir.constant("), vs2), " : i32"), ") : i32"))
+    return tmp2
+
+fun gen_float_lit(node: i64, expected: str) -> str:
+    # Float value stored as string at f0
+    fstr: str = Memory.read_i64(node + 8) as str
+    mt: str = mlir_type(expected)
+    if str_eq(mt, "f32") == 0 and str_eq(mt, "f64") == 0:
+        mt = "f64"
+    tmp: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.constant("), fstr), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+    return tmp
+
+fun gen_str_lit(node: i64) -> str:
+    text: str = Memory.read_i64(node + 8) as str
+    label: str = gen_string_const(text)
+    slen: i32 = get_str_len(label)
+    addr: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(addr, " = llvm.mlir.addressof "), label), " : !llvm.ptr"))
+    return addr
+
+fun gen_bool_lit(node: i64) -> str:
+    v: i64 = Memory.read_i64(node + 8)
+    if v != 0:
+        return emit_const_i1(1)
+    return emit_const_i1(0)
+
+fun gen_char_lit(node: i64, expected: str) -> str:
+    ch: str = Memory.read_i64(node + 8) as str
+    # Get first character ASCII value
+    c: i8 = Memory.read_i8(ch as i64)
+    if str_eq(expected, "string") == 1 or str_eq(expected, "str") == 1:
+        label: str = gen_string_const(ch)
+        addr: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(addr, " = llvm.mlir.addressof "), label), " : !llvm.ptr"))
+        return addr
+    # Emit as i8 constant
+    tmp: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.constant("), Convert.i64_to_str(c as i64)), " : i8) : i8"))
+    return tmp
+
+# ==========================================
+# Variable Load
+# ==========================================
+fun gen_var_load(name: str, expected: str) -> str:
+    mn: str = get_mlir_name(name)
+    if str_eq(mn, "") == 1:
+        panic(Str.concat("Variable not declared: ", name))
+
+    vt: str = get_var_type(name)
+    mt: str = mlir_type(vt)
+
+    # Function parameters are direct SSA values
+    if is_param_var(name) == 1:
+        return Str.concat("%", mn)
+
+    # Global variables: load from global address
+    if is_global_var(name) == 1:
+        ga: str = emit_addr_of(mn)
+        tmp: str = emit_load(ga, mt)
+        return tmp
+
+    # Local variables: load from alloca
+    tmp2: str = emit_load(Str.concat("%", mn), mt)
+    return tmp2
+
+# ==========================================
+# Binary Operation
+# ==========================================
+fun gen_binary_op(node: i64, expected: str) -> str:
+    op_str: str = Memory.read_i64(node + 8) as str
+    left_node: i64 = Memory.read_i64(node + 16)
+    right_node: i64 = Memory.read_i64(node + 24)
+
+    # Infer result type
+    lt: str = infer_expr_type(left_node)
+    rt: str = infer_expr_type(right_node)
+
+    result_type: str = "i32"
+    if str_eq(lt, "i64") == 1 or str_eq(rt, "i64") == 1:
+        result_type = "i64"
+    elif is_float_type(lt) == 1 or is_float_type(rt) == 1:
+        if str_eq(lt, "f64") == 1 or str_eq(rt, "f64") == 1:
+            result_type = "f64"
+        else:
+            result_type = "f32"
+    elif is_int_type(lt) == 1 and is_int_type(rt) == 1:
+        result_type = wider_int_type(lt, rt)
+    elif str_eq(lt, "unknown") == 0:
+        result_type = lt
+    elif str_eq(rt, "unknown") == 0:
+        result_type = rt
+
+    # Generate operands
+    lv: str = gen_expr(left_node, result_type)
+    rv: str = gen_expr(right_node, result_type)
+
+    # Cast if needed
+    if str_eq(lt, "unknown") == 0 and str_eq(lt, result_type) == 0:
+        lv = implicit_cast(lv, lt, result_type)
+    if str_eq(rt, "unknown") == 0 and str_eq(rt, result_type) == 0:
+        rv = implicit_cast(rv, rt, result_type)
+
+    mt: str = mlir_type(result_type)
+    is_f: i32 = is_float_type(result_type)
+
+    # Determine MLIR op
+    mlir_op: str = ""
+    if str_eq(op_str, "+") == 1:
+        if is_f == 1:
+            mlir_op = "llvm.fadd"
+        else:
+            mlir_op = "llvm.add"
+    elif str_eq(op_str, "-") == 1:
+        if is_f == 1:
+            mlir_op = "llvm.fsub"
+        else:
+            mlir_op = "llvm.sub"
+    elif str_eq(op_str, "*") == 1:
+        if is_f == 1:
+            mlir_op = "llvm.fmul"
+        else:
+            mlir_op = "llvm.mul"
+    elif str_eq(op_str, "/") == 1:
+        if is_f == 1:
+            mlir_op = "llvm.fdiv"
+        else:
+            mlir_op = "llvm.sdiv"
+    elif str_eq(op_str, "%") == 1:
+        if is_f == 1:
+            mlir_op = "llvm.frem"
+        else:
+            mlir_op = "llvm.srem"
+    elif str_eq(op_str, "&") == 1:
+        mlir_op = "llvm.and"
+    elif str_eq(op_str, "|") == 1:
+        mlir_op = "llvm.or"
+    elif str_eq(op_str, "^") == 1:
+        mlir_op = "llvm.xor"
+    elif str_eq(op_str, "<<") == 1:
+        mlir_op = "llvm.shl"
+    elif str_eq(op_str, ">>") == 1:
+        mlir_op = "llvm.ashr"
+    else:
+        mlir_op = "llvm.add"
+
+    result: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result, " = "), mlir_op), Str.concat(" ", lv)), Str.concat(", ", rv)), Str.concat(" : ", mt)))
+    return result
+
+# ==========================================
+# Comparison
+# ==========================================
+fun gen_comparison(node: i64) -> str:
+    op_str: str = Memory.read_i64(node + 8) as str
+    left_node: i64 = Memory.read_i64(node + 16)
+    right_node: i64 = Memory.read_i64(node + 24)
+
+    lt: str = infer_expr_type(left_node)
+    rt: str = infer_expr_type(right_node)
+
+    # String comparison: use strcmp
+    if is_string_type(lt) == 1 or is_string_type(rt) == 1:
+        lv: str = gen_expr(left_node, "string")
+        rv: str = gen_expr(right_node, "string")
+        cmp_res: str = emit_call("strcmp", Str.concat(Str.concat(lv, ", "), rv), "!llvm.ptr, !llvm.ptr", "i32")
+        c0: str = emit_const_i32(0)
+        result: str = new_tmp()
+        pred: str = "eq"
+        if str_eq(op_str, "!=") == 1:
+            pred = "ne"
+        elif str_eq(op_str, "<") == 1:
+            pred = "slt"
+        elif str_eq(op_str, ">") == 1:
+            pred = "sgt"
+        elif str_eq(op_str, "<=") == 1:
+            pred = "sle"
+        elif str_eq(op_str, ">=") == 1:
+            pred = "sge"
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.icmp \""), pred), Str.concat("\" ", cmp_res)), Str.concat(", ", c0)), " : i32"))
+        return result
+
+    # Determine operand type for comparison
+    cmp_type: str = "i32"
+    if str_eq(lt, "i64") == 1 or str_eq(rt, "i64") == 1:
+        cmp_type = "i64"
+    elif is_float_type(lt) == 1 or is_float_type(rt) == 1:
+        if str_eq(lt, "f64") == 1 or str_eq(rt, "f64") == 1:
+            cmp_type = "f64"
+        else:
+            cmp_type = "f32"
+    elif is_int_type(lt) == 1 and is_int_type(rt) == 1:
+        cmp_type = wider_int_type(lt, rt)
+
+    lv2: str = gen_expr(left_node, cmp_type)
+    rv2: str = gen_expr(right_node, cmp_type)
+
+    # Cast if needed
+    if str_eq(lt, "unknown") == 0 and str_eq(lt, cmp_type) == 0:
+        lv2 = implicit_cast(lv2, lt, cmp_type)
+    if str_eq(rt, "unknown") == 0 and str_eq(rt, cmp_type) == 0:
+        rv2 = implicit_cast(rv2, rt, cmp_type)
+
+    mt: str = mlir_type(cmp_type)
+    is_f: i32 = is_float_type(cmp_type)
+
+    # Determine predicate
+    pred2: str = ""
+    if is_f == 1:
+        if str_eq(op_str, "==") == 1:
+            pred2 = "oeq"
+        elif str_eq(op_str, "!=") == 1:
+            pred2 = "one"
+        elif str_eq(op_str, "<") == 1:
+            pred2 = "olt"
+        elif str_eq(op_str, ">") == 1:
+            pred2 = "ogt"
+        elif str_eq(op_str, "<=") == 1:
+            pred2 = "ole"
+        elif str_eq(op_str, ">=") == 1:
+            pred2 = "oge"
+        else:
+            pred2 = "oeq"
+    else:
+        if str_eq(op_str, "==") == 1:
+            pred2 = "eq"
+        elif str_eq(op_str, "!=") == 1:
+            pred2 = "ne"
+        elif str_eq(op_str, "<") == 1:
+            pred2 = "slt"
+        elif str_eq(op_str, ">") == 1:
+            pred2 = "sgt"
+        elif str_eq(op_str, "<=") == 1:
+            pred2 = "sle"
+        elif str_eq(op_str, ">=") == 1:
+            pred2 = "sge"
+        else:
+            pred2 = "eq"
+
+    result2: str = new_tmp()
+    cmp_inst: str = "llvm.icmp"
+    if is_f == 1:
+        cmp_inst = "llvm.fcmp"
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result2, " = "), cmp_inst), Str.concat(Str.concat(" \"", pred2), "\"")), Str.concat(Str.concat(" ", lv2), Str.concat(", ", rv2))), Str.concat(" : ", mt)))
+    return result2
+
+# ==========================================
+# Logical Operation (and/or/not)
+# ==========================================
+fun gen_logical_op(node: i64) -> str:
+    op_str: str = Memory.read_i64(node + 8) as str
+    left_node: i64 = Memory.read_i64(node + 16)
+    right_node: i64 = Memory.read_i64(node + 24)
+
+    if str_eq(op_str, "not") == 1:
+        # Unary not
+        val: str = gen_expr(left_node, "bool")
+        lt: str = infer_expr_type(left_node)
+        if str_eq(lt, "bool") == 0 and str_eq(lt, "i1") == 0:
+            # Convert to bool first
+            c0: str = emit_const_i32(0)
+            val = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(val, " = llvm.icmp \"ne\" "), val), ", " ))
+        one: str = emit_const_i1(1)
+        result: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.xor "), val), Str.concat(", ", one)), " : i1"))
+        return result
+
+    lv: str = gen_expr(left_node, "bool")
+    rv: str = gen_expr(right_node, "bool")
+
+    result2: str = new_tmp()
+    if str_eq(op_str, "and") == 1:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result2, " = llvm.and "), lv), Str.concat(", ", rv)), " : i1"))
+    else:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result2, " = llvm.or "), lv), Str.concat(", ", rv)), " : i1"))
+    return result2
+
+# ==========================================
+# Unary Operation
+# ==========================================
+fun gen_unary_op(node: i64, expected: str) -> str:
+    op_str: str = Memory.read_i64(node + 8) as str
+    operand: i64 = Memory.read_i64(node + 16)
+    val: str = gen_expr(operand, expected)
+    ot: str = infer_expr_type(operand)
+    mt: str = mlir_type(ot)
+
+    if str_eq(op_str, "-") == 1:
+        result: str = new_tmp()
+        if is_float_type(ot) == 1:
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.fneg "), val), " : "), mt))
+        else:
+            zero: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(zero, " = llvm.mlir.constant(0 : "), mt), Str.concat(") : ", mt)))
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.sub "), zero), Str.concat(", ", val)), " : "), mt))
+        return result
+
+    if str_eq(op_str, "~") == 1:
+        neg1: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(neg1, " = llvm.mlir.constant(-1 : "), mt), Str.concat(") : ", mt)))
+        result2: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result2, " = llvm.xor "), val), Str.concat(", ", neg1)), " : "), mt))
+        return result2
+
+    if str_eq(op_str, "not") == 1:
+        one: str = emit_const_i1(1)
+        result3: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result3, " = llvm.xor "), val), Str.concat(", ", one)), " : i1"))
+        return result3
+
+    return val
+
+# ==========================================
+# Cast Expression
+# ==========================================
+fun gen_cast_expr(node: i64, expected: str) -> str:
+    expr_node: i64 = Memory.read_i64(node + 8)
+    target_type: str = Memory.read_i64(node + 16) as str
+    from_type: str = infer_expr_type(expr_node)
+    val: str = gen_expr(expr_node, from_type)
+    return implicit_cast(val, from_type, target_type)
+
+# ==========================================
+# Ternary Expression (cond ? then : else)
+# ==========================================
+fun gen_ternary(node: i64, expected: str) -> str:
+    cond_node: i64 = Memory.read_i64(node + 8)
+    then_node: i64 = Memory.read_i64(node + 16)
+    else_node: i64 = Memory.read_i64(node + 24)
+
+    cond_val: str = gen_expr(cond_node, "bool")
+    then_val: str = gen_expr(then_node, expected)
+    else_val: str = gen_expr(else_node, expected)
+
+    mt: str = mlir_type(expected)
+    result: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.select "), cond_val), Str.concat(", ", then_val)), Str.concat(", ", else_val)), " : i1, "), mt))
+    return result
+
+# ==========================================
+# Enum Access (Direction.UP -> i32 constant)
+# ==========================================
+fun gen_enum_access(node: i64) -> str:
+    ename: str = Memory.read_i64(node + 8) as str
+    vname: str = Memory.read_i64(node + 16) as str
+    idx: i32 = get_enum_value_index(ename, vname)
+    if idx < 0:
+        panic(Str.concat(Str.concat(Str.concat("Unknown enum value: ", ename), "."), vname))
+    return emit_const_i32(idx)
+
+# ==========================================
+# Is Null / Is Not Null
+# ==========================================
+fun gen_is_null(node: i64) -> str:
+    expr_node: i64 = Memory.read_i64(node + 8)
+    val: str = gen_expr(expr_node, "ptr")
+    null_val: str = emit_zero_ptr()
+    result: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.icmp \"eq\" "), val), Str.concat(", ", null_val)), " : !llvm.ptr"))
+    return result
+
+fun gen_is_not_null(node: i64) -> str:
+    expr_node: i64 = Memory.read_i64(node + 8)
+    val: str = gen_expr(expr_node, "ptr")
+    null_val: str = emit_zero_ptr()
+    result: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.icmp \"ne\" "), val), Str.concat(", ", null_val)), " : !llvm.ptr"))
+    return result
+
+# ==========================================
+# String Concat
+# ==========================================
+fun gen_string_concat(node: i64) -> str:
+    left_node: i64 = Memory.read_i64(node + 8)
+    right_node: i64 = Memory.read_i64(node + 16)
+    lv: str = gen_expr(left_node, "string")
+    rv: str = gen_expr(right_node, "string")
+    return emit_call("dsl_str_concat", Str.concat(Str.concat(lv, ", "), rv), "!llvm.ptr, !llvm.ptr", "!llvm.ptr")
+
+# ==========================================
+# F-String — simplified: just generate parts concatenation
+# ==========================================
+fun gen_fstring(node: i64) -> str:
+    parts: i64 = Memory.read_i64(node + 8)
+    if parts == 0:
+        return gen_str_lit(node)
+    pc: i32 = nl_count(parts)
+    if pc == 0:
+        label: str = gen_string_const("")
+        return emit_addr_of(Str.concat("", label))
+    # For now, generate first part as string
+    result: str = gen_expr(nl_get(parts, 0), "string")
+    i: i32 = 1
+    while i < pc:
+        part: str = gen_expr(nl_get(parts, i), "string")
+        result = emit_call("dsl_str_concat", Str.concat(Str.concat(result, ", "), part), "!llvm.ptr, !llvm.ptr", "!llvm.ptr")
+        i = i + 1
+    return result
+
+# ==========================================
+# Array/List Literal
+# ==========================================
+fun gen_list_literal(node: i64) -> str:
+    # Get elements node_list
+    elems: i64 = Memory.read_i64(node + 8)
+    ec: i32 = 0
+    if elems != 0:
+        ec = nl_count(elems)
+
+    # Determine element type
+    elem_type: str = "i32"
+    if ec > 0:
+        elem_type = infer_expr_type(nl_get(elems, 0))
+
+    # Allocate: header(16 bytes: size + capacity) + data
+    elem_size: i32 = get_type_size(elem_type)
+    total: i64 = 16 + ((ec as i64) * (elem_size as i64))
+    total_s: str = Convert.i64_to_str(total)
+
+    sz: str = emit_const_i64(total)
+    mem_p: str = emit_call("malloc", sz, "i64", "!llvm.ptr")
+
+    # Store size
+    size_val: str = emit_const_i32(ec)
+    emit_store(size_val, mem_p, "i32")
+
+    # Store capacity
+    cap_tmp: str = new_tmp()
+    c4: str = emit_const_i64(4)
+    emit_ind(Str.concat(Str.concat(Str.concat(cap_tmp, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(c4, " : !llvm.ptr, i64"))))
+    emit_store(size_val, cap_tmp, "i32")
+
+    # Store elements
+    mt: str = mlir_type(elem_type)
+    i: i32 = 0
+    while i < ec:
+        eval: str = gen_expr(nl_get(elems, i), elem_type)
+        offset: i64 = 16 + ((i as i64) * (elem_size as i64))
+        off_s: str = emit_const_i64(offset)
+        ep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(off_s, " : !llvm.ptr, i64"))))
+        emit_store(eval, ep, mt)
+        i = i + 1
+
+    return mem_p
+
+# ==========================================
+# Map Literal
+# ==========================================
+fun gen_map_literal(node: i64) -> str:
+    entries: i64 = Memory.read_i64(node + 8)
+    ec: i32 = 0
+    if entries != 0:
+        ec = nl_count(entries)
+
+    # Allocate hash map (simplified: linear array of key-value pairs)
+    # Header: 16 bytes (size + capacity), then entries of (key_ptr + value_ptr) = 16 bytes each
+    total: i64 = 16 + ((ec as i64) * 16)
+    sz: str = emit_const_i64(total)
+    mem_p: str = emit_call("malloc", sz, "i64", "!llvm.ptr")
+
+    # Store size
+    size_val: str = emit_const_i32(ec)
+    emit_store(size_val, mem_p, "i32")
+
+    # Store entries
+    i: i32 = 0
+    while i < ec:
+        entry: i64 = nl_get(entries, i)
+        key_node: i64 = Memory.read_i64(entry + 8)
+        val_node: i64 = Memory.read_i64(entry + 16)
+
+        kv: str = gen_expr(key_node, "string")
+        vv: str = gen_expr(val_node, "i64")
+
+        offset: i64 = 16 + ((i as i64) * 16)
+        ko: str = emit_const_i64(offset)
+        kp: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(kp, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(ko, " : !llvm.ptr, i64"))))
+        emit_store(kv, kp, "!llvm.ptr")
+
+        vo: str = emit_const_i64(offset + 8)
+        vp: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(vp, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(vo, " : !llvm.ptr, i64"))))
+        emit_store(vv, vp, "i64")
+
+        i = i + 1
+
+    return mem_p
+
+# ==========================================
+# Struct Instantiation
+# ==========================================
+fun gen_struct_instantiation(node: i64) -> str:
+    sname: str = Memory.read_i64(node + 8) as str
+    field_vals: i64 = Memory.read_i64(node + 16)
+
+    ssize: i32 = calculate_struct_size(sname)
+    sz: str = emit_const_i64(ssize as i64)
+    mem_p: str = emit_call("malloc", sz, "i64", "!llvm.ptr")
+
+    # Initialize fields from field_val nodes
+    if field_vals != 0:
+        fvc: i32 = nl_count(field_vals)
+        i: i32 = 0
+        while i < fvc:
+            fv_node: i64 = nl_get(field_vals, i)
+            fname: str = Memory.read_i64(fv_node + 8) as str
+            fval_node: i64 = Memory.read_i64(fv_node + 16)
+            fidx: i32 = get_field_index(sname, fname)
+            if fidx >= 0:
+                ftype: str = get_field_type(sname, fname)
+                fval: str = gen_expr(fval_node, ftype)
+                mt: str = mlir_type(ftype)
+                # GEP to field offset
+                fi_val: str = emit_const_i32(fidx)
+                struct_mlir: str = get_struct_mlir_type(sname)
+                fp: str = new_tmp()
+                emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(fp, " = llvm.getelementptr "), struct_mlir), Str.concat(Str.concat(", ", mem_p), Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx as i64), "]")))), Str.concat(" : (!llvm.ptr) -> !llvm.ptr", "")))
+                emit_store(fval, fp, mt)
+            i = i + 1
+
+    return mem_p
+
+# ==========================================
+# Builtin Call (LLVM intrinsics: sqrt, sin, cos, etc.)
+# ==========================================
+fun gen_builtin_call(node: i64) -> str:
+    fname: str = Memory.read_i64(node + 8) as str
+    args: i64 = Memory.read_i64(node + 16)
+
+    # Map to LLVM intrinsic
+    intrinsic: str = Str.concat("llvm.intr.", fname)
+    ac: i32 = 0
+    if args != 0:
+        ac = nl_count(args)
+
+    if ac == 1:
+        a1: str = gen_expr(nl_get(args, 0), "f64")
+        result: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.call @"), intrinsic), Str.concat("(", Str.concat(a1, ")"))), " : (f64) -> f64"))
+        return result
+    elif ac == 2:
+        a1: str = gen_expr(nl_get(args, 0), "f64")
+        a2: str = gen_expr(nl_get(args, 1), "f64")
+        result: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.call @"), intrinsic), Str.concat("(", Str.concat(Str.concat(a1, ", "), Str.concat(a2, ")")))), " : (f64, f64) -> f64"))
+        return result
+
+    return emit_zero_ptr()

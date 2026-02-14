@@ -1,0 +1,65 @@
+# ============================================================================
+# WebSocket - Internal socket wrapper for Dolet Web Framework
+# Uses NativeCall directly - does NOT import from net module
+# Requirements: 7.1, 7.2
+# ============================================================================
+
+struct WebSocket:
+    # ========== Server Operations ==========
+    
+    # Bind to host and port, create listening socket
+    # Returns: server socket handle (i64), or -1 on failure
+    # Requirements: 7.1, 7.2
+    static fun bind(host: str, port: i32) -> i64:
+        # Initialize Winsock/network subsystem
+        init_result: i32 = NativeCall.net_init()
+        if init_result != 0:
+            return -1
+        
+        # Create TCP socket
+        sock: i64 = NativeCall.net_socket_create()
+        if sock == -1:
+            return -1
+        
+        # Bind to address
+        bind_result: i32 = NativeCall.net_socket_bind(sock, host, port)
+        if bind_result != 0:
+            NativeCall.net_socket_close(sock)
+            return -1
+        
+        # Start listening with backlog of 10
+        listen_result: i32 = NativeCall.net_socket_listen(sock, 10)
+        if listen_result != 0:
+            NativeCall.net_socket_close(sock)
+            return -1
+        
+        return sock
+    
+    # ========== Connection Operations ==========
+    
+    # Accept incoming connection
+    # Returns: client socket handle (i64), or -1 on failure
+    # Requirements: 7.2
+    static fun accept(server: i64) -> i64:
+        return NativeCall.net_socket_accept(server)
+    
+    # ========== Data Operations ==========
+    
+    # Read data from socket into buffer
+    # Returns: number of bytes read (i32), or -1 on failure
+    # Requirements: 7.2
+    static fun read(sock: i64, buffer: i64, size: i32) -> i32:
+        return NativeCall.net_socket_recv(sock, buffer, size)
+    
+    # Write data to socket
+    # Returns: number of bytes sent (i32), or -1 on failure
+    # Requirements: 7.2
+    static fun write(sock: i64, data: str) -> i32:
+        return NativeCall.net_socket_send(sock, data)
+    
+    # ========== Cleanup Operations ==========
+    
+    # Close socket connection
+    # Requirements: 7.2
+    static fun close(sock: i64):
+        NativeCall.net_socket_close(sock)

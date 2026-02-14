@@ -1,0 +1,21 @@
+# MySQL Library Metadata
+# ======================
+# Platform-specific library paths for linking
+
+[info]
+name = mysql
+version = 1.0.0
+description = MySQL database client bindings for Dolet
+
+[libs]
+# Import libraries for linking
+# Use full path for system-installed MySQL
+windows = C:\Program Files\MySQL\MySQL Server 8.0\lib\libmysql.lib
+linux = libmysqlclient.so
+macos = libmysqlclient.dylib
+
+[dlls]
+# Runtime libraries to copy
+windows = C:\Program Files\MySQL\MySQL Server 8.0\lib\libmysql.dll
+linux = libmysqlclient.so.21
+macos = libmysqlclient.21.dylib

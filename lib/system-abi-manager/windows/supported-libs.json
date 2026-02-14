@@ -1,0 +1,27 @@
+{
+  "platform": "windows",
+  "architecture": "x64",
+  "available_libraries": [
+    {
+      "name": "raylib",
+      "available": true,
+      "path": "external-modules/raylib"
+    },
+    {
+      "name": "glfw",
+      "available": true,
+      "path": "external-modules/glfw"
+    },
+    {
+      "name": "vulkan",
+      "available": true,
+      "path": "external-modules/vulkan"
+    },
+    {
+      "name": "metal",
+      "available": false,
+      "alternative": "directx",
+      "alternative_reason": "Metal is macOS only. Use DirectX on Windows."
+    }
+  ]
+}

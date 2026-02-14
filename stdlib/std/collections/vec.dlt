@@ -1,0 +1,55 @@
+# vec.dlt
+# Dolet Dynamic Vector (Vec<T>) Implementation
+# Tier 1 - Auto-loaded collection type
+#
+# ============================================================================
+# CURRENT IMPLEMENTATION NOTE (IMPORTANT!)
+# ============================================================================
+# The compiler currently handles list/array declarations natively:
+#   list numbers: i32 = [1, 2, 3]
+#   array names: str = ["Alice", "Bob"]
+#
+# These are compiled directly to efficient native structures by:
+#   - Parser: compiler/frontend/parser/parser.py
+#   - Generator: compiler/backend/llvm/mlir_generator.py (_generate_list_decl)
+#   - Type Checker: compiler/frontend/sema/type_checker.py
+#
+# This file is DOCUMENTATION ONLY for future Vec<T> implementation.
+# For now, continue using the native list/array syntax which works perfectly!
+# ============================================================================
+#
+# Future Vec<T> API (when library-based collections are implemented):
+#
+# Constructor:
+#   vec: Vec<i32> = Vec<i32>.new()
+#
+# Methods:
+#   - len(self) -> i32          # Get current size
+#   - is_empty(self) -> bool    # Check if empty
+#   - get_capacity(self) -> i32 # Get capacity
+#   - reserve(self, cap: i32)   # Reserve capacity
+#   - push(self, value: T)      # Add element
+#   - pop(self) -> T            # Remove last element
+#   - get(self, index: i32) -> T # Get element at index
+#   - set(self, index: i32, value: T) # Set element at index
+#   - clear(self)               # Clear all elements
+#   - drop(self)                # Free memory (cleanup)
+#
+# Memory layout:
+#   struct Vec<T>:
+#       data: i64      # Pointer to heap-allocated array
+#       size: i32      # Current number of elements
+#       capacity: i32  # Allocated capacity
+#
+# Growth strategy:
+#   - Initial capacity: 8 elements
+#   - Growth factor: 2x (doubles when full)
+#   - Uses NativeCall.malloc/realloc/free from runtime.dlt
+#
+# Performance:
+#   - Access: O(1)
+#   - Push: O(1) amortized
+#   - Pop: O(1)
+#   - Insert: O(n)
+#
+# See collections/README.md for full documentation.

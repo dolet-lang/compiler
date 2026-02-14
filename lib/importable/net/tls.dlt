@@ -1,0 +1,20 @@
+
+"""
+بدك اتصال مشفر عبر TLS زي Rust وGo:
+
+إنشاء TLS stream
+
+دعم شهادات (certificates)
+
+handshake
+
+client/server mode
+
+بدونها مستحيل تبني:
+
+https client
+
+secure websocket
+
+login systems على الشبكة
+"""

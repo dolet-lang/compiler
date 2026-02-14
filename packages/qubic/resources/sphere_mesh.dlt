@@ -1,0 +1,152 @@
+# SphereMesh3D - Sphere Mesh Resource Type
+# Part of Qubic Game Engine
+# Requirements: 7.3
+
+# SphereMesh3D generates a UV sphere mesh
+# THE engine SHALL provide a create_sphere_mesh(segments) function that returns sphere vertex data (Requirement 7.3)
+
+# Vertex format: 6 floats per vertex (pos_x, pos_y, pos_z, color_r, color_g, color_b)
+# A UV sphere has segments (longitude) × rings (latitude) quads
+# Each quad = 2 triangles = 6 vertices
+
+struct SphereMesh3D:
+    # Inherited from Mesh
+    vertices: i64 = 0           # Pointer to vertex data
+    vertex_count: i32 = 0       # Number of vertices
+    is_generated: i32 = 0       # 1 if mesh data exists
+    
+    # Sphere specific
+    radius: f32 = 0.5
+    segments: i32 = 16          # Longitude divisions
+    rings: i32 = 8              # Latitude divisions
+
+imple SphereMesh3D:
+    # Get pointer to vertex data
+    fun get_vertices(self) -> i64:
+        return self.vertices
+    
+    # Get number of vertices
+    fun get_vertex_count(self) -> i32:
+        return self.vertex_count
+    
+    # Check if mesh has been generated
+    fun is_valid(self) -> i32:
+        return self.is_generated
+    
+    # Get size of vertex data in bytes
+    fun get_vertex_data_size(self) -> i32:
+        return self.vertex_count * 24
+    
+    # Set sphere parameters
+    fun set_radius(self, r: f32):
+        self.radius = r
+        if self.is_generated == 1:
+            self.generate()
+    
+    fun set_detail(self, segs: i32, rngs: i32):
+        self.segments = segs
+        self.rings = rngs
+        if self.is_generated == 1:
+            self.generate()
+    
+    # Generate sphere vertex data using UV sphere algorithm
+    # Creates segments × rings × 6 vertices
+    fun generate(self):
+        # Free existing data if any
+        if self.vertices != 0:
+            Memory.free(self.vertices)
+        
+        # Calculate vertex count: segments × rings × 6 (2 triangles per quad)
+        total_vertices: i32 = self.segments * self.rings * 6
+        
+        # Allocate: vertices × 6 floats × 4 bytes
+        alloc_size: i64 = (total_vertices as i64) * 24
+        self.vertices = Memory.malloc_zeroed(alloc_size)
+        if self.vertices == 0:
+            self.is_generated = 0
+            return
+        
+        self.vertex_count = total_vertices
+        
+        pi: f32 = 3.14159265359
+        two_pi: f32 = 6.28318530718
+        
+        # Vertex offset counter (in bytes)
+        offset: i64 = 0
+        
+        # Generate sphere using UV mapping
+        ring: i32 = 0
+        while ring < self.rings:
+            # Latitude angles
+            theta1: f32 = (ring * pi) / self.rings
+            theta2: f32 = ((ring + 1) * pi) / self.rings
+            
+            seg: i32 = 0
+            while seg < self.segments:
+                # Longitude angles
+                phi1: f32 = (seg * two_pi) / self.segments
+                phi2: f32 = ((seg + 1) * two_pi) / self.segments
+                
+                # Calculate 4 corners of the quad
+                # Top-left (ring, seg)
+                x1: f32 = self.radius * @sin(theta1) * @cos(phi1)
+                y1: f32 = self.radius * @cos(theta1)
+                z1: f32 = self.radius * @sin(theta1) * @sin(phi1)
+                
+                # Top-right (ring, seg+1)
+                x2: f32 = self.radius * @sin(theta1) * @cos(phi2)
+                y2: f32 = self.radius * @cos(theta1)
+                z2: f32 = self.radius * @sin(theta1) * @sin(phi2)
+                
+                # Bottom-left (ring+1, seg)
+                x3: f32 = self.radius * @sin(theta2) * @cos(phi1)
+                y3: f32 = self.radius * @cos(theta2)
+                z3: f32 = self.radius * @sin(theta2) * @sin(phi1)
+                
+                # Bottom-right (ring+1, seg+1)
+                x4: f32 = self.radius * @sin(theta2) * @cos(phi2)
+                y4: f32 = self.radius * @cos(theta2)
+                z4: f32 = self.radius * @sin(theta2) * @sin(phi2)
+                
+                # Color based on position (gradient from top to bottom)
+                color_factor: f32 = (ring + 1) / (self.rings + 1)
+                cr: f32 = 0.3 + color_factor * 0.7
+                cg: f32 = 0.3 + (1.0 - color_factor) * 0.4
+                cb: f32 = 0.8
+                
+                # Triangle 1: top-left, bottom-left, bottom-right
+                offset = self._write_vertex(offset, x1, y1, z1, cr, cg, cb)
+                offset = self._write_vertex(offset, x3, y3, z3, cr, cg, cb)
+                offset = self._write_vertex(offset, x4, y4, z4, cr, cg, cb)
+                
+                # Triangle 2: top-left, bottom-right, top-right
+                offset = self._write_vertex(offset, x1, y1, z1, cr, cg, cb)
+                offset = self._write_vertex(offset, x4, y4, z4, cr, cg, cb)
+                offset = self._write_vertex(offset, x2, y2, z2, cr, cg, cb)
+                
+                seg = seg + 1
+            
+            ring = ring + 1
+        
+        self.is_generated = 1
+    
+    # Helper to write a single vertex (6 floats = 24 bytes)
+    # Returns the new offset
+    fun _write_vertex(self, offset: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32) -> i64:
+        Memory.write_f32(self.vertices + offset, px)
+        Memory.write_f32(self.vertices + offset + 4, py)
+        Memory.write_f32(self.vertices + offset + 8, pz)
+        Memory.write_f32(self.vertices + offset + 12, cr)
+        Memory.write_f32(self.vertices + offset + 16, cg)
+        Memory.write_f32(self.vertices + offset + 20, cb)
+        return offset + 24
+    
+    # Free mesh resources
+    fun free(self):
+        if self.vertices != 0:
+            Memory.free(self.vertices)
+            self.vertices = 0
+        self.vertex_count = 0
+        self.is_generated = 0
+
+

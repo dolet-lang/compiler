@@ -1,0 +1,16 @@
+# Input Module Metadata
+# Keyboard and mouse input handling for Dolet
+
+[info]
+name = input
+version = 1.0.0
+description = Keyboard and mouse input handling
+
+[libs]
+# No external libraries needed
+
+[dlls]
+# No runtime DLLs to copy
+
+[dependencies]
+# No external dependencies

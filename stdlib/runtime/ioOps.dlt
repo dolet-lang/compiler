@@ -1,0 +1,20 @@
+# ============================================================================
+# IOOps - I/O operations (Pure Dolet)
+# ============================================================================
+
+struct IOOps:
+    # Print string with newline
+    static fun io_println(text: str):
+        handle: i64 = GetStdHandle(-11)
+        text_len: i64 = Memory.strlen(text)
+        newline: str = "\n"
+        # Use WriteFile for compatibility with redirected output
+        WriteFile(handle, text as i64, text_len as i32, 0, 0)
+        WriteFile(handle, newline as i64, 1, 0, 0)
+    
+    # Print string without newline
+    static fun io_print(text: str):
+        handle: i64 = GetStdHandle(-11)
+        text_len: i64 = Memory.strlen(text)
+        # Use WriteFile for compatibility with redirected output
+        WriteFile(handle, text as i64, text_len as i32, 0, 0)

@@ -1,0 +1,249 @@
+# ============================================================================
+# Response Helpers - HTTP response helper functions for Dolet Web Framework
+# Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
+# ============================================================================
+
+# Response struct - HTTP response helper utilities
+struct Response:
+    # ========== Response Helpers ==========
+    
+    # Create HTML response with Content-Type: text/html
+    # Returns: formatted HTTP response string
+    # Requirements: 4.1
+    static fun html(content: str) -> str:
+        return HttpFormatter.format(200, "text/html", content)
+    
+    # Create JSON response with Content-Type: application/json
+    # Returns: formatted HTTP response string
+    # Requirements: 4.2
+    static fun json(data: str) -> str:
+        return HttpFormatter.format(200, "application/json", data)
+    
+    # Create redirect response with 302 status and Location header
+    # Returns: formatted HTTP redirect response string
+    # Requirements: 4.3
+    static fun redirect(url: str) -> str:
+        # Build redirect response manually to include Location header
+        # HTTP/1.1 302 Found\r\n
+        # Location: {url}\r\n
+        # Content-Type: text/html\r\n
+        # Content-Length: 0\r\n
+        # \r\n
+        
+        url_len: i64 = Memory.strlen(url)
+        
+        # Calculate total size
+        # "HTTP/1.1 302 Found\r\n" = 20
+        # "Location: " = 10
+        # url + "\r\n" = url_len + 2
+        # "Content-Type: text/html\r\n" = 25
+        # "Content-Length: 0\r\n" = 19
+        # "\r\n" = 2
+        total_len: i64 = 20 + 10 + url_len + 2 + 25 + 19 + 2
+        
+        result: i64 = Memory.malloc(total_len + 1)
+        pos: i64 = 0
+        
+        # "HTTP/1.1 302 Found\r\n"
+        Memory.write_i8(result + pos, 72 as i8)  # H
+        pos = pos + 1
+        Memory.write_i8(result + pos, 84 as i8)  # T
+        pos = pos + 1
+        Memory.write_i8(result + pos, 84 as i8)  # T
+        pos = pos + 1
+        Memory.write_i8(result + pos, 80 as i8)  # P
+        pos = pos + 1
+        Memory.write_i8(result + pos, 47 as i8)  # /
+        pos = pos + 1
+        Memory.write_i8(result + pos, 49 as i8)  # 1
+        pos = pos + 1
+        Memory.write_i8(result + pos, 46 as i8)  # .
+        pos = pos + 1
+        Memory.write_i8(result + pos, 49 as i8)  # 1
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+        Memory.write_i8(result + pos, 51 as i8)  # 3
+        pos = pos + 1
+        Memory.write_i8(result + pos, 48 as i8)  # 0
+        pos = pos + 1
+        Memory.write_i8(result + pos, 50 as i8)  # 2
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+        Memory.write_i8(result + pos, 70 as i8)  # F
+        pos = pos + 1
+        Memory.write_i8(result + pos, 111 as i8) # o
+        pos = pos + 1
+        Memory.write_i8(result + pos, 117 as i8) # u
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 100 as i8) # d
+        pos = pos + 1
+        Memory.write_i8(result + pos, 13 as i8)  # \r
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)  # \n
+        pos = pos + 1
+
+        # "Location: "
+        Memory.write_i8(result + pos, 76 as i8)  # L
+        pos = pos + 1
+        Memory.write_i8(result + pos, 111 as i8) # o
+        pos = pos + 1
+        Memory.write_i8(result + pos, 99 as i8)  # c
+        pos = pos + 1
+        Memory.write_i8(result + pos, 97 as i8)  # a
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 105 as i8) # i
+        pos = pos + 1
+        Memory.write_i8(result + pos, 111 as i8) # o
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 58 as i8)  # :
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+        
+        # url
+        i: i64 = 0
+        while i < url_len:
+            c: i8 = Memory.read_i8((url as i64) + i)
+            Memory.write_i8(result + pos, c)
+            pos = pos + 1
+            i = i + 1
+        
+        # \r\n
+        Memory.write_i8(result + pos, 13 as i8)
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)
+        pos = pos + 1
+        
+        # "Content-Type: text/html\r\n"
+        Memory.write_i8(result + pos, 67 as i8)  # C
+        pos = pos + 1
+        Memory.write_i8(result + pos, 111 as i8) # o
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 45 as i8)  # -
+        pos = pos + 1
+        Memory.write_i8(result + pos, 84 as i8)  # T
+        pos = pos + 1
+        Memory.write_i8(result + pos, 121 as i8) # y
+        pos = pos + 1
+        Memory.write_i8(result + pos, 112 as i8) # p
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 58 as i8)  # :
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 120 as i8) # x
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 47 as i8)  # /
+        pos = pos + 1
+        Memory.write_i8(result + pos, 104 as i8) # h
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 109 as i8) # m
+        pos = pos + 1
+        Memory.write_i8(result + pos, 108 as i8) # l
+        pos = pos + 1
+        Memory.write_i8(result + pos, 13 as i8)  # \r
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)  # \n
+        pos = pos + 1
+
+        # "Content-Length: 0\r\n"
+        Memory.write_i8(result + pos, 67 as i8)  # C
+        pos = pos + 1
+        Memory.write_i8(result + pos, 111 as i8) # o
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 45 as i8)  # -
+        pos = pos + 1
+        Memory.write_i8(result + pos, 76 as i8)  # L
+        pos = pos + 1
+        Memory.write_i8(result + pos, 101 as i8) # e
+        pos = pos + 1
+        Memory.write_i8(result + pos, 110 as i8) # n
+        pos = pos + 1
+        Memory.write_i8(result + pos, 103 as i8) # g
+        pos = pos + 1
+        Memory.write_i8(result + pos, 116 as i8) # t
+        pos = pos + 1
+        Memory.write_i8(result + pos, 104 as i8) # h
+        pos = pos + 1
+        Memory.write_i8(result + pos, 58 as i8)  # :
+        pos = pos + 1
+        Memory.write_i8(result + pos, 32 as i8)  # space
+        pos = pos + 1
+        Memory.write_i8(result + pos, 48 as i8)  # 0
+        pos = pos + 1
+        Memory.write_i8(result + pos, 13 as i8)  # \r
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)  # \n
+        pos = pos + 1
+        
+        # "\r\n" (end of headers)
+        Memory.write_i8(result + pos, 13 as i8)  # \r
+        pos = pos + 1
+        Memory.write_i8(result + pos, 10 as i8)  # \n
+        pos = pos + 1
+        
+        # null terminator
+        Memory.write_i8(result + pos, 0 as i8)
+        
+        return result as str
+    
+    # Render template file with context and return as HTML response
+    # Returns: formatted HTTP response with rendered template content
+    # Returns 500 error if template file not found
+    # Requirements: 4.4
+    static fun render(template_path: str, ctx: Context) -> str:
+        # Use Template.render_file to load and substitute template
+        rendered: str = Template.render_file(template_path, ctx)
+        
+        # Check if rendering failed (empty string indicates file not found)
+        rendered_len: i64 = Memory.strlen(rendered)
+        if rendered_len == 0:
+            # Return 500 Internal Server Error
+            return HttpFormatter.format(500, "text/plain", "Internal Server Error: Template not found")
+        
+        # Return HTML response with rendered content
+        return HttpFormatter.format(200, "text/html", rendered)
+    
+    # Create response with custom status code
+    # Returns: formatted HTTP response string
+    # Requirements: 4.5
+    static fun status(code: i32, body: str) -> str:
+        return HttpFormatter.format(code, "text/plain", body)

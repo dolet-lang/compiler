@@ -1,0 +1,327 @@
+# ============================
+#  Input Struct with Static Methods
+# ============================
+# Main input functions and state management
+# Usage: Input.is_key_pressed(KEY_ESCAPE)
+# Requirements: 2.1-2.5, 4.1-4.9, 5.1-5.5, 8.1-8.4, 9.1-9.5
+
+# Import key constants
+import keys
+import mouse
+import gamepad
+
+# Import platform-specific backend
+import platform
+
+# ----- Global State Variables -----
+g_input_initialized: i32 = 0
+
+# Key state arrays (256 keys each) - bitmask approach
+g_keys_current_0: i64 = 0    # Keys 0-63
+g_keys_current_1: i64 = 0    # Keys 64-127
+g_keys_current_2: i64 = 0    # Keys 128-191
+g_keys_current_3: i64 = 0    # Keys 192-255
+
+g_keys_previous_0: i64 = 0   # Keys 0-63
+g_keys_previous_1: i64 = 0   # Keys 64-127
+g_keys_previous_2: i64 = 0   # Keys 128-191
+g_keys_previous_3: i64 = 0   # Keys 192-255
+
+# ----- Helper Functions (internal) -----
+
+fun get_key_bit_current(key: i32) -> i32:
+    if key < 0 or key > 255:
+        return 0
+    bit_pos: i32 = key % 64
+    mask: i64 = 1 << bit_pos
+    if key < 64:
+        if (g_keys_current_0 & mask) != 0:
+            return 1
+        return 0
+    if key < 128:
+        if (g_keys_current_1 & mask) != 0:
+            return 1
+        return 0
+    if key < 192:
+        if (g_keys_current_2 & mask) != 0:
+            return 1
+        return 0
+    if (g_keys_current_3 & mask) != 0:
+        return 1
+    return 0
+
+fun get_key_bit_previous(key: i32) -> i32:
+    if key < 0 or key > 255:
+        return 0
+    bit_pos: i32 = key % 64
+    mask: i64 = 1 << bit_pos
+    if key < 64:
+        if (g_keys_previous_0 & mask) != 0:
+            return 1
+        return 0
+    if key < 128:
+        if (g_keys_previous_1 & mask) != 0:
+            return 1
+        return 0
+    if key < 192:
+        if (g_keys_previous_2 & mask) != 0:
+            return 1
+        return 0
+    if (g_keys_previous_3 & mask) != 0:
+        return 1
+    return 0
+
+fun set_key_bit_current(key: i32, value: i32):
+    if key < 0 or key > 255:
+        return
+    bit_pos: i32 = key % 64
+    mask: i64 = 1 << bit_pos
+    if key < 64:
+        if value == 1:
+            g_keys_current_0 = g_keys_current_0 | mask
+        else:
+            g_keys_current_0 = g_keys_current_0 & (~mask)
+        return
+    if key < 128:
+        if value == 1:
+            g_keys_current_1 = g_keys_current_1 | mask
+        else:
+            g_keys_current_1 = g_keys_current_1 & (~mask)
+        return
+    if key < 192:
+        if value == 1:
+            g_keys_current_2 = g_keys_current_2 | mask
+        else:
+            g_keys_current_2 = g_keys_current_2 & (~mask)
+        return
+    if value == 1:
+        g_keys_current_3 = g_keys_current_3 | mask
+    else:
+        g_keys_current_3 = g_keys_current_3 & (~mask)
+
+fun copy_current_to_previous():
+    g_keys_previous_0 = g_keys_current_0
+    g_keys_previous_1 = g_keys_current_1
+    g_keys_previous_2 = g_keys_current_2
+    g_keys_previous_3 = g_keys_current_3
+
+fun update_key_states():
+    g_keys_current_0 = 0
+    g_keys_current_1 = 0
+    g_keys_current_2 = 0
+    g_keys_current_3 = 0
+    i: i32 = 0
+    while i < 256:
+        state: i16 = platform_get_key_state(i)
+        if state < 0:
+            set_key_bit_current(i, 1)
+        i = i + 1
+
+
+# ============================
+#  Input Struct - Static Methods API
+# ============================
+# Usage:
+#   Input.is_key_pressed(KEY_ESCAPE)
+#   Input.is_key_just_pressed(KEY_SPACE)
+#   Input.is_mouse_pressed(MOUSE_LEFT)
+#   Input.mouse_x()
+#   Input.init()
+#   Input.update()
+
+struct Input:
+    _dummy: i32 = 0  # Placeholder field for struct
+
+    # ----- Keyboard Methods -----
+    
+    # Check if a key is currently pressed
+    # Returns 1 if pressed, 0 otherwise
+    static fun is_key_pressed(key: i32) -> i32:
+        if key < 0 or key > 255:
+            return 0
+        state: i16 = platform_get_key_state(key)
+        if state < 0:
+            return 1
+        return 0
+
+    # Check if a key was just pressed this frame
+    static fun is_key_just_pressed(key: i32) -> i32:
+        if key < 0 or key > 255:
+            return 0
+        current: i32 = Input.is_key_pressed(key)
+        prev: i32 = get_key_bit_previous(key)
+        if current == 1 and prev == 0:
+            return 1
+        return 0
+
+    # Check if a key was just released this frame
+    static fun is_key_just_released(key: i32) -> i32:
+        if key < 0 or key > 255:
+            return 0
+        current: i32 = Input.is_key_pressed(key)
+        prev: i32 = get_key_bit_previous(key)
+        if current == 0 and prev == 1:
+            return 1
+        return 0
+
+    # ----- Modifier Keys -----
+    
+    static fun is_shift_pressed() -> i32:
+        left: i16 = platform_get_key_state(160)
+        if left < 0:
+            return 1
+        right: i16 = platform_get_key_state(161)
+        if right < 0:
+            return 1
+        return 0
+
+    static fun is_ctrl_pressed() -> i32:
+        left: i16 = platform_get_key_state(162)
+        if left < 0:
+            return 1
+        right: i16 = platform_get_key_state(163)
+        if right < 0:
+            return 1
+        return 0
+
+    static fun is_alt_pressed() -> i32:
+        left: i16 = platform_get_key_state(164)
+        if left < 0:
+            return 1
+        right: i16 = platform_get_key_state(165)
+        if right < 0:
+            return 1
+        return 0
+
+    # ----- Mouse Methods -----
+    
+    static fun is_mouse_pressed(button: i32) -> i32:
+        return mouse_pressed(button)
+
+    static fun is_mouse_just_pressed(button: i32) -> i32:
+        return mouse_just_pressed(button)
+
+    static fun is_mouse_just_released(button: i32) -> i32:
+        return mouse_just_released(button)
+
+    static fun mouse_x() -> i32:
+        point: POINT = POINT()
+        platform_get_cursor_pos(point as i64)
+        return point.x
+
+    static fun mouse_y() -> i32:
+        point: POINT = POINT()
+        platform_get_cursor_pos(point as i64)
+        return point.y
+
+    static fun mouse_delta_x() -> i32:
+        point: POINT = POINT()
+        platform_get_cursor_pos(point as i64)
+        delta: i32 = point.x - g_mouse_prev_x
+        return delta
+
+    static fun mouse_delta_y() -> i32:
+        point: POINT = POINT()
+        platform_get_cursor_pos(point as i64)
+        delta: i32 = point.y - g_mouse_prev_y
+        return delta
+
+    static fun mouse_scroll() -> f32:
+        return g_mouse_scroll
+
+    # ----- Text Input -----
+    
+    static fun key_to_char(key: i32) -> i8:
+        if key >= 65 and key <= 90:
+            return (key + 32) as i8
+        if key >= 48 and key <= 57:
+            return key as i8
+        if key == 32:
+            return 32 as i8
+        return 0 as i8
+
+    static fun key_to_char_shifted(key: i32) -> i8:
+        if key >= 65 and key <= 90:
+            return key as i8
+        if key == 48:
+            return 41 as i8
+        if key == 49:
+            return 33 as i8
+        if key == 50:
+            return 64 as i8
+        if key == 51:
+            return 35 as i8
+        if key == 52:
+            return 36 as i8
+        if key == 53:
+            return 37 as i8
+        if key == 54:
+            return 94 as i8
+        if key == 55:
+            return 38 as i8
+        if key == 56:
+            return 42 as i8
+        if key == 57:
+            return 40 as i8
+        if key == 32:
+            return 32 as i8
+        return 0 as i8
+
+    # ----- State Management -----
+    
+    static fun init():
+        if g_input_initialized == 1:
+            return
+        g_keys_current_0 = 0
+        g_keys_current_1 = 0
+        g_keys_current_2 = 0
+        g_keys_current_3 = 0
+        g_keys_previous_0 = 0
+        g_keys_previous_1 = 0
+        g_keys_previous_2 = 0
+        g_keys_previous_3 = 0
+        update_key_states()
+        copy_current_to_previous()
+        init_mouse()
+        g_input_initialized = 1
+
+    static fun update():
+        if g_input_initialized == 0:
+            Input.init()
+        copy_current_to_previous()
+        update_key_states()
+        update_mouse()
+        reset_scroll()
+
+# ----- Legacy Functions (for backward compatibility) -----
+# These call the Input struct methods
+
+fun key_pressed(key: i32) -> i32:
+    return Input.is_key_pressed(key)
+
+fun key_just_pressed(key: i32) -> i32:
+    return Input.is_key_just_pressed(key)
+
+fun key_just_released(key: i32) -> i32:
+    return Input.is_key_just_released(key)
+
+fun shift_pressed() -> i32:
+    return Input.is_shift_pressed()
+
+fun ctrl_pressed() -> i32:
+    return Input.is_ctrl_pressed()
+
+fun alt_pressed() -> i32:
+    return Input.is_alt_pressed()
+
+fun key_to_char(key: i32) -> i8:
+    return Input.key_to_char(key)
+
+fun key_to_char_shifted(key: i32) -> i8:
+    return Input.key_to_char_shifted(key)
+
+fun input_init():
+    Input.init()
+
+fun input_update():
+    Input.update()

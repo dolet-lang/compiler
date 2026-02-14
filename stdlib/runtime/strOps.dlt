@@ -1,0 +1,253 @@
+# ============================================================================
+# Str - Pure Dolet string operations
+# All string operations are implemented in Pure Dolet with no C dependencies.
+# 
+# Available methods:
+#   - to_upper(s: str) -> str       : Convert string to uppercase
+#   - to_lower(s: str) -> str       : Convert string to lowercase
+#   - contains(s: str, substr: str) -> bool : Check if string contains substring
+#   - starts_with(s: str, prefix: str) -> bool : Check if string starts with prefix
+#   - ends_with(s: str, suffix: str) -> bool : Check if string ends with suffix
+#   - substring(s: str, start: i64, end: i64) -> str : Extract substring [start, end)
+#   - trim(s: str) -> str           : Remove leading/trailing whitespace
+#   - is_whitespace(c: i32) -> bool : Check if character is whitespace
+#
+# Usage Examples:
+#   result: str = NativeCall.substring("Hello World", 0, 5)  # Returns "Hello"
+#   result: str = NativeCall.substring("Hello", -5, 100)     # Returns "Hello" (clamped)
+#   result: str = NativeCall.trim("  hello  ")               # Returns "hello"
+#   result: str = NativeCall.trim("\t\n  text  \r\n")        # Returns "text"
+#
+# Notes:
+#   - substring() uses half-open interval [start, end) - end index is exclusive
+#   - substring() clamps out-of-bounds indices to valid range automatically
+#   - trim() removes space (32), tab (9), newline (10), carriage return (13)
+#   - All methods allocate new memory for results (caller should free if needed)
+# ============================================================================
+
+struct Str:
+    static fun to_upper(s: str) -> str:
+        len: i64 = Memory.strlen(s)
+        result: i64 = Memory.malloc(len + 1)
+        i: i64 = 0
+        while i <= len:
+            c: i32 = Memory.read_i8((s as i64) + i) as i32
+            if c >= 97 and c <= 122:
+                c = c - 32
+            Memory.write_i8(result + i, c as i8)
+            i = i + 1
+        return result as str
+    
+    static fun to_lower(s: str) -> str:
+        len: i64 = Memory.strlen(s)
+        result: i64 = Memory.malloc(len + 1)
+        i: i64 = 0
+        while i <= len:
+            c: i32 = Memory.read_i8((s as i64) + i) as i32
+            if c >= 65 and c <= 90:
+                c = c + 32
+            Memory.write_i8(result + i, c as i8)
+            i = i + 1
+        return result as str
+    
+    static fun contains(s: str, substr: str) -> bool:
+        s_len: i64 = Memory.strlen(s)
+        sub_len: i64 = Memory.strlen(substr)
+        if sub_len > s_len:
+            return false
+        if sub_len == 0:
+            return true
+        
+        i: i64 = 0
+        while i <= s_len - sub_len:
+            j: i64 = 0
+            found: bool = true
+            while j < sub_len and found:
+                c1: i32 = Memory.read_i8((s as i64) + i + j) as i32
+                c2: i32 = Memory.read_i8((substr as i64) + j) as i32
+                if c1 != c2:
+                    found = false
+                j = j + 1
+            if found:
+                return true
+            i = i + 1
+        return false
+    
+    static fun starts_with(s: str, prefix: str) -> bool:
+        s_len: i64 = Memory.strlen(s)
+        prefix_len: i64 = Memory.strlen(prefix)
+        if prefix_len > s_len:
+            return false
+        
+        i: i64 = 0
+        while i < prefix_len:
+            c1: i32 = Memory.read_i8((s as i64) + i) as i32
+            c2: i32 = Memory.read_i8((prefix as i64) + i) as i32
+            if c1 != c2:
+                return false
+            i = i + 1
+        return true
+    
+    static fun ends_with(s: str, suffix: str) -> bool:
+        s_len: i64 = Memory.strlen(s)
+        suffix_len: i64 = Memory.strlen(suffix)
+        if suffix_len > s_len:
+            return false
+        
+        offset: i64 = s_len - suffix_len
+        i: i64 = 0
+        while i < suffix_len:
+            c1: i32 = Memory.read_i8((s as i64) + offset + i) as i32
+            c2: i32 = Memory.read_i8((suffix as i64) + i) as i32
+            if c1 != c2:
+                return false
+            i = i + 1
+        return true
+    
+    # Pure Dolet substring implementation
+    # Extracts a substring from index start_pos (inclusive) to end_pos (exclusive)
+    # Parameters:
+    #   s: source string
+    #   start_pos: starting index (clamped to [0, len] if out of bounds)
+    #   end_pos: ending index, exclusive (clamped to [start, len] if out of bounds)
+    # Returns: new string containing the extracted substring
+    # Example: substring("Hello", 1, 4) returns "ell"
+    static fun substring(s: str, start_pos: i64, end_pos: i64) -> str:
+        len: i64 = Memory.strlen(s)
+        
+        # Clamp start_pos to valid range [0, len]
+        st: i64 = start_pos
+        if st < 0:
+            st = 0
+        if st > len:
+            st = len
+        
+        # Clamp end_pos to valid range [st, len]
+        en: i64 = end_pos
+        if en < st:
+            en = st
+        if en > len:
+            en = len
+        
+        # Calculate result length
+        result_len: i64 = en - st
+        
+        # Allocate result buffer (+1 for null terminator)
+        result: i64 = Memory.malloc(result_len + 1)
+        
+        # Copy characters from source to result
+        i: i64 = 0
+        while i < result_len:
+            src_addr: i64 = (s as i64) + st + i
+            c: i8 = Memory.read_i8(src_addr)
+            Memory.write_i8(result + i, c)
+            i = i + 1
+        
+        # Null terminate
+        Memory.write_i8(result + result_len, 0 as i8)
+        
+        return result as str
+    
+    # Helper to check if a character is whitespace
+    static fun is_whitespace(c: i32) -> bool:
+        # space (32), tab (9), newline (10), carriage return (13)
+        if c == 32:
+            return true
+        if c == 9:
+            return true
+        if c == 10:
+            return true
+        if c == 13:
+            return true
+        return false
+    
+    # Helper to find first non-whitespace position from start
+    static fun find_trim_start(s: str, len: i64) -> i64:
+        pos: i64 = 0
+        while pos < len:
+            c: i32 = Memory.read_i8((s as i64) + pos) as i32
+            if Str.is_whitespace(c):
+                pos = pos + 1
+            else:
+                return pos
+        return len
+    
+    # Helper to find last non-whitespace position from end
+    static fun find_trim_end(s: str, len: i64, start: i64) -> i64:
+        pos: i64 = len
+        while pos > start:
+            c: i32 = Memory.read_i8((s as i64) + pos - 1) as i32
+            if Str.is_whitespace(c):
+                pos = pos - 1
+            else:
+                return pos
+        return start
+    
+    # Pure Dolet trim implementation - removes leading and trailing whitespace
+    # Whitespace characters: space (32), tab (9), newline (10), carriage return (13)
+    # Parameters:
+    #   s: source string to trim
+    # Returns: new string with leading and trailing whitespace removed
+    # Example: trim("  hello  ") returns "hello"
+    # Example: trim("\t\ntext\r\n") returns "text"
+    static fun trim(s: str) -> str:
+        len: i64 = Memory.strlen(s)
+        
+        # Handle empty string
+        if len == 0:
+            result: i64 = Memory.malloc(1)
+            Memory.write_i8(result, 0 as i8)
+            return result as str
+        
+        # Find start and end positions
+        start: i64 = Str.find_trim_start(s, len)
+        end: i64 = Str.find_trim_end(s, len, start)
+        
+        # Use substring to extract the trimmed portion
+        return Str.substring(s, start, end)
+    
+    # ========== String Copy and Concatenation ==========
+    
+    # Copy string to new allocated memory (like strcpy but allocates)
+    # Returns: new string copy (caller should free if needed)
+    # Example: strcpy("hello") returns new string "hello"
+    static fun strcpy(s: str) -> str:
+        len: i64 = Memory.strlen(s)
+        result: i64 = Memory.malloc(len + 1)
+        Memory.copy(result, s as i64, len + 1)
+        return result as str
+    
+    # Concatenate two strings
+    # Returns: new string containing s1 + s2 (caller should free if needed)
+    # Example: concat("Hello ", "World") returns "Hello World"
+    static fun concat(s1: str, s2: str) -> str:
+        len1: i64 = Memory.strlen(s1)
+        len2: i64 = Memory.strlen(s2)
+        total_len: i64 = len1 + len2
+        
+        result: i64 = Memory.malloc(total_len + 1)
+        
+        # Copy first string
+        Memory.copy(result, s1 as i64, len1)
+        
+        # Copy second string (including null terminator)
+        Memory.copy(result + len1, s2 as i64, len2 + 1)
+        
+        return result as str
+    
+    # Concatenate three strings
+    # Returns: new string containing s1 + s2 + s3
+    static fun concat3(s1: str, s2: str, s3: str) -> str:
+        len1: i64 = Memory.strlen(s1)
+        len2: i64 = Memory.strlen(s2)
+        len3: i64 = Memory.strlen(s3)
+        total_len: i64 = len1 + len2 + len3
+        
+        result: i64 = Memory.malloc(total_len + 1)
+        
+        # Copy strings
+        Memory.copy(result, s1 as i64, len1)
+        Memory.copy(result + len1, s2 as i64, len2)
+        Memory.copy(result + len1 + len2, s3 as i64, len3 + 1)
+        
+        return result as str

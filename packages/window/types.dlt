@@ -1,0 +1,63 @@
+# ============================
+#  Win32 Type Definitions
+# ============================
+# Native Win32 types for window management
+# Requirements: 7.4
+
+# ----- Handle Types -----
+# Note: In Dolet, we use i64 for all handle types (64-bit Windows)
+# HWND, HINSTANCE, HDC, etc. are all pointer-sized values
+
+# ----- POINT Structure -----
+# Used for cursor position and window coordinates
+@stack
+struct POINT:
+    x: i32 = 0
+    y: i32 = 0
+
+# ----- RECT Structure -----
+# Used for window client area and clipping regions
+@stack
+struct RECT:
+    left: i32 = 0
+    top: i32 = 0
+    right: i32 = 0
+    bottom: i32 = 0
+
+# ----- MSG Structure -----
+# Windows message structure (48 bytes on 64-bit)
+# Used with PeekMessageW/GetMessageW
+@stack
+struct MSG:
+    hwnd: i64 = 0           # Window handle receiving the message
+    message: i32 = 0        # Message identifier
+    padding1: i32 = 0       # Alignment padding
+    wParam: i64 = 0         # Additional message info (word parameter)
+    lParam: i64 = 0         # Additional message info (long parameter)
+    time: i32 = 0           # Time message was posted
+    pt_x: i32 = 0           # Cursor x position when message was posted
+    pt_y: i32 = 0           # Cursor y position when message was posted
+    padding2: i32 = 0       # Alignment padding
+
+# ----- WNDCLASSEXW Structure -----
+# Extended window class structure (80 bytes on 64-bit)
+# Used with RegisterClassExW
+struct WNDCLASSEXW:
+    cbSize: i32 = 80        # Size of this structure
+    style: i32 = 0          # Class style (CS_HREDRAW | CS_VREDRAW | CS_OWNDC)
+    lpfnWndProc: i64 = 0    # Pointer to window procedure (function pointer)
+    cbClsExtra: i32 = 0     # Extra bytes to allocate after class structure
+    cbWndExtra: i32 = 0     # Extra bytes to allocate after window instance
+    hInstance: i64 = 0      # Handle to instance containing window procedure
+    hIcon: i64 = 0          # Handle to class icon
+    hCursor: i64 = 0        # Handle to class cursor
+    hbrBackground: i64 = 0  # Handle to class background brush
+    lpszMenuName: i64 = 0   # Pointer to menu name string
+    lpszClassName: i64 = 0  # Pointer to class name string
+    hIconSm: i64 = 0        # Handle to small icon
+
+# ----- LARGE_INTEGER Structure -----
+# Used for QueryPerformanceCounter/Frequency
+@stack
+struct LARGE_INTEGER:
+    QuadPart: i64 = 0       # 64-bit signed integer value

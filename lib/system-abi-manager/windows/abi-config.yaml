@@ -1,0 +1,93 @@
+# Windows x64 ABI Configuration
+# This file defines how the Dolet compiler should handle function calls,
+# struct passing, and other low-level details on Windows x64 platform.
+
+platform:
+  name: "windows"
+  architecture: "x64"
+  abi_name: "Microsoft x64 Calling Convention"
+  
+# Struct handling rules
+struct_rules:
+  # How to return structs from functions
+  return:
+    small_threshold: 16  # bytes - structs <= 16 bytes can be returned in registers
+    small_method: "direct"     # return small structs in RAX/XMM registers
+    large_method: "sret"       # large structs use hidden pointer parameter (sret)
+    
+  # How to pass structs as parameters
+  parameter:
+    small_threshold: 16  # bytes - structs <= 16 bytes can be passed by value
+    small_method: "byval"      # copy small structs to stack/registers
+    large_method: "byref"      # pass large structs as pointer
+
+# Register allocation for function calls
+registers:
+  # Integer/pointer parameters use these registers in order
+  integer_params: ["RCX", "RDX", "R8", "R9"]
+  
+  # Floating-point parameters use these registers
+  float_params: ["XMM0", "XMM1", "XMM2", "XMM3"]
+  
+  # Return values
+  return_int: "RAX"
+  return_float: "XMM0"
+  
+  # Volatile registers (caller-saved)
+  volatile: ["RAX", "RCX", "RDX", "R8", "R9", "R10", "R11"]
+  
+  # Non-volatile registers (callee-saved)
+  non_volatile: ["RBX", "RBP", "RDI", "RSI", "RSP", "R12", "R13", "R14", "R15"]
+
+# Stack management
+stack:
+  alignment: 16           # Stack must be 16-byte aligned
+  shadow_space: 32        # Windows requires 32 bytes shadow space for register params
+  grows_down: true        # Stack grows downward (high to low addresses)
+  
+# Calling conventions
+calling_conventions:
+  default: "ms_abi"       # Microsoft x64 ABI
+  cdecl: "ms_abi"         # C declaration uses MS ABI on Windows
+  stdcall: "ms_abi"       # __stdcall maps to MS ABI on x64
+  fastcall: "ms_abi"      # __fastcall maps to MS ABI on x64
+
+# Type sizes (in bytes)
+type_sizes:
+  i8: 1
+  i16: 2
+  i32: 4
+  i64: 8
+  f32: 4
+  f64: 8
+  ptr: 8                  # Pointers are 8 bytes on x64
+  bool: 1
+
+# Memory alignment requirements
+alignment:
+  i8: 1
+  i16: 2
+  i32: 4
+  i64: 8
+  f32: 4
+  f64: 8
+  ptr: 8
+  struct: 8               # Default struct alignment
+
+# Platform-specific features
+features:
+  supports_sret: true           # Supports structure return
+  supports_byval: true          # Supports pass-by-value for structs
+  supports_variadic: true       # Supports variadic functions
+  requires_shadow_space: true   # Requires shadow space for register params
+  uses_red_zone: false          # Windows does NOT use red zone (Linux does)
+  
+# Notes for compiler developers:
+# - Always allocate shadow space (32 bytes) even if function has < 4 params
+# - Structs > 16 bytes MUST use sret (return) or byref (parameter)
+# - Stack must be 16-byte aligned before every call instruction
+# - First 4 integer args in RCX, RDX, R8, R9 (left to right)
+# - Floating point args use XMM0-XMM3
+# - If arg is both int and float, it uses BOTH register sets (weird!)
+# - Caller allocates space for return struct (sret)
+# - Caller cleans up stack

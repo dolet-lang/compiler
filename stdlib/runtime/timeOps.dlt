@@ -1,0 +1,50 @@
+
+# ============================================================================
+# TimeOps - Time-related operations (Pure Dolet)
+# ============================================================================
+
+struct TimeOps:
+    # Sleep for specified seconds
+    static fun time_sleep(seconds: f64):
+        if seconds <= 0.0:
+            return
+        ms_f64: f64 = seconds * 1000.0                  
+        ms_i32: i32 = ms_f64 as i32
+        Sleep(ms_i32)
+    
+    # Sleep for specified milliseconds
+    static fun time_sleep_ms(ms: i64):
+        if ms <= 0:
+            return
+        ms_i32: i32 = ms as i32
+        Sleep(ms_i32)
+    
+    # Get current time in seconds since Unix epoch
+    static fun time_now() -> f64:
+        return FileTime.unix_seconds()
+    
+    # Get current time in milliseconds since epoch
+    static fun time_now_ms() -> i64:
+        return FileTime.unix_ms()
+    
+    # Get current time in nanoseconds (high resolution)
+    static fun time_now_ns() -> i64:
+        return FileTime.unix_ns()
+
+# ============================================================================
+"""
+        _____
+     _.'_____`._
+   .'.-'  12 `-.`.
+  /,' 11      1 `.\
+ // 10      /   2 \\
+;;         /       ::
+|| 9  ----O      3 ||
+::                 ;;
+ \\ 8           4 //
+  \`. 7       5 ,'/
+   '.`-.__6__.-'.'
+    ((-._____.-))
+    _))       ((_
+   '--'       '--'
+"""

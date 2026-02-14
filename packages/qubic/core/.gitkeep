@@ -1,0 +1,2 @@
+# Core Vulkan classes directory
+# Contains: vulkan_context.dlt, swapchain.dlt, render_resources.dlt, window.dlt

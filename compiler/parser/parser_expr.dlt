@@ -1,0 +1,464 @@
+##############################
+# Parser Expressions
+# Recursive descent expression parser with operator precedence
+# Depends on: parser_core.dlt, ast_nodes.dlt
+##############################
+
+# ==========================================
+# Argument List Helper
+# ==========================================
+fun parse_arg_list() -> i64:
+    args: i64 = mk_node_list(16)
+    eat(TK_LPAREN)
+    if cur_kind() != TK_RPAREN:
+        nl_add(args, parse_expression())
+        while cur_kind() == TK_COMMA:
+            advance()
+            nl_add(args, parse_expression())
+    eat(TK_RPAREN)
+    return args
+
+# ==========================================
+# Primary Expressions
+# ==========================================
+fun parse_primary() -> i64:
+    k: i32 = cur_kind()
+
+    # Integer literal
+    if k == TK_INT or k == TK_INT64 or k == TK_HEX or k == TK_BINARY or k == TK_OCTAL:
+        v: str = cur_val()
+        advance()
+        return mk_int_lit(str_to_i64(v))
+
+    # Float literal
+    if k == TK_FLOAT:
+        v2: str = cur_val()
+        advance()
+        return mk_float_lit(v2)
+
+    # String literal
+    if k == TK_STRING:
+        v3: str = cur_val()
+        advance()
+        return mk_str_lit(v3)
+
+    # F-string literal — store raw template text
+    if k == TK_FSTRING:
+        v4: str = cur_val()
+        advance()
+        parts: i64 = mk_node_list(1)
+        nl_add(parts, mk_str_lit(v4))
+        return mk_fstring(parts)
+
+    # Char literal
+    if k == TK_CHAR:
+        v5: str = cur_val()
+        advance()
+        return mk_char_lit(v5)
+
+    # Bool literal
+    if k == TK_BOOL:
+        v6: str = cur_val()
+        advance()
+        if str_eq(v6, "true") == 1:
+            return mk_bool_lit(1)
+        return mk_bool_lit(0)
+
+    # Null literal
+    if k == TK_NULL:
+        advance()
+        return mk_null_lit()
+
+    # Parenthesized expression
+    if k == TK_LPAREN:
+        eat(TK_LPAREN)
+        inner: i64 = parse_expression()
+        eat(TK_RPAREN)
+        return mk_paren(inner)
+
+    # Array/List literal: [elem, ...]
+    if k == TK_LBRACKET:
+        return parse_bracket_literal()
+
+    # Self
+    if k == TK_SELF:
+        advance()
+        if cur_kind() == TK_DOT:
+            advance()
+            fname: str = cur_val()
+            eat(TK_IDENT)
+            # self.method()
+            if cur_kind() == TK_LPAREN:
+                sargs: i64 = parse_arg_list()
+                return mk_inst_method("self", fname, sargs)
+            # self.field
+            return mk_self_field(fname)
+        return mk_self()
+
+    # Super
+    if k == TK_SUPER:
+        advance()
+        eat(TK_DOT)
+        mname: str = cur_val()
+        eat(TK_IDENT)
+        sup_args: i64 = parse_arg_list()
+        return mk_super_method(mname, sup_args)
+
+    # Builtin call: @sqrt(x)
+    if k == TK_BUILTIN_CALL:
+        bname: str = cur_val()
+        advance()
+        bargs: i64 = parse_arg_list()
+        return mk_builtin_call(bname, bargs)
+
+    # Identifier (variable, function call, method call, field access)
+    if k == TK_IDENT:
+        return parse_ident_expr()
+
+    panic(@"Unexpected token in expression: kind={k} val='{cur_val()}'")
+    return 0
+
+# ==========================================
+# Identifier Expression
+# Handles: var_ref, fun_call, static_method, field_access, etc.
+# ==========================================
+fun parse_ident_expr() -> i64:
+    name: str = cur_val()
+    eat(TK_IDENT)
+
+    # Function call: name(args)
+    if cur_kind() == TK_LPAREN:
+        cargs: i64 = parse_arg_list()
+        return mk_fun_call(name, cargs, 0)
+
+    # Dot access: name.something
+    if cur_kind() == TK_DOT:
+        return parse_dot_access(name)
+
+    # Array access: name[index]
+    if cur_kind() == TK_LBRACKET:
+        eat(TK_LBRACKET)
+        idx_expr: i64 = parse_expression()
+        eat(TK_RBRACKET)
+        return mk_array_access(name as i64, idx_expr, 0)
+
+    # Simple variable reference
+    return mk_var_ref(name)
+
+# ==========================================
+# Dot Access Chain
+# Handles: Struct.method(), obj.field, obj.method(), Enum.Value
+# ==========================================
+fun parse_dot_access(first: str) -> i64:
+    eat(TK_DOT)
+    member: str = cur_val()
+    eat(TK_IDENT)
+
+    # Static/instance method call: Name.method(args)
+    if cur_kind() == TK_LPAREN:
+        margs: i64 = parse_arg_list()
+        # If first char is uppercase, treat as static method
+        fc: i8 = Memory.read_i8(first as i64)
+        if fc >= 65 and fc <= 90:
+            return mk_static_method(first, member, margs)
+        return mk_inst_method(first, member, margs)
+
+    # Chained dot: Name.member.something
+    if cur_kind() == TK_DOT:
+        # Build base node
+        fc2: i8 = Memory.read_i8(first as i64)
+        base: i64 = 0
+        if fc2 >= 65 and fc2 <= 90:
+            base = mk_static_field(first, member)
+        else:
+            base = mk_field_access(first, member)
+        return parse_chained_dot(base)
+
+    # Assignment: Name.field = value
+    if cur_kind() == TK_ASSIGN:
+        advance()
+        aval: i64 = parse_expression()
+        fc3: i8 = Memory.read_i8(first as i64)
+        if fc3 >= 65 and fc3 <= 90:
+            return mk_static_field_assign(first, member, aval)
+        return mk_field_assign(first, member, aval)
+
+    # Array access on field: obj.field[index]
+    if cur_kind() == TK_LBRACKET:
+        eat(TK_LBRACKET)
+        aidx: i64 = parse_expression()
+        eat(TK_RBRACKET)
+        fc4: i8 = Memory.read_i8(first as i64)
+        base2: i64 = 0
+        if fc4 >= 65 and fc4 <= 90:
+            base2 = mk_static_field(first, member)
+        else:
+            base2 = mk_field_access(first, member)
+        return mk_array_access(base2, aidx, 1)
+
+    # Simple field/static field access
+    fc5: i8 = Memory.read_i8(first as i64)
+    if fc5 >= 65 and fc5 <= 90:
+        return mk_static_field(first, member)
+    return mk_field_access(first, member)
+
+# ==========================================
+# Chained Dot Access: a.b.c.d
+# ==========================================
+fun parse_chained_dot(base: i64) -> i64:
+    result: i64 = base
+    while cur_kind() == TK_DOT:
+        advance()
+        nxt: str = cur_val()
+        eat(TK_IDENT)
+        if cur_kind() == TK_LPAREN:
+            nargs: i64 = parse_arg_list()
+            result = mk_nested_method(result, nxt, nargs)
+        elif cur_kind() == TK_ASSIGN:
+            advance()
+            nval: i64 = parse_expression()
+            result = mk_field_assign("", nxt, nval)
+        else:
+            result = mk_nested_field(result, nxt)
+    return result
+
+# ==========================================
+# Bracket Literal: [elem, ...] or [key:val, ...]
+# ==========================================
+fun parse_bracket_literal() -> i64:
+    eat(TK_LBRACKET)
+
+    # Empty list/array
+    if cur_kind() == TK_RBRACKET:
+        eat(TK_RBRACKET)
+        elems: i64 = mk_node_list(0)
+        return mk_array_lit(elems)
+
+    # Parse first element
+    first_elem: i64 = parse_expression()
+
+    # Check if map literal: [key : value, ...]
+    if cur_kind() == TK_COLON:
+        eat(TK_COLON)
+        first_val: i64 = parse_expression()
+        entries: i64 = mk_node_list(16)
+        nl_add(entries, mk_map_entry(first_elem, first_val))
+        while cur_kind() == TK_COMMA:
+            advance()
+            if cur_kind() == TK_RBRACKET:
+                break
+            mk: i64 = parse_expression()
+            eat(TK_COLON)
+            mv: i64 = parse_expression()
+            nl_add(entries, mk_map_entry(mk, mv))
+        eat(TK_RBRACKET)
+        return mk_map_lit(entries)
+
+    # Array/list literal: [elem, ...]
+    aelems: i64 = mk_node_list(32)
+    nl_add(aelems, first_elem)
+    while cur_kind() == TK_COMMA:
+        advance()
+        if cur_kind() == TK_RBRACKET:
+            break
+        nl_add(aelems, parse_expression())
+    eat(TK_RBRACKET)
+    return mk_array_lit(aelems)
+
+# ==========================================
+# Operator Precedence Chain (lowest to highest)
+# ==========================================
+
+# Level 1: Ternary — value if cond else other
+fun parse_ternary() -> i64:
+    expr: i64 = parse_logical_or()
+    if cur_kind() == TK_IF:
+        true_val: i64 = expr
+        advance()
+        cond: i64 = parse_logical_or()
+        eat(TK_ELSE)
+        false_val: i64 = parse_logical_or()
+        return mk_ternary(cond, true_val, false_val)
+    return expr
+
+# Level 2: Logical OR
+fun parse_logical_or() -> i64:
+    left: i64 = parse_logical_and()
+    while cur_kind() == TK_OR:
+        advance()
+        right: i64 = parse_logical_and()
+        left = mk_logical_op("or", left, right)
+    return left
+
+# Level 3: Logical AND
+fun parse_logical_and() -> i64:
+    left: i64 = parse_bitwise_or()
+    while cur_kind() == TK_AND:
+        advance()
+        right: i64 = parse_bitwise_or()
+        left = mk_logical_op("and", left, right)
+    return left
+
+# Level 4: Bitwise OR
+fun parse_bitwise_or() -> i64:
+    left: i64 = parse_bitwise_xor()
+    while cur_kind() == TK_BIT_OR:
+        advance()
+        right: i64 = parse_bitwise_xor()
+        left = mk_binary_op("|", left, right)
+    return left
+
+# Level 5: Bitwise XOR
+fun parse_bitwise_xor() -> i64:
+    left: i64 = parse_bitwise_and()
+    while cur_kind() == TK_BIT_XOR:
+        advance()
+        right: i64 = parse_bitwise_and()
+        left = mk_binary_op("^", left, right)
+    return left
+
+# Level 6: Bitwise AND
+fun parse_bitwise_and() -> i64:
+    left: i64 = parse_logical_not()
+    while cur_kind() == TK_BIT_AND:
+        advance()
+        right: i64 = parse_logical_not()
+        left = mk_binary_op("&", left, right)
+    return left
+
+# Level 7: Logical NOT
+fun parse_logical_not() -> i64:
+    if cur_kind() == TK_NOT:
+        advance()
+        operand: i64 = parse_logical_not()
+        return mk_unary_op("not", operand)
+    return parse_equality()
+
+# Level 8: Equality == != is
+fun parse_equality() -> i64:
+    left: i64 = parse_comparison()
+    while cur_kind() == TK_EQUAL or cur_kind() == TK_NOT_EQUAL or cur_kind() == TK_IS:
+        if cur_kind() == TK_IS:
+            advance()
+            if cur_kind() == TK_NOT:
+                advance()
+                eat(TK_NULL)
+                left = mk_is_not_null(left)
+            elif cur_kind() == TK_NULL:
+                advance()
+                left = mk_is_null(left)
+            else:
+                panic("Expected 'null' or 'not null' after 'is'")
+        else:
+            op_str: str = op_to_str(cur_kind())
+            advance()
+            right: i64 = parse_comparison()
+            left = mk_comparison(op_str, left, right)
+    return left
+
+# Level 9: Comparison < > <= >= in
+fun parse_comparison() -> i64:
+    left: i64 = parse_shift()
+    while cur_kind() == TK_LESS or cur_kind() == TK_GREATER or cur_kind() == TK_LESS_EQUAL or cur_kind() == TK_GREATER_EQUAL or cur_kind() == TK_IN:
+        op_s: str = op_to_str(cur_kind())
+        advance()
+        right: i64 = parse_shift()
+        left = mk_comparison(op_s, left, right)
+    return left
+
+# Level 10: Bit Shift << >>
+fun parse_shift() -> i64:
+    left: i64 = parse_addition()
+    while cur_kind() == TK_SHIFT_LEFT or cur_kind() == TK_SHIFT_RIGHT:
+        op_sh: str = op_to_str(cur_kind())
+        advance()
+        right: i64 = parse_addition()
+        left = mk_binary_op(op_sh, left, right)
+    return left
+
+# Level 11: Addition + -
+fun parse_addition() -> i64:
+    left: i64 = parse_multiplication()
+    while cur_kind() == TK_PLUS or cur_kind() == TK_MINUS:
+        op_a: str = op_to_str(cur_kind())
+        advance()
+        right: i64 = parse_multiplication()
+        left = mk_binary_op(op_a, left, right)
+    return left
+
+# Level 12: Multiplication * / %
+fun parse_multiplication() -> i64:
+    left: i64 = parse_unary()
+    while cur_kind() == TK_MULTIPLY or cur_kind() == TK_DIVIDE or cur_kind() == TK_MODULO:
+        op_m: str = op_to_str(cur_kind())
+        advance()
+        right: i64 = parse_unary()
+        left = mk_binary_op(op_m, left, right)
+    return left
+
+# Level 13: Unary - ~ await
+fun parse_unary() -> i64:
+    if cur_kind() == TK_MINUS:
+        advance()
+        operand: i64 = parse_unary()
+        return mk_unary_op("-", operand)
+    if cur_kind() == TK_BIT_NOT:
+        advance()
+        operand2: i64 = parse_unary()
+        return mk_unary_op("~", operand2)
+    if cur_kind() == TK_AWAIT:
+        advance()
+        operand3: i64 = parse_unary()
+        return mk_await(operand3)
+    return parse_cast()
+
+# Level 14: Cast — expr as type
+fun parse_cast() -> i64:
+    expr: i64 = parse_primary()
+    while cur_kind() == TK_AS:
+        advance()
+        target: str = parse_type_name()
+        expr = mk_cast(expr, target)
+    return expr
+
+# ==========================================
+# Type Name Parser (for cast, var decl, etc.)
+# ==========================================
+fun parse_type_name() -> str:
+    k: i32 = cur_kind()
+    ts: str = token_to_type_str(k)
+    if k == TK_TYPE:
+        ts = cur_val()
+    if str_eq(ts, "") == 0:
+        advance()
+        # Handle parametric types: ptr[T], list[T], map[K,V], array[T]
+        if cur_kind() == TK_LBRACKET:
+            advance()
+            inner: str = parse_type_name()
+            # Handle map[K,V]
+            if cur_kind() == TK_COMMA:
+                advance()
+                inner2: str = parse_type_name()
+                inner = Str.concat(Str.concat(inner, ","), inner2)
+            eat(TK_RBRACKET)
+            return Str.concat(Str.concat(Str.concat(ts, "["), inner), "]")
+        return ts
+    # Custom type (struct name, etc.)
+    if k == TK_IDENT:
+        tn: str = cur_val()
+        advance()
+        # Handle generic types: TypeName[T]
+        if cur_kind() == TK_LBRACKET:
+            advance()
+            inner3: str = parse_type_name()
+            eat(TK_RBRACKET)
+            return Str.concat(Str.concat(Str.concat(tn, "["), inner3), "]")
+        return tn
+    panic(@"Expected type name, got kind={k}")
+    return ""
+
+# ==========================================
+# Entry Point
+# ==========================================
+fun parse_expression() -> i64:
+    return parse_ternary()

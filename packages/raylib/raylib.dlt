@@ -1,0 +1,261 @@
+# Raylib Bindings for Dolet
+# Simple and easy-to-use library for games and GUI programming
+# Version: 5.5
+# https://www.raylib.com
+
+# ===== Struct Definitions =====
+
+# Font struct - matches raylib's Font structure
+# Note: Font is returned as pointer (i64) from LoadFont functions
+# and passed as pointer to drawing functions
+struct Font:
+    baseSize: i32        # Base size (default chars height)
+    glyphCount: i32      # Number of glyph characters
+    glyphPadding: i32    # Padding around the glyph characters
+    texture: i64         # Texture2D atlas containing the glyphs
+    recs: i64            # Rectangle* array with glyph rectangles
+    glyphs: i64          # GlyphInfo* array with glyph info
+
+# ===== Core Functions =====
+extern lib "raylib":
+    # Window Management
+    fun InitWindow(width: i32, height: i32, title: str)
+    fun CloseWindow()
+    fun WindowShouldClose() -> bool
+    fun IsWindowReady() -> bool
+    fun IsWindowFullscreen() -> bool
+    fun IsWindowHidden() -> bool
+    fun IsWindowMinimized() -> bool
+    fun IsWindowMaximized() -> bool
+    fun IsWindowFocused() -> bool
+    fun IsWindowResized() -> bool
+    fun SetWindowTitle(title: str)
+    fun SetWindowPosition(x: i32, y: i32)
+    fun SetWindowSize(width: i32, height: i32)
+    fun SetWindowMinSize(width: i32, height: i32)
+    fun GetScreenWidth() -> i32
+    fun GetScreenHeight() -> i32
+    
+    # Timing
+    fun SetTargetFPS(fps: i32)
+    fun GetFPS() -> i32
+    fun GetFrameTime() -> f32
+    fun GetTime() -> f64
+    
+    # Drawing
+    fun BeginDrawing()
+    fun EndDrawing()
+    fun ClearBackground(color: i32)
+    
+    # Text Drawing
+    fun DrawText(text: str, posX: i32, posY: i32, fontSize: i32, color: i32)
+    fun DrawFPS(posX: i32, posY: i32)
+    fun MeasureText(text: str, fontSize: i32) -> i32
+    
+    # Font Loading/Unloading
+    fun LoadFont(fileName: str) -> Font
+    fun LoadFontEx(fileName: str, fontSize: i32, codepoints: i64, codepointCount: i32) -> Font
+    fun UnloadFont(font: Font)
+    fun GetFontDefault() -> Font
+    
+    # Text Drawing with Custom Font (pass Font by value)
+    fun DrawTextEx(font: Font, text: str, position: i64, fontSize: f32, spacing: f32, color: i32)
+    fun DrawTextPro(font: Font, text: str, position: i64, origin: i64, rotation: f32, fontSize: f32, spacing: f32, color: i32)
+    fun MeasureTextEx(font: Font, text: str, fontSize: f32, spacing: f32) -> i64
+    
+    # Basic Shapes Drawing
+    fun DrawPixel(posX: i32, posY: i32, color: i32)
+    fun DrawLine(startPosX: i32, startPosY: i32, endPosX: i32, endPosY: i32, color: i32)
+    fun DrawCircle(centerX: i32, centerY: i32, radius: f32, color: i32)
+    fun DrawCircleV(center: i64, radius: f32, color: i32)
+    fun DrawRectangle(posX: i32, posY: i32, width: i32, height: i32, color: i32)
+    fun DrawRectangleRec(rec: i64, color: i32)
+    
+    # Input - Keyboard
+    fun IsKeyPressed(key: i32) -> bool
+    fun IsKeyDown(key: i32) -> bool
+    fun IsKeyReleased(key: i32) -> bool
+    fun IsKeyUp(key: i32) -> bool
+    fun GetKeyPressed() -> i32
+    
+    # Input - Mouse
+    fun IsMouseButtonPressed(button: i32) -> bool
+    fun IsMouseButtonDown(button: i32) -> bool
+    fun IsMouseButtonReleased(button: i32) -> bool
+    fun IsMouseButtonUp(button: i32) -> bool
+    fun GetMouseX() -> i32
+    fun GetMouseY() -> i32
+    fun GetMousePosition() -> i64
+    fun SetMousePosition(x: i32, y: i32)
+    
+    # Colors - Utility functions
+    fun ColorToInt(color: i64) -> i32
+    fun GetColor(hexValue: u32) -> i32
+    fun Fade(color: i32, alpha: f32) -> i32
+
+
+# ===== Raygui (GUI) Functions =====
+extern lib "raygui":
+    # Global GUI State
+    fun GuiEnable()
+    fun GuiDisable()
+    fun GuiLock()
+    fun GuiUnlock()
+    fun GuiIsLocked() -> bool
+    fun GuiFade(alpha: f32)
+    fun GuiSetState(state: i32)
+    fun GuiGetState() -> i32
+    
+    # Font Set/Get
+    fun GuiSetFont(font: i64)
+    fun GuiGetFont() -> i64
+    
+    # Style Set/Get
+    fun GuiSetStyle(control: i32, property: i32, value: i32)
+    fun GuiGetStyle(control: i32, property: i32) -> i32
+    
+    # Container/Separator Controls
+    fun GuiWindowBox(bounds: i64, title: str) -> bool
+    fun GuiGroupBox(bounds: i64, text: str)
+    fun GuiLine(bounds: i64, text: str)
+    fun GuiPanel(bounds: i64, text: str)
+    fun GuiScrollPanel(bounds: i64, text: str, content: i64, scroll: i64) -> i64
+    
+    # Basic Controls
+    fun GuiLabel(bounds: i64, text: str)
+    fun GuiButton(bounds: i64, text: str) -> bool
+    fun GuiLabelButton(bounds: i64, text: str) -> bool
+    fun GuiToggle(bounds: i64, text: str, active: bool) -> bool
+    fun GuiToggleGroup(bounds: i64, text: str, active: i32) -> i32
+    fun GuiCheckBox(bounds: i64, text: str, checked: bool) -> bool
+    fun GuiComboBox(bounds: i64, text: str, active: i32) -> i32
+    
+    # Advanced Controls
+    fun GuiDropdownBox(bounds: i64, text: str, active: i64, editMode: bool) -> bool
+    fun GuiSpinner(bounds: i64, text: str, value: i64, minValue: i32, maxValue: i32, editMode: bool) -> bool
+    fun GuiValueBox(bounds: i64, text: str, value: i64, minValue: i32, maxValue: i32, editMode: bool) -> bool
+    fun GuiTextBox(bounds: i64, text: i64, textSize: i32, editMode: bool) -> bool
+    fun GuiTextBoxMulti(bounds: i64, text: i64, textSize: i32, editMode: bool) -> bool
+    fun GuiSlider(bounds: i64, textLeft: str, textRight: str, value: f32, minValue: f32, maxValue: f32) -> f32
+    fun GuiSliderBar(bounds: i64, textLeft: str, textRight: str, value: f32, minValue: f32, maxValue: f32) -> f32
+    fun GuiProgressBar(bounds: i64, textLeft: str, textRight: str, value: f32, minValue: f32, maxValue: f32) -> f32
+    fun GuiStatusBar(bounds: i64, text: str)
+    fun GuiDummyRec(bounds: i64, text: str)
+    fun GuiGrid(bounds: i64, text: str, spacing: f32, subdivs: i32) -> i64
+    
+    # ListView Controls
+    fun GuiListView(bounds: i64, text: str, scrollIndex: i64, active: i32) -> i32
+    fun GuiListViewEx(bounds: i64, text: i64, count: i32, focus: i64, scrollIndex: i64, active: i32) -> i32
+    
+    # Text Box Controls
+    fun GuiMessageBox(bounds: i64, title: str, message: str, buttons: str) -> i32
+    fun GuiTextInputBox(bounds: i64, title: str, message: str, buttons: str, text: i64, textMaxSize: i32, secretViewActive: i64) -> i32
+    
+    # Color Picker Controls
+    fun GuiColorPicker(bounds: i64, text: str, color: i32) -> i32
+    fun GuiColorPanel(bounds: i64, text: str, color: i32) -> i32
+    fun GuiColorBarAlpha(bounds: i64, text: str, alpha: f32) -> f32
+    fun GuiColorBarHue(bounds: i64, text: str, value: f32) -> f32
+
+
+# ===== Color Constants =====
+# Raylib uses packed RGBA format
+# Colors in decimal (will be cast to i32)
+LIGHTGRAY: i32 = -3355444
+GRAY: i32 = -8355712
+DARKGRAY: i32 = -11250604
+YELLOW: i32 = -65026
+GOLD: i32 = -11008
+ORANGE: i32 = -23041
+PINK: i32 = -3368449
+RED: i32 = -724751
+MAROON: i32 = -7876722
+GREEN: i32 = -65536
+LIME: i32 = -65536
+DARKGREEN: i32 = -16743936
+SKYBLUE: i32 = -10185916
+BLUE: i32 = -13709281
+DARKBLUE: i32 = -16740097
+PURPLE: i32 = -9256632
+VIOLET: i32 = -13790953
+DARKPURPLE: i32 = -15351024
+BEIGE: i32 = -2766573
+BROWN: i32 = -7357297
+DARKBROWN: i32 = -13415853
+WHITE: i32 = -1
+BLACK: i32 = -16777216
+BLANK: i32 = 0
+MAGENTA: i32 = -65281
+RAYWHITE: i32 = -657931
+
+# ===== Key Constants =====
+KEY_NULL: i32 = 0
+KEY_APOSTROPHE: i32 = 39
+KEY_COMMA: i32 = 44
+KEY_MINUS: i32 = 45
+KEY_PERIOD: i32 = 46
+KEY_SLASH: i32 = 47
+KEY_ZERO: i32 = 48
+KEY_ONE: i32 = 49
+KEY_TWO: i32 = 50
+KEY_THREE: i32 = 51
+KEY_FOUR: i32 = 52
+KEY_FIVE: i32 = 53
+KEY_SIX: i32 = 54
+KEY_SEVEN: i32 = 55
+KEY_EIGHT: i32 = 56
+KEY_NINE: i32 = 57
+KEY_A: i32 = 65
+KEY_B: i32 = 66
+KEY_C: i32 = 67
+KEY_D: i32 = 68
+KEY_E: i32 = 69
+KEY_F: i32 = 70
+KEY_SPACE: i32 = 32
+KEY_ESCAPE: i32 = 256
+KEY_ENTER: i32 = 257
+KEY_TAB: i32 = 258
+KEY_BACKSPACE: i32 = 259
+KEY_RIGHT: i32 = 262
+KEY_LEFT: i32 = 263
+KEY_DOWN: i32 = 264
+KEY_UP: i32 = 265
+
+# Mouse Buttons
+MOUSE_BUTTON_LEFT: i32 = 0
+MOUSE_BUTTON_RIGHT: i32 = 1
+MOUSE_BUTTON_MIDDLE: i32 = 2
+
+
+# ===== Helper Structs =====
+struct Rectangle:
+    x: f32 = 0.0
+    y: f32 = 0.0
+    width: f32 = 0.0
+    height: f32 = 0.0
+
+struct Vector2:
+    x: f32 = 0.0
+    y: f32 = 0.0
+
+struct Color:
+    r: u8 = 255
+    g: u8 = 255
+    b: u8 = 255
+    a: u8 = 255
+
+
+# ===== Helper Functions =====
+fun rect(x: f32, y: f32, width: f32, height: f32) -> Rectangle:
+    r: Rectangle = Rectangle()
+    r.x = x
+    r.y = y
+    r.width = width
+    r.height = height
+    return r
+
+fun vec2(x: f32, y: f32) -> Vector2:
+    v: Vector2 = Vector2()
+    v.x = x
+    v.y = y
+    return v

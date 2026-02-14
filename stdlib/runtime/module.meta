@@ -1,0 +1,20 @@
+# Dolet Runtime Module Metadata
+# Core runtime library for Dolet programs
+
+[info]
+name = runtime
+version = 1.0.0
+description = Core runtime library providing memory, I/O, and system operations
+
+[link.windows]
+# System libraries required by runtime
+system_libs = kernel32, user32, gdi32, ws2_32
+
+[link.linux]
+flags = -lc -lpthread
+
+[link.macos]
+flags = -lc -lpthread
+
+[dependencies]
+# No external dependencies - this is the core runtime

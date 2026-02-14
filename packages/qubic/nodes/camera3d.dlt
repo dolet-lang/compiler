@@ -1,0 +1,190 @@
+# Camera3D - 3D Camera Node
+# Part of Qubic Game Engine
+# Inherits from Node3D and adds camera-specific properties
+
+import node3d
+
+# Camera3D extends Node3D - inherits all transform properties
+struct Camera3D extends Node3D:
+    # Camera3D specific properties
+    fov: f32 = 45.0
+    near_plane: f32 = 0.1
+    far_plane: f32 = 100.0
+    aspect_ratio: f32 = 1.7142857
+
+
+imple Camera3D:
+    # Override set_position with default z = 3.0 for camera
+    fun set_position(self, x: f32, y: f32, z: f32):
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+    
+    fun set_fov(self, new_fov: f32):
+        self.fov = new_fov
+    
+    fun get_view_matrix(self) -> i64:
+        matrix_ptr: i64 = Memory.malloc_zeroed(64)
+        zero: i64 = 0
+        if matrix_ptr == zero:
+            return zero
+        
+        pi: f32 = 3.14159265359
+        rad_x: f32 = self.rot_x * pi / 180.0
+        rad_y: f32 = self.rot_y * pi / 180.0
+        rad_z: f32 = self.rot_z * pi / 180.0
+        
+        cx: f32 = @cos(rad_x)
+        sx: f32 = @sin(rad_x)
+        cy: f32 = @cos(rad_y)
+        sy: f32 = @sin(rad_y)
+        cz: f32 = @cos(rad_z)
+        sz: f32 = @sin(rad_z)
+        
+        r00: f32 = cy * cz
+        r01: f32 = sx * sy * cz - cx * sz
+        r02: f32 = cx * sy * cz + sx * sz
+        r10: f32 = cy * sz
+        r11: f32 = sx * sy * sz + cx * cz
+        r12: f32 = cx * sy * sz - sx * cz
+        r20: f32 = -sy
+        r21: f32 = sx * cy
+        r22: f32 = cx * cy
+        
+        tx: f32 = -(r00 * self.pos_x + r10 * self.pos_y + r20 * self.pos_z)
+        ty: f32 = -(r01 * self.pos_x + r11 * self.pos_y + r21 * self.pos_z)
+        tz: f32 = -(r02 * self.pos_x + r12 * self.pos_y + r22 * self.pos_z)
+        
+        Memory.write_f32(matrix_ptr + 0, r00)
+        Memory.write_f32(matrix_ptr + 4, r01)
+        Memory.write_f32(matrix_ptr + 8, r02)
+        Memory.write_f32(matrix_ptr + 12, 0.0)
+        Memory.write_f32(matrix_ptr + 16, r10)
+        Memory.write_f32(matrix_ptr + 20, r11)
+        Memory.write_f32(matrix_ptr + 24, r12)
+        Memory.write_f32(matrix_ptr + 28, 0.0)
+        Memory.write_f32(matrix_ptr + 32, r20)
+        Memory.write_f32(matrix_ptr + 36, r21)
+        Memory.write_f32(matrix_ptr + 40, r22)
+        Memory.write_f32(matrix_ptr + 44, 0.0)
+        Memory.write_f32(matrix_ptr + 48, tx)
+        Memory.write_f32(matrix_ptr + 52, ty)
+        Memory.write_f32(matrix_ptr + 56, tz)
+        Memory.write_f32(matrix_ptr + 60, 1.0)
+        
+        return matrix_ptr
+
+    fun get_projection_matrix(self) -> i64:
+        matrix_ptr: i64 = Memory.malloc_zeroed(64)
+        zero: i64 = 0
+        if matrix_ptr == zero:
+            return zero
+        
+        pi: f32 = 3.14159265359
+        fov_rad: f32 = self.fov * pi / 180.0
+        half_fov: f32 = fov_rad / 2.0
+        tan_half_fov: f32 = @sin(half_fov) / @cos(half_fov)
+        
+        f: f32 = 1.0 / tan_half_fov
+        near: f32 = self.near_plane
+        far: f32 = self.far_plane
+        range_inv: f32 = 1.0 / (near - far)
+        
+        Memory.set(matrix_ptr, 0, 64)
+        
+        Memory.write_f32(matrix_ptr + 0, f / self.aspect_ratio)
+        Memory.write_f32(matrix_ptr + 20, -f)
+        Memory.write_f32(matrix_ptr + 40, far * range_inv)
+        Memory.write_f32(matrix_ptr + 44, -1.0)
+        Memory.write_f32(matrix_ptr + 56, near * far * range_inv)
+        
+        return matrix_ptr
+    
+    fun look_at(self, target_x: f32, target_y: f32, target_z: f32):
+        dir_x: f32 = target_x - self.pos_x
+        dir_y: f32 = target_y - self.pos_y
+        dir_z: f32 = target_z - self.pos_z
+        
+        len_sq: f32 = dir_x * dir_x + dir_y * dir_y + dir_z * dir_z
+        len: f32 = @sqrt(len_sq)
+        
+        if len < 0.0001:
+            return
+        
+        dir_x = dir_x / len
+        dir_y = dir_y / len
+        dir_z = dir_z / len
+        
+        pi: f32 = 3.14159265359
+        yaw: f32 = @atan2(dir_x, dir_z) * 180.0 / pi
+        pitch: f32 = @asin(-dir_y) * 180.0 / pi
+        
+        self.rot_x = pitch
+        self.rot_y = yaw
+        self.rot_z = 0.0
+    
+    # Rotate around Y axis (yaw - left/right look)
+    fun rotate_y(self, angle: f32):
+        pi: f32 = 3.14159265359
+        degrees: f32 = angle * 180.0 / pi
+        self.rot_y = self.rot_y + degrees
+    
+    # Rotate around X axis (pitch - up/down look)
+    fun rotate_x(self, angle: f32):
+        pi: f32 = 3.14159265359
+        degrees: f32 = angle * 180.0 / pi
+        self.rot_x = self.rot_x + degrees
+
+        # Clamp pitch to prevent camera flipping
+        if self.rot_x > 89.0:
+            self.rot_x = 89.0
+        if self.rot_x < -89.0:
+            self.rot_x = -89.0
+    
+    # Get global position X (includes parent position)
+    # Uses parent's get_global_position methods via transparent access
+    fun get_global_position_x(self) -> f32:
+        result: f32 = self.pos_x
+        zero: i64 = 0
+        if self.parent != zero:
+            # Access parent's pos_x - actual offset is 88 (verified by testing)
+            offset_x: i64 = 88
+            parent_x: f32 = Memory.read_f32(self.parent + offset_x)
+            result = result + parent_x
+        return result
+    
+    # Get global position Y (includes parent position)
+    fun get_global_position_y(self) -> f32:
+        result: f32 = self.pos_y
+        zero: i64 = 0
+        if self.parent != zero:
+            offset_y: i64 = 92
+            parent_y: f32 = Memory.read_f32(self.parent + offset_y)
+            result = result + parent_y
+        return result
+    
+    # Get global position Z (includes parent position)
+    fun get_global_position_z(self) -> f32:
+        result: f32 = self.pos_z
+        zero: i64 = 0
+        if self.parent != zero:
+            offset_z: i64 = 96
+            parent_z: f32 = Memory.read_f32(self.parent + offset_z)
+            result = result + parent_z
+        return result
+    
+    # Set parent directly (accepts Node3D - converted to pointer automatically)
+    fun set_parent(self, new_parent: Node3D):
+        self.parent = new_parent
+    
+    # Set parent from raw pointer
+    fun set_parent_ptr(self, new_parent: i64):
+        self.parent = new_parent
+    
+    # Get parent pointer
+    fun get_parent(self) -> i64:
+        return self.parent
+    
+    # Get pointer to self as i64 (for passing to functions that need i64 pointer)
+    fun get_ptr(self) -> i64:
+        return self

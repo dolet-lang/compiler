@@ -1,0 +1,30 @@
+struct Rand:
+    seed: i32 = 1
+
+    # توليد رقم عشوائي باستخدام Linear Congruential Generator (LCG)
+    fun next() -> i32:
+        self.seed = (self.seed * 1664525 + 1013904223) & 0x7fffffff
+        return self.seed
+
+    # توليد رقم بين min و max
+    fun range(min: i32, max: i32) -> i32:
+        n = self.next()
+        return min + (n % (max - min + 1))
+
+    # اختيار عنصر عشوائي من قائمة
+    fun choice(list_items: list[any]) -> any:
+        if len(list_items) == 0:
+            panic("choice() received empty list")
+
+        index: i32 = self.range(0, len(list_items) - 1)
+        return list_items[index]
+
+
+# ====== إنشاء كائن جاهز عالمي ======
+random = Rand()
+
+
+
+###### user usage #####
+#print(random.range(1,2,3,4,5))
+

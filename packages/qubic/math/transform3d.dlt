@@ -1,0 +1,156 @@
+# Transform3D - 4x4 Transformation Matrix
+# Part of Qubic Game Engine
+
+# Transform3D stores a 4x4 matrix for 3D transformations
+# Matrix is stored in column-major order (OpenGL/Vulkan convention)
+# Layout: [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15]
+# Where columns are: [0-3], [4-7], [8-11], [12-15]
+
+struct Transform3D:
+    # 4x4 matrix stored as 16 floats (column-major)
+    m0: f32 = 1.0   # Column 0
+    m1: f32 = 0.0
+    m2: f32 = 0.0
+    m3: f32 = 0.0
+    m4: f32 = 0.0   # Column 1
+    m5: f32 = 1.0
+    m6: f32 = 0.0
+    m7: f32 = 0.0
+    m8: f32 = 0.0   # Column 2
+    m9: f32 = 0.0
+    m10: f32 = 1.0
+    m11: f32 = 0.0
+    m12: f32 = 0.0  # Column 3 (translation)
+    m13: f32 = 0.0
+    m14: f32 = 0.0
+    m15: f32 = 1.0
+
+imple Transform3D:
+    # Create identity matrix
+    fun IDENTITY() -> Transform3D:
+        return Transform3D(
+            m0=1.0, m1=0.0, m2=0.0, m3=0.0,
+            m4=0.0, m5=1.0, m6=0.0, m7=0.0,
+            m8=0.0, m9=0.0, m10=1.0, m11=0.0,
+            m12=0.0, m13=0.0, m14=0.0, m15=1.0
+        )
+    
+    # Create translation matrix
+    fun from_position(pos_x: f32, pos_y: f32, pos_z: f32) -> Transform3D:
+        return Transform3D(
+            m0=1.0, m1=0.0, m2=0.0, m3=0.0,
+            m4=0.0, m5=1.0, m6=0.0, m7=0.0,
+            m8=0.0, m9=0.0, m10=1.0, m11=0.0,
+            m12=pos_x, m13=pos_y, m14=pos_z, m15=1.0
+        )
+    
+    # Create scale matrix
+    fun from_scale(scale_x: f32, scale_y: f32, scale_z: f32) -> Transform3D:
+        return Transform3D(
+            m0=scale_x, m1=0.0, m2=0.0, m3=0.0,
+            m4=0.0, m5=scale_y, m6=0.0, m7=0.0,
+            m8=0.0, m9=0.0, m10=scale_z, m11=0.0,
+            m12=0.0, m13=0.0, m14=0.0, m15=1.0
+        )
+
+    
+    # Create rotation matrix from Euler angles (in degrees)
+    # Rotation order: Z * Y * X (roll, yaw, pitch)
+    fun from_rotation(rot_x: f32, rot_y: f32, rot_z: f32) -> Transform3D:
+        # Convert degrees to radians
+        pi: f32 = 3.14159265359
+        rad_x: f32 = rot_x * pi / 180.0
+        rad_y: f32 = rot_y * pi / 180.0
+        rad_z: f32 = rot_z * pi / 180.0
+        
+        # Precompute sin/cos
+        cx: f32 = @cos(rad_x)
+        sx: f32 = @sin(rad_x)
+        cy: f32 = @cos(rad_y)
+        sy: f32 = @sin(rad_y)
+        cz: f32 = @cos(rad_z)
+        sz: f32 = @sin(rad_z)
+        
+        # Combined rotation matrix (Z * Y * X)
+        return Transform3D(
+            m0=cy * cz, m1=cy * sz, m2=-sy, m3=0.0,
+            m4=sx * sy * cz - cx * sz, m5=sx * sy * sz + cx * cz, m6=sx * cy, m7=0.0,
+            m8=cx * sy * cz + sx * sz, m9=cx * sy * sz - sx * cz, m10=cx * cy, m11=0.0,
+            m12=0.0, m13=0.0, m14=0.0, m15=1.0
+        )
+    
+    # Compose a full transformation matrix from position, rotation, and scale
+    # Order: Scale -> Rotate -> Translate (applied right to left)
+    fun compose(pos_x: f32, pos_y: f32, pos_z: f32, rot_x: f32, rot_y: f32, rot_z: f32, scale_x: f32, scale_y: f32, scale_z: f32) -> Transform3D:
+        # Convert degrees to radians
+        pi: f32 = 3.14159265359
+        rad_x: f32 = rot_x * pi / 180.0
+        rad_y: f32 = rot_y * pi / 180.0
+        rad_z: f32 = rot_z * pi / 180.0
+        
+        # Precompute sin/cos
+        cx: f32 = @cos(rad_x)
+        sx: f32 = @sin(rad_x)
+        cy: f32 = @cos(rad_y)
+        sy: f32 = @sin(rad_y)
+        cz: f32 = @cos(rad_z)
+        sz: f32 = @sin(rad_z)
+        
+        # Combined rotation matrix elements (Z * Y * X)
+        r00: f32 = cy * cz
+        r01: f32 = cy * sz
+        r02: f32 = -sy
+        r10: f32 = sx * sy * cz - cx * sz
+        r11: f32 = sx * sy * sz + cx * cz
+        r12: f32 = sx * cy
+        r20: f32 = cx * sy * cz + sx * sz
+        r21: f32 = cx * sy * sz - sx * cz
+        r22: f32 = cx * cy
+        
+        # Apply scale to rotation matrix and add translation
+        return Transform3D(
+            m0=r00 * scale_x, m1=r01 * scale_x, m2=r02 * scale_x, m3=0.0,
+            m4=r10 * scale_y, m5=r11 * scale_y, m6=r12 * scale_y, m7=0.0,
+            m8=r20 * scale_z, m9=r21 * scale_z, m10=r22 * scale_z, m11=0.0,
+            m12=pos_x, m13=pos_y, m14=pos_z, m15=1.0
+        )
+    
+    # Multiply two matrices
+    fun multiply(self, other: Transform3D) -> Transform3D:
+        # Column 0
+        n0: f32 = self.m0 * other.m0 + self.m4 * other.m1 + self.m8 * other.m2 + self.m12 * other.m3
+        n1: f32 = self.m1 * other.m0 + self.m5 * other.m1 + self.m9 * other.m2 + self.m13 * other.m3
+        n2: f32 = self.m2 * other.m0 + self.m6 * other.m1 + self.m10 * other.m2 + self.m14 * other.m3
+        n3: f32 = self.m3 * other.m0 + self.m7 * other.m1 + self.m11 * other.m2 + self.m15 * other.m3
+        # Column 1
+        n4: f32 = self.m0 * other.m4 + self.m4 * other.m5 + self.m8 * other.m6 + self.m12 * other.m7
+        n5: f32 = self.m1 * other.m4 + self.m5 * other.m5 + self.m9 * other.m6 + self.m13 * other.m7
+        n6: f32 = self.m2 * other.m4 + self.m6 * other.m5 + self.m10 * other.m6 + self.m14 * other.m7
+        n7: f32 = self.m3 * other.m4 + self.m7 * other.m5 + self.m11 * other.m6 + self.m15 * other.m7
+        # Column 2
+        n8: f32 = self.m0 * other.m8 + self.m4 * other.m9 + self.m8 * other.m10 + self.m12 * other.m11
+        n9: f32 = self.m1 * other.m8 + self.m5 * other.m9 + self.m9 * other.m10 + self.m13 * other.m11
+        n10: f32 = self.m2 * other.m8 + self.m6 * other.m9 + self.m10 * other.m10 + self.m14 * other.m11
+        n11: f32 = self.m3 * other.m8 + self.m7 * other.m9 + self.m11 * other.m10 + self.m15 * other.m11
+        # Column 3
+        n12: f32 = self.m0 * other.m12 + self.m4 * other.m13 + self.m8 * other.m14 + self.m12 * other.m15
+        n13: f32 = self.m1 * other.m12 + self.m5 * other.m13 + self.m9 * other.m14 + self.m13 * other.m15
+        n14: f32 = self.m2 * other.m12 + self.m6 * other.m13 + self.m10 * other.m14 + self.m14 * other.m15
+        n15: f32 = self.m3 * other.m12 + self.m7 * other.m13 + self.m11 * other.m14 + self.m15 * other.m15
+        
+        return Transform3D(
+            m0=n0, m1=n1, m2=n2, m3=n3,
+            m4=n4, m5=n5, m6=n6, m7=n7,
+            m8=n8, m9=n9, m10=n10, m11=n11,
+            m12=n12, m13=n13, m14=n14, m15=n15
+        )
+    
+    # Get translation component
+    fun get_position_x(self) -> f32:
+        return self.m12
+    
+    fun get_position_y(self) -> f32:
+        return self.m13
+    
+    fun get_position_z(self) -> f32:
+        return self.m14

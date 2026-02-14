@@ -1,0 +1,206 @@
+# Node3D - 3D Node with Transform
+# Part of Qubic Game Engine
+# Inherits from Node and adds 3D transform properties
+
+import node
+
+# Node3D extends Node - inherits name, owner, children management
+struct Node3D extends Node:
+    # Parent pointer for transform inheritance
+    parent: i64 = 0
+    
+    # 3D Transform - Position
+    pos_x: f32 = 0.0
+    pos_y: f32 = 0.0
+    pos_z: f32 = 0.0
+    
+    # 3D Transform - Rotation in degrees
+    rot_x: f32 = 0.0
+    rot_y: f32 = 0.0
+    rot_z: f32 = 0.0
+    
+    # 3D Transform - Scale with default 1.0
+    scale_x: f32 = 1.0
+    scale_y: f32 = 1.0
+    scale_z: f32 = 1.0
+
+
+imple Node3D:
+    # Node methods are inherited from Node base class
+    
+    # Set position
+    fun set_position(self, x: f32, y: f32, z: f32):
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+    
+    # Set rotation in degrees
+    fun set_rotation(self, x: f32, y: f32, z: f32):
+        self.rot_x = x
+        self.rot_y = y
+        self.rot_z = z
+    
+    # Set scale
+    fun set_scale(self, x: f32, y: f32, z: f32):
+        self.scale_x = x
+        self.scale_y = y
+        self.scale_z = z
+    
+    # Get position components
+    fun get_position_x(self) -> f32:
+        return self.pos_x
+    
+    fun get_position_y(self) -> f32:
+        return self.pos_y
+    
+    fun get_position_z(self) -> f32:
+        return self.pos_z
+    
+    # Look at a target position
+    fun look_at(self, target_x: f32, target_y: f32, target_z: f32):
+        dir_x: f32 = target_x - self.pos_x
+        dir_y: f32 = target_y - self.pos_y
+        dir_z: f32 = target_z - self.pos_z
+        
+        len_sq: f32 = dir_x * dir_x + dir_y * dir_y + dir_z * dir_z
+        len: f32 = @sqrt(len_sq)
+        
+        if len < 0.0001:
+            return
+        
+        dir_x = dir_x / len
+        dir_y = dir_y / len
+        dir_z = dir_z / len
+        
+        pi: f32 = 3.14159265359
+        yaw: f32 = @atan2(dir_x, dir_z) * 180.0 / pi
+        pitch: f32 = @asin(-dir_y) * 180.0 / pi
+        
+        self.rot_x = pitch
+        self.rot_y = yaw
+        self.rot_z = 0.0
+    
+    # Get global position X (includes parent position)
+    fun get_global_position_x(self) -> f32:
+        result: f32 = self.pos_x
+        zero: i64 = 0
+        if self.parent != zero:
+            # Read parent's pos_x (actual offset is 88 - verified by testing)
+            offset_x: i64 = 88
+            parent_x: f32 = Memory.read_f32(self.parent + offset_x)
+            result = result + parent_x
+        return result
+    
+    # Get global position Y (includes parent position)
+    fun get_global_position_y(self) -> f32:
+        result: f32 = self.pos_y
+        zero: i64 = 0
+        if self.parent != zero:
+            offset_y: i64 = 92
+            parent_y: f32 = Memory.read_f32(self.parent + offset_y)
+            result = result + parent_y
+        return result
+    
+    # Get global position Z (includes parent position)
+    fun get_global_position_z(self) -> f32:
+        result: f32 = self.pos_z
+        zero: i64 = 0
+        if self.parent != zero:
+            offset_z: i64 = 96
+            parent_z: f32 = Memory.read_f32(self.parent + offset_z)
+            result = result + parent_z
+        return result
+    
+    # Get global rotation X (local only - rotation doesn't inherit simply)
+    fun get_global_rotation_x(self) -> f32:
+        return self.rot_x
+    
+    # Get global rotation Y (local only)
+    fun get_global_rotation_y(self) -> f32:
+        return self.rot_y
+    
+    # Get global rotation Z (local only)
+    fun get_global_rotation_z(self) -> f32:
+        return self.rot_z
+    
+    # Set parent directly
+    fun set_parent(self, new_parent: i64):
+        self.parent = new_parent
+    
+    # Get parent pointer
+    fun get_parent(self) -> i64:
+        return self.parent
+    
+    # Get model matrix (4x4 transformation matrix)
+    # Combines position, rotation, and scale into a single matrix
+    # Returns pointer to 64 bytes (16 floats) - caller must free
+    fun get_model_matrix(self) -> i64:
+        matrix_ptr: i64 = Memory.malloc_zeroed(64)
+        zero: i64 = 0
+        if matrix_ptr == zero:
+            return zero
+        
+        # Get global position (includes parent)
+        px: f32 = self.get_global_position_x()
+        py: f32 = self.get_global_position_y()
+        pz: f32 = self.get_global_position_z()
+        
+        # Get rotation (local only for now)
+        rx: f32 = self.rot_x
+        ry: f32 = self.rot_y
+        rz: f32 = self.rot_z
+        
+        # Get scale
+        sx: f32 = self.scale_x
+        sy: f32 = self.scale_y
+        sz: f32 = self.scale_z
+        
+        # Convert rotation to radians
+        pi: f32 = 3.14159265359
+        rad_x: f32 = rx * pi / 180.0
+        rad_y: f32 = ry * pi / 180.0
+        rad_z: f32 = rz * pi / 180.0
+        
+        # Calculate rotation matrix components
+        cx: f32 = @cos(rad_x)
+        sx_r: f32 = @sin(rad_x)
+        cy: f32 = @cos(rad_y)
+        sy_r: f32 = @sin(rad_y)
+        cz: f32 = @cos(rad_z)
+        sz_r: f32 = @sin(rad_z)
+        
+        # Combined rotation matrix (ZYX order) with scale
+        # R = Rz * Ry * Rx, then multiply by scale
+        r00: f32 = (cy * cz) * sx
+        r01: f32 = (sx_r * sy_r * cz - cx * sz_r) * sx
+        r02: f32 = (cx * sy_r * cz + sx_r * sz_r) * sx
+        r10: f32 = (cy * sz_r) * sy
+        r11: f32 = (sx_r * sy_r * sz_r + cx * cz) * sy
+        r12: f32 = (cx * sy_r * sz_r - sx_r * cz) * sy
+        r20: f32 = (-sy_r) * sz
+        r21: f32 = (sx_r * cy) * sz
+        r22: f32 = (cx * cy) * sz
+        
+        # Write column-major matrix for Vulkan
+        # Column 0
+        Memory.write_f32(matrix_ptr + 0, r00)
+        Memory.write_f32(matrix_ptr + 4, r01)
+        Memory.write_f32(matrix_ptr + 8, r02)
+        Memory.write_f32(matrix_ptr + 12, 0.0)
+        # Column 1
+        Memory.write_f32(matrix_ptr + 16, r10)
+        Memory.write_f32(matrix_ptr + 20, r11)
+        Memory.write_f32(matrix_ptr + 24, r12)
+        Memory.write_f32(matrix_ptr + 28, 0.0)
+        # Column 2
+        Memory.write_f32(matrix_ptr + 32, r20)
+        Memory.write_f32(matrix_ptr + 36, r21)
+        Memory.write_f32(matrix_ptr + 40, r22)
+        Memory.write_f32(matrix_ptr + 44, 0.0)
+        # Column 3 (translation)
+        Memory.write_f32(matrix_ptr + 48, px)
+        Memory.write_f32(matrix_ptr + 52, py)
+        Memory.write_f32(matrix_ptr + 56, pz)
+        Memory.write_f32(matrix_ptr + 60, 1.0)
+        
+        return matrix_ptr

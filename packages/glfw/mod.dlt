@@ -1,0 +1,6 @@
+# ============================
+#  GLFW Module Entry Point
+# ============================
+# This is the required entry point (mod.dlt) for the GLFW module
+
+import glfw

@@ -1,0 +1,423 @@
+# Qubic Engine - Vulkan Context
+# Handles Vulkan instance, physical device, logical device, and queues
+
+import glfw
+import vulkan
+
+# ===== Global Vulkan Constants =====
+const g_VK_STRUCTURE_TYPE_APPLICATION_INFO: i32 = 0
+const g_VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO: i32 = 1
+const g_VK_API_VERSION_1_0: i32 = 4194304  # (1 << 22)
+const g_VK_SUCCESS: i32 = 0
+
+# ===== Vulkan Context =====
+
+struct VulkanContext:
+    instance: i64 = 0
+    physical_device: i64 = 0
+    device: i64 = 0
+    graphics_queue: i64 = 0
+    present_queue: i64 = 0
+    graphics_queue_family: i32 = -1
+    present_queue_family: i32 = -1
+    is_initialized: i32 = 0
+
+    # Initialize Vulkan instance with proper structures
+    fun init(self) -> i32:
+        print("Initializing Vulkan...")
+        
+        # Get required GLFW extensions
+        ext_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if ext_count_ptr == 0:
+            print("Error: Failed to allocate extension count")
+            return 0
+        
+        Memory.write_i32(ext_count_ptr, 0)
+        extensions: i64 = glfwGetRequiredInstanceExtensions(ext_count_ptr)
+        ext_count: i32 = Memory.read_i32(ext_count_ptr)
+        Memory.free(ext_count_ptr)
+        
+        if extensions == 0:
+            print("Error: Failed to get GLFW required extensions")
+            return 0
+        
+        print("GLFW extensions found")
+        
+        # Allocate VkApplicationInfo (64 bytes)
+        app_info: i64 = Memory.malloc_zeroed(64)
+        if app_info == 0:
+            print("Error: Failed to allocate app info")
+            return 0
+        
+        Memory.zero(app_info, 64)
+        
+        # Set VkApplicationInfo fields (correct 64-bit offsets)
+        Memory.write_i32(app_info, 0)                   # sType = VK_STRUCTURE_TYPE_APPLICATION_INFO
+        Memory.write_ptr(app_info + 8, 0)               # pNext = NULL
+        Memory.write_ptr(app_info + 16, 0)              # pApplicationName = NULL
+        Memory.write_i32(app_info + 24, 1)              # applicationVersion = 1
+        Memory.write_ptr(app_info + 32, 0)              # pEngineName = NULL
+        Memory.write_i32(app_info + 40, 1)              # engineVersion = 1
+        Memory.write_i32(app_info + 44, 4194304)        # apiVersion = VK_API_VERSION_1_0
+        
+        # Allocate VkInstanceCreateInfo (128 bytes)
+        instance_info: i64 = Memory.malloc_zeroed(128)
+        if instance_info == 0:
+            print("Error: Failed to allocate instance info")
+            Memory.free(app_info)
+            return 0
+        
+        Memory.zero(instance_info, 128)
+        
+        # Set VkInstanceCreateInfo fields with GLFW extensions
+        Memory.write_i32(instance_info, 1)               # sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO
+        Memory.write_ptr(instance_info + 8, 0)           # pNext = NULL
+        Memory.write_i32(instance_info + 16, 0)          # flags = 0
+        Memory.write_ptr(instance_info + 24, app_info)   # pApplicationInfo
+        Memory.write_i32(instance_info + 32, 0)          # enabledLayerCount = 0
+        Memory.write_ptr(instance_info + 40, 0)          # ppEnabledLayerNames = NULL
+        Memory.write_i32(instance_info + 48, ext_count)  # enabledExtensionCount
+        Memory.write_ptr(instance_info + 56, extensions) # ppEnabledExtensionNames
+        
+        # Allocate storage for instance handle
+        instance_ptr: i64 = Memory.malloc_zeroed(8)
+        if instance_ptr == 0:
+            print("Error: Failed to allocate instance pointer")
+            Memory.free(app_info)
+            Memory.free(instance_info)
+            return 0
+        
+        Memory.zero(instance_ptr, 8)
+        
+        # Create Vulkan instance
+        vk_result: i32 = vkCreateInstance(instance_info, 0, instance_ptr)
+        
+        if vk_result == 0:  # VK_SUCCESS
+            self.instance = Memory.read_ptr(instance_ptr)
+            self.is_initialized = 1
+            print("Vulkan instance created successfully!")
+            
+            Memory.free(instance_ptr)
+            Memory.free(instance_info)
+            Memory.free(app_info)
+            return 1
+        else:
+            print("Error: vkCreateInstance failed")
+            
+            Memory.free(instance_ptr)
+            Memory.free(instance_info)
+            Memory.free(app_info)
+            return 0
+    
+    # Enumerate physical devices
+    fun enumerate_devices(self) -> i32:
+        if self.is_initialized == 0:
+            print("Error: Vulkan not initialized")
+            return 0
+        
+        # Allocate device count
+        device_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if device_count_ptr == 0:
+            print("Error: Failed to allocate device count")
+            return 0
+        
+        Memory.write_i32(device_count_ptr, 0)
+        
+        # Get device count
+        enum_result: i32 = vkEnumeratePhysicalDevices(self.instance, device_count_ptr, 0)
+        
+        if enum_result != 0:  # VK_SUCCESS
+            print("Error: Failed to enumerate physical devices")
+            Memory.free(device_count_ptr)
+            return 0
+        
+        device_count: i32 = Memory.read_i32(device_count_ptr)
+        print("Physical devices enumerated")
+        
+        if device_count > 0:
+            # Allocate array for devices
+            devices_ptr: i64 = Memory.malloc_zeroed(device_count * 8)
+            if devices_ptr == 0:
+                print("Error: Failed to allocate devices array")
+                Memory.free(device_count_ptr)
+                return 0
+            
+            # Get devices
+            enum_result = vkEnumeratePhysicalDevices(self.instance, device_count_ptr, devices_ptr)
+            
+            if enum_result == 0:  # VK_SUCCESS
+                # Check all devices and print their names
+                i: i32 = 0
+                while i < device_count:
+                    device: i64 = Memory.read_ptr(devices_ptr + (i * 8))
+                    
+                    # Get device properties to check type
+                    props: i64 = Memory.malloc_zeroed(1024)
+                    if props != 0:
+                        vkGetPhysicalDeviceProperties(device, props)
+                        
+                        # Device type at offset 8 (after apiVersion)
+                        device_type: i32 = Memory.read_i32(props + 8)
+                        
+                        print("GPU found - checking type...")
+                        
+                        # Device type: 0=Other, 1=Integrated, 2=Discrete, 3=Virtual, 4=CPU
+                        if device_type == 2:
+                            print("  Type: DISCRETE GPU (NVIDIA RTX)")
+                            self.physical_device = device
+                            print("  >> SELECTED THIS GPU!")
+                        else:
+                            if device_type == 1:
+                                print("  Type: INTEGRATED GPU (Intel UHD)")
+                            else:
+                                print("  Type: Other GPU")
+                            
+                            if self.physical_device == 0:
+                                self.physical_device = device
+                                print("  >> Selected (no discrete GPU found)")
+                        
+                        Memory.free(props)
+                    
+                    i = i + 1
+                
+                if self.physical_device != 0:
+                    print("Physical device selected")
+            
+            Memory.free(devices_ptr)
+        
+        Memory.free(device_count_ptr)
+        return device_count
+    
+    # Find queue families that support graphics and present
+    fun find_queue_families(self, surface: i64) -> i32:
+        if self.physical_device == 0:
+            print("Error: No physical device selected")
+            return 0
+        
+        # Get queue family count
+        queue_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if queue_count_ptr == 0:
+            print("Error: Failed to allocate queue count")
+            return 0
+        
+        Memory.write_i32(queue_count_ptr, 0)
+        vkGetPhysicalDeviceQueueFamilyProperties(self.physical_device, queue_count_ptr, 0)
+        queue_count: i32 = Memory.read_i32(queue_count_ptr)
+        
+        if queue_count == 0:
+            print("Error: No queue families found")
+            Memory.free(queue_count_ptr)
+            return 0
+        
+        # Allocate queue family properties array
+        properties_size: i64 = (queue_count as i64) * 24
+        properties: i64 = Memory.malloc_zeroed(properties_size)
+        if properties == 0:
+            print("Error: Failed to allocate queue properties")
+            Memory.free(queue_count_ptr)
+            return 0
+        
+        Memory.zero(properties, properties_size)
+        vkGetPhysicalDeviceQueueFamilyProperties(self.physical_device, queue_count_ptr, properties)
+        
+        # Find graphics and present queues
+        graphics_found: i32 = 0
+        present_found: i32 = 0
+        
+        i: i32 = 0
+        while i < queue_count:
+            queue_flags: i32 = Memory.read_i32(properties + (i * 24))
+            
+            # VK_QUEUE_GRAPHICS_BIT = 0x00000001
+            if (queue_flags % 2) != 0:
+                self.graphics_queue_family = i
+                graphics_found = 1
+            
+            # Check present support
+            present_support_ptr: i64 = Memory.malloc_zeroed(4)
+            if present_support_ptr != 0:
+                Memory.write_i32(present_support_ptr, 0)
+                vkGetPhysicalDeviceSurfaceSupportKHR(self.physical_device, i, surface, present_support_ptr)
+                present_support: i32 = Memory.read_i32(present_support_ptr)
+                
+                if present_support != 0:
+                    self.present_queue_family = i
+                    present_found = 1
+                
+                Memory.free(present_support_ptr)
+            
+            i = i + 1
+        
+        Memory.free(properties)
+        Memory.free(queue_count_ptr)
+        
+        if graphics_found == 1 && present_found == 1:
+            print("Queue families found")
+            print("  Graphics queue family:")
+            print(self.graphics_queue_family)
+            print("  Present queue family:")
+            print(self.present_queue_family)
+            return 1
+        else:
+            print("Error: Required queue families not found")
+            return 0
+    
+    # Create logical device and get queues
+    fun create_device(self) -> i32:
+        if self.physical_device == 0:
+            print("Error: No physical device")
+            return 0
+        
+        if self.graphics_queue_family == -1:
+            print("Error: Queue families not found")
+            return 0
+        
+        # Queue priority
+        priority_ptr: i64 = Memory.malloc_zeroed(4)
+        if priority_ptr == 0:
+            print("Error: Failed to allocate priority")
+            return 0
+        
+        Memory.write_f32(priority_ptr, 1.0)
+        
+        # Check if graphics and present queues are different families
+        queue_create_count: i32 = 1
+        if self.graphics_queue_family != self.present_queue_family:
+            queue_create_count = 2
+        
+        # VkDeviceQueueCreateInfo struct (40 bytes with 64-bit alignment)
+        # Allocate space for 1 or 2 queue create infos
+        queue_create_info: i64 = Memory.malloc_zeroed(128)
+        if queue_create_info == 0:
+            print("Error: Failed to allocate queue create info")
+            Memory.free(priority_ptr)
+            return 0
+        
+        Memory.zero(queue_create_info, 128)
+        
+        # First queue create info (graphics)
+        Memory.write_i32(queue_create_info, 2)                              # sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO
+        Memory.write_ptr(queue_create_info + 8, 0)                          # pNext
+        Memory.write_i32(queue_create_info + 16, 0)                         # flags
+        Memory.write_i32(queue_create_info + 20, self.graphics_queue_family) # queueFamilyIndex
+        Memory.write_i32(queue_create_info + 24, 1)                         # queueCount
+        Memory.write_ptr(queue_create_info + 32, priority_ptr)              # pQueuePriorities
+        
+        # Second queue create info (present) - only if different from graphics
+        if self.graphics_queue_family != self.present_queue_family:
+            queue_create_info_2: i64 = queue_create_info + 64
+            Memory.write_i32(queue_create_info_2, 2)                              # sType
+            Memory.write_ptr(queue_create_info_2 + 8, 0)                          # pNext
+            Memory.write_i32(queue_create_info_2 + 16, 0)                         # flags
+            Memory.write_i32(queue_create_info_2 + 20, self.present_queue_family) # queueFamilyIndex
+            Memory.write_i32(queue_create_info_2 + 24, 1)                         # queueCount
+            Memory.write_ptr(queue_create_info_2 + 32, priority_ptr)              # pQueuePriorities
+        
+        # Device extensions (swapchain)
+        ext_names_ptr: i64 = Memory.malloc_zeroed(8)
+        if ext_names_ptr == 0:
+            print("Error: Failed to allocate extension names")
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+        
+        swapchain_ext_name: str = "VK_KHR_swapchain"
+        Memory.write_ptr(ext_names_ptr, swapchain_ext_name as i64)
+        
+        # VkDeviceCreateInfo struct (72 bytes with 64-bit alignment)
+        device_create_info: i64 = Memory.malloc_zeroed(128)
+        if device_create_info == 0:
+            print("Error: Failed to allocate device create info")
+            Memory.free(ext_names_ptr)
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+        
+        Memory.zero(device_create_info, 128)
+        Memory.write_i32(device_create_info, 3)                          # sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO
+        Memory.write_ptr(device_create_info + 8, 0)                      # pNext
+        Memory.write_i32(device_create_info + 16, 0)                     # flags
+        Memory.write_i32(device_create_info + 20, queue_create_count)    # queueCreateInfoCount (1 or 2)
+        Memory.write_ptr(device_create_info + 24, queue_create_info)    # pQueueCreateInfos
+        Memory.write_i32(device_create_info + 32, 0)                     # enabledLayerCount
+        Memory.write_ptr(device_create_info + 40, 0)                     # ppEnabledLayerNames
+        Memory.write_i32(device_create_info + 48, 1)                     # enabledExtensionCount
+        Memory.write_ptr(device_create_info + 56, ext_names_ptr)        # ppEnabledExtensionNames
+        Memory.write_ptr(device_create_info + 64, 0)                     # pEnabledFeatures
+        
+        # Create device
+        device_ptr: i64 = Memory.malloc_zeroed(8)
+        if device_ptr == 0:
+            print("Error: Failed to allocate device pointer")
+            Memory.free(device_create_info)
+            Memory.free(ext_names_ptr)
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+        
+        Memory.zero(device_ptr, 8)
+        create_result: i32 = vkCreateDevice(self.physical_device, device_create_info, 0, device_ptr)
+        
+        if create_result == 0:  # VK_SUCCESS
+            self.device = Memory.read_ptr(device_ptr)
+            print("Logical device created!")
+            
+            # Get graphics queue
+            graphics_queue_ptr: i64 = Memory.malloc_zeroed(8)
+            if graphics_queue_ptr != 0:
+                Memory.zero(graphics_queue_ptr, 8)
+                vkGetDeviceQueue(self.device, self.graphics_queue_family, 0, graphics_queue_ptr)
+                self.graphics_queue = Memory.read_ptr(graphics_queue_ptr)
+                print("Graphics queue retrieved:")
+                print(self.graphics_queue)
+                Memory.free(graphics_queue_ptr)
+            
+            # Get present queue
+            present_queue_ptr: i64 = Memory.malloc_zeroed(8)
+            if present_queue_ptr != 0:
+                Memory.zero(present_queue_ptr, 8)
+                vkGetDeviceQueue(self.device, self.present_queue_family, 0, present_queue_ptr)
+                self.present_queue = Memory.read_ptr(present_queue_ptr)
+                print("Present queue retrieved:")
+                print(self.present_queue)
+                Memory.free(present_queue_ptr)
+            
+            print("Queues retrieved!")
+            
+            Memory.free(device_ptr)
+            Memory.free(device_create_info)
+            Memory.free(ext_names_ptr)
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 1
+        else:
+            print("Error: Failed to create logical device")
+            Memory.free(device_ptr)
+            Memory.free(device_create_info)
+            Memory.free(ext_names_ptr)
+            Memory.free(queue_create_info)
+            Memory.free(priority_ptr)
+            return 0
+    
+    # Cleanup Vulkan resources
+    fun cleanup(self):
+        if self.is_initialized == 1:
+            # Destroy logical device first
+            if self.device != 0:
+                vkDeviceWaitIdle(self.device)
+                vkDestroyDevice(self.device, 0)
+                self.device = 0
+                print("Logical device destroyed")
+            
+            # Then destroy instance
+            if self.instance != 0:
+                vkDestroyInstance(self.instance, 0)
+                self.instance = 0
+                print("Vulkan instance destroyed")
+            
+            self.is_initialized = 0
+    
+    # Check if Vulkan is ready
+    fun is_ready(self) -> i32:
+        return self.is_initialized
+

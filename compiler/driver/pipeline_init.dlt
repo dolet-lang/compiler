@@ -1,0 +1,140 @@
+##############################
+# Pipeline Init
+# Workaround for Python MLIR generator global init bug.
+# Explicitly initializes ALL constants for tokenizer, parser, and codegen.
+##############################
+
+fun init_tokenizer_constants():
+    TK_EOF = 0
+    TK_NEWLINE = 1
+    TK_IDENT = 2
+    TK_INT = 3
+    TK_INT64 = 4
+    TK_FLOAT = 5
+    TK_STRING = 6
+    TK_CHAR = 7
+    TK_FSTRING = 8
+    TK_BOOL = 9
+    TK_NULL = 10
+    TK_HEX = 11
+    TK_BINARY = 12
+    TK_OCTAL = 13
+    TK_TYPE = 14
+    TK_PLUS = 20
+    TK_MINUS = 21
+    TK_MULTIPLY = 22
+    TK_DIVIDE = 23
+    TK_MODULO = 24
+    TK_ASSIGN = 25
+    TK_EQUAL = 26
+    TK_NOT_EQUAL = 27
+    TK_LESS = 28
+    TK_GREATER = 29
+    TK_LESS_EQUAL = 30
+    TK_GREATER_EQUAL = 31
+    TK_AND = 32
+    TK_OR = 33
+    TK_NOT = 34
+    TK_BIT_AND = 35
+    TK_BIT_OR = 36
+    TK_BIT_XOR = 37
+    TK_BIT_NOT = 38
+    TK_SHIFT_LEFT = 39
+    TK_SHIFT_RIGHT = 40
+    TK_PLUS_PLUS = 41
+    TK_MINUS_MINUS = 42
+    TK_PLUS_ASSIGN = 43
+    TK_MINUS_ASSIGN = 44
+    TK_MULT_ASSIGN = 45
+    TK_DIV_ASSIGN = 46
+    TK_ARROW = 47
+    TK_LPAREN = 50
+    TK_RPAREN = 51
+    TK_LBRACKET = 52
+    TK_RBRACKET = 53
+    TK_LEFT_BRACE = 54
+    TK_RIGHT_BRACE = 55
+    TK_COLON = 56
+    TK_COMMA = 57
+    TK_DOT = 58
+    TK_SEMICOLON = 59
+    TK_QUESTION = 60
+    TK_RANGE = 61
+    TK_ELLIPSIS = 62
+    TK_AT = 63
+    TK_IF = 70
+    TK_ELSE = 71
+    TK_ELIF = 72
+    TK_WHILE = 73
+    TK_FOR = 74
+    TK_BREAK = 75
+    TK_CONTINUE = 76
+    TK_FUN = 77
+    TK_RETURN = 78
+    TK_STRUCT = 79
+    TK_ENUM = 80
+    TK_TRAIT = 81
+    TK_IMPL = 82
+    TK_EXTENDS = 83
+    TK_SELF = 84
+    TK_SUPER = 85
+    TK_IMPORT = 86
+    TK_FROM = 87
+    TK_EXTERN = 88
+    TK_USE = 89
+    TK_MATCH = 90
+    TK_CASE = 91
+    TK_IN = 92
+    TK_TO = 93
+    TK_STEP = 94
+    TK_AS = 95
+    TK_IS = 96
+    TK_CONST = 97
+    TK_STATIC = 98
+    TK_MUT = 99
+    TK_PUBLIC = 100
+    TK_PRIVATE = 101
+    TK_PROTECT = 102
+    TK_ABSTRACT = 103
+    TK_ASYNC = 104
+    TK_AWAIT = 105
+    TK_PASS = 106
+    TK_EXTEND = 107
+    TK_TYPE_ALIAS = 108
+    TK_STACK = 109
+    TK_CODE_BLOCK = 110
+    TK_BUILTIN_CALL = 111
+    TK_LIST = 112
+    TK_MAP = 113
+    TK_ARRAY = 114
+    TK_I8 = 120
+    TK_I16 = 121
+    TK_I32 = 122
+    TK_I64 = 123
+    TK_I128 = 124
+    TK_PTR = 125
+    TK_U8 = 126
+    TK_U16 = 127
+    TK_U32 = 128
+    TK_U64 = 129
+    TK_U128 = 130
+    TK_F32 = 131
+    TK_F64 = 132
+    TK_STR_TYPE = 133
+    TK_CHAR_TYPE = 134
+
+fun init_tokenizer_buffers():
+    MAX_TOKENS = 8192
+    out_kinds = Memory.malloc_zeroed(32768)
+    out_values = Memory.malloc_zeroed(65536)
+    out_indents = Memory.malloc_zeroed(32768)
+    out_count = 0
+    tok_pos = 0
+    tok_len = 0
+    tok_indent = 0
+    tok_at_line_start = 1
+
+fun init_pipeline():
+    init_tokenizer_constants()
+    init_tokenizer_buffers()
+    init_ast_constants()

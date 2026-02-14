@@ -1,0 +1,266 @@
+# CubeMesh3D - Cube Mesh Resource Type
+# Part of Qubic Game Engine
+# Requirements: 7.1
+
+# CubeMesh3D generates a cube mesh with configurable size
+# THE engine SHALL provide a create_cube_mesh() function that returns cube vertex data (Requirement 7.1)
+
+# Vertex format: 6 floats per vertex (pos_x, pos_y, pos_z, color_r, color_g, color_b)
+# A cube has 6 faces × 2 triangles × 3 vertices = 36 vertices
+
+# Cull mode constants
+# CULL_BACK = 0: Cull back faces (default, solid cube visible from outside)
+# CULL_FRONT = 1: Cull front faces (cube visible from inside)
+# CULL_NONE = 2: No culling (both sides visible)
+
+struct CubeMesh3D:
+    # Inherited from Mesh
+    vertices: i64 = 0           # Pointer to vertex data
+    vertex_count: i32 = 0       # Number of vertices (36 for a cube)
+    is_generated: i32 = 0       # 1 if mesh data exists
+    
+    # Parent pointer for transform inheritance
+    parent: i64 = 0
+    
+    # Position (local offset from parent)
+    pos_x: f32 = 0.0
+    pos_y: f32 = 0.0
+    pos_z: f32 = 0.0
+    
+    # Cube specific - default 1x1x1
+    size_x: f32 = 1.0
+    size_y: f32 = 1.0
+    size_z: f32 = 1.0
+    
+    # Cull mode: 0=BACK (default), 1=FRONT, 2=NONE
+    cull_mode: i32 = 0
+
+imple CubeMesh3D:
+    # Get pointer to vertex data
+    fun get_vertices(self) -> i64:
+        return self.vertices
+    
+    # Get number of vertices
+    fun get_vertex_count(self) -> i32:
+        return self.vertex_count
+    
+    # Check if mesh has been generated
+    fun is_valid(self) -> i32:
+        return self.is_generated
+    
+    # Get size of vertex data in bytes
+    fun get_vertex_data_size(self) -> i32:
+        return self.vertex_count * 24
+    
+    # Set cube scale
+    fun set_scale(self, x: f32, y: f32, z: f32):
+        self.size_x = x
+        self.size_y = y
+        self.size_z = z
+        # Regenerate if already generated
+        if self.is_generated == 1:
+            self.generate()
+    
+    # Set cull mode: 0=BACK, 1=FRONT, 2=NONE
+    fun set_cull_mode(self, mode: i32):
+        self.cull_mode = mode
+        if self.is_generated == 1:
+            self.generate()
+    
+    # Get current cull mode
+    fun get_cull_mode(self) -> i32:
+        return self.cull_mode
+    
+    # Generate cube vertex data based on size and cull_mode
+    # Creates 36 vertices (6 faces × 2 triangles × 3 vertices)
+    # cull_mode affects winding order:
+    #   0 (BACK): CCW winding - visible from outside
+    #   1 (FRONT): CW winding - visible from inside  
+    #   2 (NONE): CCW winding (renderer should disable culling)
+    fun generate(self):
+        # Free existing data if any
+        if self.vertices != 0:
+            Memory.free(self.vertices)
+        
+        # 36 vertices × 6 floats × 4 bytes = 864 bytes
+        self.vertices = Memory.malloc_zeroed(864)
+        if self.vertices == 0:
+            self.is_generated = 0
+            return
+        
+        self.vertex_count = 36
+        
+        # Half sizes for centering the cube at origin
+        hx: f32 = self.size_x / 2.0
+        hy: f32 = self.size_y / 2.0
+        hz: f32 = self.size_z / 2.0
+        
+        # Vertex offset counter (in bytes)
+        offset: i64 = 0
+        
+        # Check if we need CW winding (for FRONT culling / inside view)
+        # cull_mode 1 = FRONT means we want to see from inside, so use CW
+        if self.cull_mode == 1:
+            # CW winding - visible from inside
+            # Front face (z = +hz) - Red
+            offset = self._write_vertex(offset, -hx, -hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 1.0, 0.0, 0.0)
+            
+            # Back face (z = -hz) - Green
+            offset = self._write_vertex(offset, hx, -hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 0.0, 1.0, 0.0)
+            
+            # Top face (y = +hy) - Blue
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 0.0, 1.0)
+            
+            # Bottom face (y = -hy) - Yellow
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, -hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, hz, 1.0, 1.0, 0.0)
+            
+            # Right face (x = +hx) - Magenta
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, -hy, -hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 1.0, 0.0, 1.0)
+            
+            # Left face (x = -hx) - Cyan
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, -hy, hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 1.0, 1.0)
+        else:
+            # CCW winding - visible from outside (BACK cull or NONE)
+            # Front face (z = +hz) - Red
+            offset = self._write_vertex(offset, -hx, -hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 1.0, 0.0, 0.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 1.0, 0.0, 0.0)
+            
+            # Back face (z = -hz) - Green
+            offset = self._write_vertex(offset, hx, -hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 0.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 1.0, 0.0)
+            
+            # Top face (y = +hy) - Blue
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 0.0, 0.0, 1.0)
+            
+            # Bottom face (y = -hy) - Yellow
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, -hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, -hx, -hy, hz, 1.0, 1.0, 0.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 1.0, 0.0)
+            
+            # Right face (x = +hx) - Magenta
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, -hy, -hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, -hy, hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, hz, 1.0, 0.0, 1.0)
+            offset = self._write_vertex(offset, hx, hy, -hz, 1.0, 0.0, 1.0)
+            
+            # Left face (x = -hx) - Cyan
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, -hy, hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, -hy, -hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, -hz, 0.0, 1.0, 1.0)
+            offset = self._write_vertex(offset, -hx, hy, hz, 0.0, 1.0, 1.0)
+        
+        self.is_generated = 1
+    
+    # Helper to write a single vertex (6 floats = 24 bytes)
+    # Returns the new offset
+    fun _write_vertex(self, offset: i64, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32) -> i64:
+        Memory.write_f32(self.vertices + offset, px)
+        Memory.write_f32(self.vertices + offset + 4, py)
+        Memory.write_f32(self.vertices + offset + 8, pz)
+        Memory.write_f32(self.vertices + offset + 12, cr)
+        Memory.write_f32(self.vertices + offset + 16, cg)
+        Memory.write_f32(self.vertices + offset + 20, cb)
+        return offset + 24
+    
+    # Set position (local offset from parent)
+    fun set_position(self, x: f32, y: f32, z: f32):
+        self.pos_x = x
+        self.pos_y = y
+        self.pos_z = z
+    
+    # Get global position X (includes parent position)
+    fun get_global_position_x(self) -> f32:
+        result: f32 = self.pos_x
+        if self.parent != 0:
+            # Parent's pos_x is at offset 48 in Node3D
+            parent_x: f32 = Memory.read_f32(self.parent + 48)
+            result = result + parent_x
+        return result
+    
+    # Get global position Y (includes parent position)
+    fun get_global_position_y(self) -> f32:
+        result: f32 = self.pos_y
+        if self.parent != 0:
+            parent_y: f32 = Memory.read_f32(self.parent + 52)
+            result = result + parent_y
+        return result
+    
+    # Get global position Z (includes parent position)
+    fun get_global_position_z(self) -> f32:
+        result: f32 = self.pos_z
+        if self.parent != 0:
+            parent_z: f32 = Memory.read_f32(self.parent + 56)
+            result = result + parent_z
+        return result
+    
+    # Set parent (accepts Node3D - converted to pointer automatically)
+    fun set_parent(self, new_parent: Node3D):
+        self.parent = new_parent
+    
+    # Set parent from raw pointer
+    fun set_parent_ptr(self, new_parent: i64):
+        self.parent = new_parent
+    
+    # Get parent pointer
+    fun get_parent(self) -> i64:
+        return self.parent
+    
+    # Free mesh resources
+    fun free(self):
+        if self.vertices != 0:
+            Memory.free(self.vertices)
+            self.vertices = 0
+        self.vertex_count = 0
+        self.is_generated = 0
+
+

@@ -1,0 +1,50 @@
+{
+  "platform": {
+    "name": "windows",
+    "architecture": "x64",
+    "abi_name": "Microsoft x64 Calling Convention"
+  },
+  "struct_rules": {
+    "return": {
+      "small_threshold": 16,
+      "small_method": "direct",
+      "large_method": "sret"
+    },
+    "parameter": {
+      "small_threshold": 16,
+      "small_method": "byval",
+      "large_method": "byref"
+    }
+  },
+  "registers": {
+    "integer_params": ["RCX", "RDX", "R8", "R9"],
+    "float_params": ["XMM0", "XMM1", "XMM2", "XMM3"],
+    "return_int": "RAX",
+    "return_float": "XMM0"
+  },
+  "stack": {
+    "alignment": 16,
+    "shadow_space": 32,
+    "grows_down": true
+  },
+  "features": {
+    "supports_sret": true,
+    "supports_byval": true,
+    "requires_shadow_space": true,
+    "i128_as_pointer": true,
+    "u128_as_pointer": true
+  },
+  "type_sizes": {
+    "i8": 1,
+    "i16": 2,
+    "i32": 4,
+    "i64": 8,
+    "f32": 4,
+    "f64": 8,
+    "ptr": 8,
+    "bool": 1,
+    "i128": 16,
+    "u128": 16
+  },
+  "c_library_names": ["c", "c-std", "libc", "msvcrt"]
+}

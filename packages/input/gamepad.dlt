@@ -1,0 +1,458 @@
+# ============================
+#  Gamepad Constants and Functions
+# ============================
+# Gamepad button constants and input functions
+# Requirements: 6.1-6.6, 7.1-7.7
+
+# ----- XInput Extern Functions -----
+# Requirements: 7.1
+extern lib "xinput1_4":
+    fun XInputGetState(dwUserIndex: i32, pState: i64) -> i32
+
+# ----- XINPUT_GAMEPAD Structure -----
+# XInput gamepad state structure
+struct XINPUT_GAMEPAD:
+    wButtons: i16 = 0       # Button bitmask
+    bLeftTrigger: i8 = 0    # Left trigger (0-255)
+    bRightTrigger: i8 = 0   # Right trigger (0-255)
+    sThumbLX: i16 = 0       # Left stick X (-32768 to 32767)
+    sThumbLY: i16 = 0       # Left stick Y (-32768 to 32767)
+    sThumbRX: i16 = 0       # Right stick X (-32768 to 32767)
+    sThumbRY: i16 = 0       # Right stick Y (-32768 to 32767)
+
+# ----- XINPUT_STATE Structure -----
+# Requirements: 7.1
+struct XINPUT_STATE:
+    dwPacketNumber: i32 = 0  # Packet number for state changes
+    Gamepad: XINPUT_GAMEPAD = XINPUT_GAMEPAD()
+
+# ----- XInput Button Masks -----
+# These are the actual XInput button bit positions
+XINPUT_GAMEPAD_DPAD_UP: i16 = 1        # 0x0001
+XINPUT_GAMEPAD_DPAD_DOWN: i16 = 2      # 0x0002
+XINPUT_GAMEPAD_DPAD_LEFT: i16 = 4      # 0x0004
+XINPUT_GAMEPAD_DPAD_RIGHT: i16 = 8     # 0x0008
+XINPUT_GAMEPAD_START: i16 = 16         # 0x0010
+XINPUT_GAMEPAD_BACK: i16 = 32          # 0x0020
+XINPUT_GAMEPAD_LEFT_THUMB: i16 = 64    # 0x0040
+XINPUT_GAMEPAD_RIGHT_THUMB: i16 = 128  # 0x0080
+XINPUT_GAMEPAD_LEFT_SHOULDER: i16 = 256   # 0x0100
+XINPUT_GAMEPAD_RIGHT_SHOULDER: i16 = 512  # 0x0200
+XINPUT_GAMEPAD_A: i16 = 4096           # 0x1000
+XINPUT_GAMEPAD_B: i16 = 8192           # 0x2000
+XINPUT_GAMEPAD_X: i16 = 16384          # 0x4000
+XINPUT_GAMEPAD_Y_MASK: i16 = -32768    # 0x8000 (signed i16)
+
+# XInput error codes
+ERROR_SUCCESS: i32 = 0
+ERROR_DEVICE_NOT_CONNECTED: i32 = 1167
+
+# ----- Face Buttons (Xbox layout) -----
+# Requirements: 6.1
+GAMEPAD_A: i32 = 0
+GAMEPAD_B: i32 = 1
+GAMEPAD_X: i32 = 2
+GAMEPAD_Y: i32 = 3
+
+# ----- Shoulder Buttons -----
+# Requirements: 6.2
+GAMEPAD_LB: i32 = 4
+GAMEPAD_RB: i32 = 5
+
+# ----- Triggers (as buttons) -----
+# Requirements: 6.3
+GAMEPAD_LT: i32 = 6
+GAMEPAD_RT: i32 = 7
+
+# ----- Stick Buttons -----
+# Requirements: 6.4
+GAMEPAD_LSTICK: i32 = 8
+GAMEPAD_RSTICK: i32 = 9
+
+# ----- D-pad -----
+# Requirements: 6.5
+GAMEPAD_DPAD_UP: i32 = 10
+GAMEPAD_DPAD_DOWN: i32 = 11
+GAMEPAD_DPAD_LEFT: i32 = 12
+GAMEPAD_DPAD_RIGHT: i32 = 13
+
+# ----- Menu Buttons -----
+# Requirements: 6.6
+GAMEPAD_START: i32 = 14
+GAMEPAD_BACK: i32 = 15
+
+# ----- Stick Indices -----
+STICK_LEFT: i32 = 0
+STICK_RIGHT: i32 = 1
+
+# ----- Trigger Indices -----
+TRIGGER_LEFT: i32 = 0
+TRIGGER_RIGHT: i32 = 1
+
+# ----- Max Players -----
+# Requirements: 7.7
+MAX_GAMEPADS: i32 = 4
+
+# ----- Global Gamepad State -----
+# State tracking for just_pressed and just_released detection
+g_gamepad_buttons_0: i32 = 0       # Player 0 current button state
+g_gamepad_buttons_1: i32 = 0       # Player 1 current button state
+g_gamepad_buttons_2: i32 = 0       # Player 2 current button state
+g_gamepad_buttons_3: i32 = 0       # Player 3 current button state
+g_gamepad_prev_buttons_0: i32 = 0  # Player 0 previous button state
+g_gamepad_prev_buttons_1: i32 = 0  # Player 1 previous button state
+g_gamepad_prev_buttons_2: i32 = 0  # Player 2 previous button state
+g_gamepad_prev_buttons_3: i32 = 0  # Player 3 previous button state
+
+# ----- Helper Functions -----
+
+# Convert our button constant to XInput button mask
+fun button_to_xinput_mask(button: i32) -> i16:
+    if button == GAMEPAD_A:
+        return XINPUT_GAMEPAD_A
+    if button == GAMEPAD_B:
+        return XINPUT_GAMEPAD_B
+    if button == GAMEPAD_X:
+        return XINPUT_GAMEPAD_X
+    if button == GAMEPAD_Y:
+        return XINPUT_GAMEPAD_Y_MASK
+    if button == GAMEPAD_LB:
+        return XINPUT_GAMEPAD_LEFT_SHOULDER
+    if button == GAMEPAD_RB:
+        return XINPUT_GAMEPAD_RIGHT_SHOULDER
+    if button == GAMEPAD_LSTICK:
+        return XINPUT_GAMEPAD_LEFT_THUMB
+    if button == GAMEPAD_RSTICK:
+        return XINPUT_GAMEPAD_RIGHT_THUMB
+    if button == GAMEPAD_DPAD_UP:
+        return XINPUT_GAMEPAD_DPAD_UP
+    if button == GAMEPAD_DPAD_DOWN:
+        return XINPUT_GAMEPAD_DPAD_DOWN
+    if button == GAMEPAD_DPAD_LEFT:
+        return XINPUT_GAMEPAD_DPAD_LEFT
+    if button == GAMEPAD_DPAD_RIGHT:
+        return XINPUT_GAMEPAD_DPAD_RIGHT
+    if button == GAMEPAD_START:
+        return XINPUT_GAMEPAD_START
+    if button == GAMEPAD_BACK:
+        return XINPUT_GAMEPAD_BACK
+    # LT and RT are analog triggers, not buttons in XInput
+    return 0
+
+# Get current button state for a player
+fun get_gamepad_buttons(player: i32) -> i32:
+    if player == 0:
+        return g_gamepad_buttons_0
+    if player == 1:
+        return g_gamepad_buttons_1
+    if player == 2:
+        return g_gamepad_buttons_2
+    if player == 3:
+        return g_gamepad_buttons_3
+    return 0
+
+# Get previous button state for a player
+fun get_gamepad_prev_buttons(player: i32) -> i32:
+    if player == 0:
+        return g_gamepad_prev_buttons_0
+    if player == 1:
+        return g_gamepad_prev_buttons_1
+    if player == 2:
+        return g_gamepad_prev_buttons_2
+    if player == 3:
+        return g_gamepad_prev_buttons_3
+    return 0
+
+# Set current button state for a player
+fun set_gamepad_buttons(player: i32, buttons: i32):
+    if player == 0:
+        g_gamepad_buttons_0 = buttons
+    if player == 1:
+        g_gamepad_buttons_1 = buttons
+    if player == 2:
+        g_gamepad_buttons_2 = buttons
+    if player == 3:
+        g_gamepad_buttons_3 = buttons
+
+# Set previous button state for a player
+fun set_gamepad_prev_buttons(player: i32, buttons: i32):
+    if player == 0:
+        g_gamepad_prev_buttons_0 = buttons
+    if player == 1:
+        g_gamepad_prev_buttons_1 = buttons
+    if player == 2:
+        g_gamepad_prev_buttons_2 = buttons
+    if player == 3:
+        g_gamepad_prev_buttons_3 = buttons
+
+# ----- Gamepad Connection Functions -----
+# Requirements: 7.1, 7.7
+
+# Check if a gamepad is connected for the given player index
+# Returns 1 if connected, 0 otherwise
+# Requirements: 7.1, 7.7
+fun gamepad_connected(player: i32) -> i32:
+    # Validate player index (0-3)
+    if player < 0 or player > 3:
+        return 0
+    
+    # Create state structure
+    state: XINPUT_STATE = XINPUT_STATE()
+    
+    # Call XInputGetState
+    result: i32 = XInputGetState(player, state as i64)
+    
+    # Return 1 if connected (ERROR_SUCCESS), 0 otherwise
+    if result == ERROR_SUCCESS:
+        return 1
+    return 0
+
+# ----- Gamepad Button Functions -----
+# Requirements: 7.2, 7.3
+
+# Check if a gamepad button is currently pressed
+# Returns 1 if pressed, 0 otherwise
+# Requirements: 7.2
+fun gamepad_pressed(player: i32, button: i32) -> i32:
+    # Validate player index (0-3)
+    if player < 0 or player > 3:
+        return 0
+    
+    # Validate button code (0-15)
+    if button < 0 or button > 15:
+        return 0
+    
+    # Create state structure
+    state: XINPUT_STATE = XINPUT_STATE()
+    
+    # Call XInputGetState
+    result: i32 = XInputGetState(player, state as i64)
+    
+    # If not connected, return 0
+    if result != ERROR_SUCCESS:
+        return 0
+    
+    # Handle triggers as buttons (LT and RT)
+    if button == GAMEPAD_LT:
+        # Left trigger - threshold at 128 (half pressed)
+        trigger_val: i32 = state.Gamepad.bLeftTrigger as i32
+        if trigger_val < 0:
+            trigger_val = trigger_val + 256
+        if trigger_val > 128:
+            return 1
+        return 0
+    
+    if button == GAMEPAD_RT:
+        # Right trigger - threshold at 128 (half pressed)
+        trigger_val: i32 = state.Gamepad.bRightTrigger as i32
+        if trigger_val < 0:
+            trigger_val = trigger_val + 256
+        if trigger_val > 128:
+            return 1
+        return 0
+    
+    # Get XInput button mask
+    mask: i16 = button_to_xinput_mask(button)
+    if mask == 0:
+        return 0
+    
+    # Check if button is pressed in the bitmask
+    buttons: i16 = state.Gamepad.wButtons
+    if (buttons & mask) != 0:
+        return 1
+    return 0
+
+# Check if a gamepad button was just pressed this frame
+# Returns 1 only on the first frame the button was pressed
+# Requirements: 7.3
+fun gamepad_just_pressed(player: i32, button: i32) -> i32:
+    # Validate player index (0-3)
+    if player < 0 or player > 3:
+        return 0
+    
+    # Validate button code (0-15)
+    if button < 0 or button > 15:
+        return 0
+    
+    # Get current state
+    current: i32 = gamepad_pressed(player, button)
+    
+    # Get previous state from our tracking
+    prev_buttons: i32 = get_gamepad_prev_buttons(player)
+    prev: i32 = (prev_buttons >> button) & 1
+    
+    # Just pressed if currently pressed but wasn't pressed last frame
+    if current == 1 and prev == 0:
+        return 1
+    return 0
+
+# Check if a gamepad button was just released this frame
+# Returns 1 only on the first frame the button was released
+# Requirements: 7.3
+fun gamepad_just_released(player: i32, button: i32) -> i32:
+    # Validate player index (0-3)
+    if player < 0 or player > 3:
+        return 0
+    
+    # Validate button code (0-15)
+    if button < 0 or button > 15:
+        return 0
+    
+    # Get current state
+    current: i32 = gamepad_pressed(player, button)
+    
+    # Get previous state from our tracking
+    prev_buttons: i32 = get_gamepad_prev_buttons(player)
+    prev: i32 = (prev_buttons >> button) & 1
+    
+    # Just released if currently not pressed but was pressed last frame
+    if current == 0 and prev == 1:
+        return 1
+    return 0
+
+# ----- Gamepad Analog Functions -----
+# Requirements: 7.4, 7.5, 7.6
+
+# Get the X axis value of a gamepad stick
+# Returns value from -1.0 to 1.0
+# stick: 0 = left stick, 1 = right stick
+# Requirements: 7.4
+fun gamepad_stick_x(player: i32, stick: i32) -> f32:
+    # Validate player index (0-3)
+    if player < 0 or player > 3:
+        return 0.0
+    
+    # Validate stick index (0-1)
+    if stick < 0 or stick > 1:
+        return 0.0
+    
+    # Create state structure
+    state: XINPUT_STATE = XINPUT_STATE()
+    
+    # Call XInputGetState
+    result: i32 = XInputGetState(player, state as i64)
+    
+    # If not connected, return 0
+    if result != ERROR_SUCCESS:
+        return 0.0
+    
+    # Get the appropriate stick X value
+    raw_value: i16 = 0
+    if stick == STICK_LEFT:
+        raw_value = state.Gamepad.sThumbLX
+    else:
+        raw_value = state.Gamepad.sThumbRX
+    
+    # Normalize to -1.0 to 1.0
+    # i16 range is -32768 to 32767
+    normalized: f32 = (raw_value as f32) / 32767.0
+    
+    # Clamp to -1.0 to 1.0
+    if normalized < -1.0:
+        return -1.0
+    if normalized > 1.0:
+        return 1.0
+    return normalized
+
+# Get the Y axis value of a gamepad stick
+# Returns value from -1.0 to 1.0
+# stick: 0 = left stick, 1 = right stick
+# Requirements: 7.5
+fun gamepad_stick_y(player: i32, stick: i32) -> f32:
+    # Validate player index (0-3)
+    if player < 0 or player > 3:
+        return 0.0
+    
+    # Validate stick index (0-1)
+    if stick < 0 or stick > 1:
+        return 0.0
+    
+    # Create state structure
+    state: XINPUT_STATE = XINPUT_STATE()
+    
+    # Call XInputGetState
+    result: i32 = XInputGetState(player, state as i64)
+    
+    # If not connected, return 0
+    if result != ERROR_SUCCESS:
+        return 0.0
+    
+    # Get the appropriate stick Y value
+    raw_value: i16 = 0
+    if stick == STICK_LEFT:
+        raw_value = state.Gamepad.sThumbLY
+    else:
+        raw_value = state.Gamepad.sThumbRY
+    
+    # Normalize to -1.0 to 1.0
+    # i16 range is -32768 to 32767
+    normalized: f32 = (raw_value as f32) / 32767.0
+    
+    # Clamp to -1.0 to 1.0
+    if normalized < -1.0:
+        return -1.0
+    if normalized > 1.0:
+        return 1.0
+    return normalized
+
+# Get the value of a gamepad trigger
+# Returns value from 0.0 to 1.0
+# trigger: 0 = left trigger, 1 = right trigger
+# Requirements: 7.6
+fun gamepad_trigger(player: i32, trigger: i32) -> f32:
+    # Validate player index (0-3)
+    if player < 0 or player > 3:
+        return 0.0
+    
+    # Validate trigger index (0-1)
+    if trigger < 0 or trigger > 1:
+        return 0.0
+    
+    # Create state structure
+    state: XINPUT_STATE = XINPUT_STATE()
+    
+    # Call XInputGetState
+    result: i32 = XInputGetState(player, state as i64)
+    
+    # If not connected, return 0
+    if result != ERROR_SUCCESS:
+        return 0.0
+    
+    # Get the appropriate trigger value
+    raw_value: i8 = 0
+    if trigger == TRIGGER_LEFT:
+        raw_value = state.Gamepad.bLeftTrigger
+    else:
+        raw_value = state.Gamepad.bRightTrigger
+    
+    # Convert i8 to unsigned value (0-255)
+    unsigned_value: i32 = raw_value as i32
+    if unsigned_value < 0:
+        unsigned_value = unsigned_value + 256
+    
+    # Normalize to 0.0 to 1.0
+    # i8 range is 0 to 255
+    normalized: f32 = (unsigned_value as f32) / 255.0
+    return normalized
+
+# ----- Gamepad State Update Function -----
+# Called once per frame to update gamepad state for just_pressed/just_released
+
+fun update_gamepad():
+    # Update state for all 4 players
+    player: i32 = 0
+    while player < 4:
+        # Copy current to previous
+        current: i32 = get_gamepad_buttons(player)
+        set_gamepad_prev_buttons(player, current)
+        
+        # Build new current state bitmask
+        new_buttons: i32 = 0
+        button: i32 = 0
+        while button < 16:
+            if gamepad_pressed(player, button) == 1:
+                new_buttons = new_buttons | (1 << button)
+            button = button + 1
+        
+        set_gamepad_buttons(player, new_buttons)
+        player = player + 1

@@ -1,0 +1,132 @@
+# Qubic Engine - Process System
+# Provides a clean game loop abstraction similar to Godot's _process(delta)
+#
+# Usage:
+#   Process.init(window)
+#   
+#   Process.loop():
+#       # Your game logic here - this runs every frame!
+#       if InputKey.is_key_pressed(KEY_W):
+#           player.move_forward()
+#
+# The loop() method handles:
+#   - Window should_close check (while loop)
+#   - Window polling events
+#   - InputKey.update()
+#   - Delta time calculation
+#   - Render frame
+
+import glfw
+
+struct Process:
+    # Static fields for singleton pattern
+    static window_handle: i64 = 0
+    static is_running: i32 = 0
+    static delta_time: f64 = 0.0
+    static last_frame_time: f64 = 0.0
+    static frame_count: i64 = 0
+    
+    # Dummy field (structs need at least one instance field)
+    _dummy: i32 = 0
+
+
+    # ============================================
+    # Initialization
+    # ============================================
+    
+    static fun init(win: Window):
+        """Initialize the Process system with a window"""
+        Process.window_handle = win.window_handle
+        Process.is_running = 1
+        Process.last_frame_time = glfwGetTime()
+        Process.frame_count = 0
+        Process.delta_time = 0.0
+    
+    # ============================================
+    # Main Loop with @CodeBlock injection
+    # ============================================
+    
+    static fun loop():
+        """Game loop - user code runs every frame inside this loop
+        
+        Usage:
+            Process.loop():
+                # This code runs every frame!
+                player.update()
+        """
+        while Process._should_continue():
+            Process._begin_frame()
+
+            @CodeBlock # User code injected here
+
+            Process._end_frame()
+        #print("Game ended!")
+
+        
+    # ============================================
+    # Internal Loop Helpers
+    # ============================================
+    
+    static fun _should_continue() -> bool:
+        """Check if the loop should continue"""
+        if Process.window_handle == 0:
+            return false
+        return glfwWindowShouldClose(Process.window_handle) == 0
+    
+    static fun _begin_frame():
+        """Called at the start of each frame"""
+        # Poll events
+        glfwPollEvents()
+        
+        # Update input
+        InputKey.update()
+        
+        # Calculate delta time
+        current_time: f64 = glfwGetTime()
+        Process.delta_time = current_time - Process.last_frame_time
+        Process.last_frame_time = current_time
+        Process.frame_count = Process.frame_count + 1
+    
+    static fun _end_frame():
+        """Called at the end of each frame - renders the frame"""
+        # Note: Window needs to call _render_frame()
+        # This will be handled by the window reference
+        return
+    
+    # ============================================
+    # Public Getters
+    # ============================================
+    
+    static fun get_delta() -> f64:
+        """Get the time elapsed since last frame in seconds"""
+        return Process.delta_time
+    
+    static fun get_fps() -> f64:
+        """Get approximate frames per second"""
+        one: f64 = 1.0
+        zero: f64 = 0.0
+        if Process.delta_time > zero:
+            result: f64 = one / Process.delta_time
+            return result
+        return zero
+    
+    static fun get_frame_count() -> i64:
+        """Get total number of frames since start"""
+        return Process.frame_count
+    
+    static fun is_running() -> bool:
+        """Check if the process loop is still running"""
+        return Process.is_running == 1
+    
+    # ============================================
+    # Cleanup
+    # ============================================
+    
+    static fun stop():
+        """Stop the process loop"""
+        Process.is_running = 0
+    
+    static fun cleanup():
+        """Cleanup resources"""
+        Process.is_running = 0
+        Process.window_handle = 0

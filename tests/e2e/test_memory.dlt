@@ -1,0 +1,10 @@
+# Test: runtime auto-import (Memory, Convert, IOOps, Str)
+val: i32 = 0
+s: str = ""
+msg: str = ""
+buf: i64 = Memory.malloc_zeroed(16)
+Memory.write_i32(buf, 42)
+val = Memory.read_i32(buf)
+s = Convert.i64_to_str(val as i64)
+msg = Str.concat("Result: ", s)
+IOOps.io_println(msg)

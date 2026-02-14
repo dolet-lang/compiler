@@ -1,0 +1,108 @@
+# ============================
+#  Win32 user32.dll Bindings
+# ============================
+# Extern function declarations for user32.dll
+# Requirements: 7.1
+# Note: Using ASCII versions (A suffix) for compatibility with Dolet UTF-8 strings
+
+extern lib "user32":
+    # ----- Window Class Registration -----
+    # Registers a window class for subsequent use in calls to CreateWindowExA
+    fun RegisterClassExA(lpWndClass: i64) -> i16
+    
+    # Unregisters a window class, freeing the memory required for the class
+    fun UnregisterClassA(lpClassName: i64, hInstance: i64) -> i32
+    
+    # ----- Window Creation and Destruction -----
+    # Creates an overlapped, pop-up, or child window with extended style
+    fun CreateWindowExA(dwExStyle: i32, lpClassName: i64, lpWindowName: i64, dwStyle: i32, x: i32, y: i32, nWidth: i32, nHeight: i32, hWndParent: i64, hMenu: i64, hInstance: i64, lpParam: i64) -> i64
+    
+    # Destroys the specified window
+    fun DestroyWindow(hWnd: i64) -> i32
+    
+    # ----- Window Display -----
+    # Sets the specified window's show state
+    fun ShowWindow(hWnd: i64, nCmdShow: i32) -> i32
+    
+    # Changes the text of the specified window's title bar
+    fun SetWindowTextA(hWnd: i64, lpString: i64) -> i32
+    
+    # Changes the size, position, and Z order of a window
+    fun SetWindowPos(hWnd: i64, hWndInsertAfter: i64, X: i32, Y: i32, cx: i32, cy: i32, uFlags: i32) -> i32
+    
+    # Retrieves the coordinates of a window's client area
+    fun GetClientRect(hWnd: i64, lpRect: i64) -> i32
+    
+    # ----- Message Handling -----
+    # Dispatches incoming nonqueued messages, checks the thread message queue
+    # for a posted message, and retrieves the message (if any exist)
+    fun PeekMessageA(lpMsg: i64, hWnd: i64, wMsgFilterMin: i32, wMsgFilterMax: i32, wRemoveMsg: i32) -> i32
+    
+    # Translates virtual-key messages into character messages
+    fun TranslateMessage(lpMsg: i64) -> i32
+    
+    # Dispatches a message to a window procedure
+    fun DispatchMessageA(lpMsg: i64) -> i64
+    
+    # Calls the default window procedure to provide default processing
+    fun DefWindowProcA(hWnd: i64, Msg: i32, wParam: i64, lParam: i64) -> i64
+    
+    # Indicates to the system that a thread has made a request to terminate
+    fun PostQuitMessage(nExitCode: i32) -> i32
+    
+    # ----- Cursor Control -----
+    # Displays or hides the cursor
+    fun ShowCursor(bShow: i32) -> i32
+    
+    # Confines the cursor to a rectangular area on the screen
+    fun ClipCursor(lpRect: i64) -> i32
+    
+    # Moves the cursor to the specified screen coordinates
+    fun SetCursorPos(X: i32, Y: i32) -> i32
+    
+    # Retrieves the position of the mouse cursor, in screen coordinates
+    fun GetCursorPos(lpPoint: i64) -> i32
+    
+    # Converts screen coordinates to client-area coordinates
+    fun ScreenToClient(hWnd: i64, lpPoint: i64) -> i32
+    
+    # ----- Cursor Loading -----
+    # Loads the specified cursor resource
+    fun LoadCursorA(hInstance: i64, lpCursorName: i64) -> i64
+    
+    # ----- Error Handling -----
+    # Retrieves the calling thread's last-error code value
+    fun GetLastError() -> i32
+    
+    # ----- Window Information -----
+    # Retrieves the dimensions of the bounding rectangle of the specified window
+    fun GetWindowRect(hWnd: i64, lpRect: i64) -> i32
+    
+    # Retrieves information about the specified window
+    fun GetWindowLongPtrA(hWnd: i64, nIndex: i32) -> i64
+    
+    # Changes an attribute of the specified window
+    fun SetWindowLongPtrA(hWnd: i64, nIndex: i32, dwNewLong: i64) -> i64
+    
+    # ----- Focus Management -----
+    # Sets the keyboard focus to the specified window
+    fun SetFocus(hWnd: i64) -> i64
+    
+    # Retrieves the handle to the window that has the keyboard focus
+    fun GetFocus() -> i64
+    
+    # Brings the thread that created the specified window into the foreground
+    fun SetForegroundWindow(hWnd: i64) -> i32
+    
+    # Retrieves a handle to the foreground window
+    fun GetForegroundWindow() -> i64
+    
+    # ----- Event Waiting -----
+    # Yields control to other threads when a thread has no other messages in its message queue
+    # Blocks until a new message is placed in the thread's message queue
+    fun WaitMessage() -> i32
+    
+    # Waits until one or all of the specified objects are in the signaled state,
+    # an I/O completion routine or asynchronous procedure call (APC) is queued to the thread,
+    # or the time-out interval elapses
+    fun MsgWaitForMultipleObjects(nCount: i32, pHandles: i64, fWaitAll: i32, dwMilliseconds: i32, dwWakeMask: i32) -> i32

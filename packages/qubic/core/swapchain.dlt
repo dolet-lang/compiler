@@ -1,0 +1,321 @@
+# Qubic Engine - Swapchain Manager
+# Handles Vulkan surface, swapchain, and image views
+
+import glfw
+import vulkan
+
+# ===== Swapchain Manager =====
+
+struct SwapchainManager:
+    surface: i64 = 0
+    swapchain: i64 = 0
+    swapchain_images: i64 = 0       # Array of VkImage handles
+    swapchain_image_views: i64 = 0  # Array of VkImageView handles
+    image_count: i32 = 0
+    swapchain_format: i32 = 0       # VkFormat
+    swapchain_extent_width: i32 = 0
+    swapchain_extent_height: i32 = 0
+    is_initialized: i32 = 0
+
+    # Create Vulkan surface from GLFW window
+    fun create_surface(self, instance: i64, window_handle: i64) -> i32:
+        if window_handle == 0:
+            print("Error: Invalid window handle")
+            return 0
+        
+        if instance == 0:
+            print("Error: Invalid Vulkan instance (NULL)")
+            return 0
+        
+        # Allocate surface pointer
+        surface_ptr: i64 = Memory.malloc_zeroed(8)
+        if surface_ptr == 0:
+            print("Error: Failed to allocate surface pointer")
+            return 0
+        
+        Memory.set(surface_ptr, 0, 8)
+        
+        # Create surface
+        surface_result: i32 = glfwCreateWindowSurface(instance, window_handle, 0, surface_ptr)
+        
+        if surface_result == 0:  # VK_SUCCESS
+            self.surface = Memory.read_ptr(surface_ptr)
+            print("Vulkan surface created successfully!")
+            Memory.free(surface_ptr)
+            return 1
+        else:
+            print("Error: Failed to create Vulkan surface")
+            Memory.free(surface_ptr)
+            return 0
+    
+    # Create swapchain
+    fun create_swapchain(self, physical_device: i64, device: i64, graphics_family: i32, present_family: i32, width: i32, height: i32) -> i32:
+        if self.surface == 0:
+            print("Error: Surface not created")
+            return 0
+        
+        # Query surface capabilities
+        capabilities: i64 = Memory.malloc_zeroed(64)
+        if capabilities == 0:
+            print("Error: Failed to allocate capabilities")
+            return 0
+        
+        Memory.set(capabilities, 0, 64)
+        cap_result: i32 = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, self.surface, capabilities)
+        
+        if cap_result != 0:
+            print("Error: Failed to get surface capabilities")
+            Memory.free(capabilities)
+            return 0
+        
+        # Read capabilities
+        min_image_count: i32 = Memory.read_i32(capabilities)
+        max_image_count: i32 = Memory.read_i32(capabilities + 4)
+        
+        # Choose image count (min + 1, but not more than max if max > 0)
+        image_count: i32 = min_image_count + 1
+        if max_image_count > 0 && image_count > max_image_count:
+            image_count = max_image_count
+        
+        self.image_count = image_count
+        
+        # Query surface formats
+        format_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if format_count_ptr == 0:
+            print("Error: Failed to allocate format count")
+            Memory.free(capabilities)
+            return 0
+        
+        Memory.write_i32(format_count_ptr, 0)
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, self.surface, format_count_ptr, 0)
+        format_count: i32 = Memory.read_i32(format_count_ptr)
+        
+        if format_count == 0:
+            print("Error: No surface formats available")
+            Memory.free(format_count_ptr)
+            Memory.free(capabilities)
+            return 0
+        
+        # Get first format (VkSurfaceFormatKHR = 8 bytes: format:4 + colorSpace:4)
+        formats: i64 = Memory.malloc_zeroed(format_count * 8)
+        if formats == 0:
+            print("Error: Failed to allocate formats")
+            Memory.free(format_count_ptr)
+            Memory.free(capabilities)
+            return 0
+        
+        vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, self.surface, format_count_ptr, formats)
+        
+        # Use first format (typically VK_FORMAT_B8G8R8A8_UNORM = 44)
+        surface_format: i32 = Memory.read_i32(formats)
+        color_space: i32 = Memory.read_i32(formats + 4)
+        self.swapchain_format = surface_format
+        
+        Memory.free(formats)
+        Memory.free(format_count_ptr)
+        
+        # Query present modes
+        present_mode_count_ptr: i64 = Memory.malloc_zeroed(4)
+        if present_mode_count_ptr == 0:
+            print("Error: Failed to allocate present mode count")
+            Memory.free(capabilities)
+            return 0
+        
+        Memory.write_i32(present_mode_count_ptr, 0)
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, self.surface, present_mode_count_ptr, 0)
+        present_mode_count: i32 = Memory.read_i32(present_mode_count_ptr)
+        
+        # Use VK_PRESENT_MODE_FIFO_KHR (guaranteed to be available) = 2
+        present_mode: i32 = 2
+        
+        Memory.free(present_mode_count_ptr)
+        
+        # Set extent
+        self.swapchain_extent_width = width
+        self.swapchain_extent_height = height
+        
+        # Check if queue families are same
+        queue_family_indices: i64 = 0
+        queue_family_count: i32 = 1
+        sharing_mode: i32 = 0  # VK_SHARING_MODE_EXCLUSIVE
+        
+        if graphics_family != present_family:
+            queue_family_indices = Memory.malloc_zeroed(8)
+            if queue_family_indices != 0:
+                Memory.write_i32(queue_family_indices, graphics_family)
+                Memory.write_i32(queue_family_indices + 4, present_family)
+                queue_family_count = 2
+                sharing_mode = 1  # VK_SHARING_MODE_CONCURRENT
+        
+        # Create VkSwapchainCreateInfoKHR (104 bytes with 64-bit alignment)
+        create_info: i64 = Memory.malloc_zeroed(128)
+        if create_info == 0:
+            print("Error: Failed to allocate swapchain create info")
+            if queue_family_indices != 0:
+                Memory.free(queue_family_indices)
+            Memory.free(capabilities)
+            return 0
+        
+        Memory.set(create_info, 0, 128)
+        
+        # Fill swapchain create info
+        Memory.write_i32(create_info, 1000001000)       # sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR
+        Memory.write_ptr(create_info + 8, 0)            # pNext
+        Memory.write_i32(create_info + 16, 0)           # flags
+        Memory.write_ptr(create_info + 24, self.surface) # surface
+        Memory.write_i32(create_info + 32, image_count) # minImageCount
+        Memory.write_i32(create_info + 36, surface_format) # imageFormat
+        Memory.write_i32(create_info + 40, color_space) # imageColorSpace
+        Memory.write_i32(create_info + 44, width)       # imageExtent.width
+        Memory.write_i32(create_info + 48, height)      # imageExtent.height
+        Memory.write_i32(create_info + 52, 1)           # imageArrayLayers
+        Memory.write_i32(create_info + 56, 16)          # imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+        Memory.write_i32(create_info + 60, sharing_mode) # imageSharingMode
+        Memory.write_i32(create_info + 64, queue_family_count) # queueFamilyIndexCount
+        Memory.write_ptr(create_info + 72, queue_family_indices) # pQueueFamilyIndices
+        Memory.write_i32(create_info + 80, 0)           # preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+        Memory.write_i32(create_info + 84, 4)           # compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+        Memory.write_i32(create_info + 88, present_mode) # presentMode
+        Memory.write_i32(create_info + 92, 1)           # clipped = VK_TRUE
+        Memory.write_ptr(create_info + 96, 0)           # oldSwapchain
+        
+        # Create swapchain
+        swapchain_ptr: i64 = Memory.malloc_zeroed(8)
+        if swapchain_ptr == 0:
+            print("Error: Failed to allocate swapchain pointer")
+            Memory.free(create_info)
+            if queue_family_indices != 0:
+                Memory.free(queue_family_indices)
+            Memory.free(capabilities)
+            return 0
+        
+        Memory.set(swapchain_ptr, 0, 8)
+        swap_result: i32 = vkCreateSwapchainKHR(device, create_info, 0, swapchain_ptr)
+        
+        if swap_result == 0:  # VK_SUCCESS
+            self.swapchain = Memory.read_ptr(swapchain_ptr)
+            print("Swapchain created!")
+            
+            # Get swapchain images
+            img_count_ptr: i64 = Memory.malloc_zeroed(4)
+            if img_count_ptr != 0:
+                Memory.write_i32(img_count_ptr, 0)
+                vkGetSwapchainImagesKHR(device, self.swapchain, img_count_ptr, 0)
+                actual_img_count: i32 = Memory.read_i32(img_count_ptr)
+                
+                self.swapchain_images = Memory.malloc_zeroed(actual_img_count * 8)
+                if self.swapchain_images != 0:
+                    vkGetSwapchainImagesKHR(device, self.swapchain, img_count_ptr, self.swapchain_images)
+                    print("Swapchain images retrieved!")
+                
+                Memory.free(img_count_ptr)
+            
+            self.is_initialized = 1
+            Memory.free(swapchain_ptr)
+            Memory.free(create_info)
+            if queue_family_indices != 0:
+                Memory.free(queue_family_indices)
+            Memory.free(capabilities)
+            return 1
+        else:
+            print("Error: Failed to create swapchain")
+            print(swap_result)
+            Memory.free(swapchain_ptr)
+            Memory.free(create_info)
+            if queue_family_indices != 0:
+                Memory.free(queue_family_indices)
+            Memory.free(capabilities)
+            return 0
+    
+    # Create image views for swapchain images
+    fun create_image_views(self, device: i64) -> i32:
+        if self.swapchain_images == 0 || self.image_count == 0:
+            print("Error: No swapchain images")
+            return 0
+        
+        # Allocate array for image views
+        self.swapchain_image_views = Memory.malloc_zeroed(self.image_count * 8)
+        if self.swapchain_image_views == 0:
+            print("Error: Failed to allocate image views array")
+            return 0
+        
+        i: i32 = 0
+        while i < self.image_count:
+            # Get image handle
+            image: i64 = Memory.read_ptr(self.swapchain_images + (i * 8))
+            
+            # VkImageViewCreateInfo (96 bytes with 64-bit alignment)
+            view_info: i64 = Memory.malloc_zeroed(128)
+            if view_info == 0:
+                print("Error: Failed to allocate view info")
+                return 0
+            
+            Memory.set(view_info, 0, 128)
+            
+            # Fill image view create info
+            Memory.write_i32(view_info, 15)             # sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO
+            Memory.write_ptr(view_info + 8, 0)          # pNext
+            Memory.write_i32(view_info + 16, 0)         # flags
+            Memory.write_ptr(view_info + 24, image)     # image
+            Memory.write_i32(view_info + 32, 1)         # viewType = VK_IMAGE_VIEW_TYPE_2D
+            Memory.write_i32(view_info + 36, self.swapchain_format) # format
+            # components (16 bytes) - all 0 = VK_COMPONENT_SWIZZLE_IDENTITY
+            Memory.write_i32(view_info + 40, 0)         # components.r
+            Memory.write_i32(view_info + 44, 0)         # components.g
+            Memory.write_i32(view_info + 48, 0)         # components.b
+            Memory.write_i32(view_info + 52, 0)         # components.a
+            # subresourceRange (20 bytes)
+            Memory.write_i32(view_info + 56, 1)         # aspectMask = VK_IMAGE_ASPECT_COLOR_BIT
+            Memory.write_i32(view_info + 60, 0)         # baseMipLevel
+            Memory.write_i32(view_info + 64, 1)         # levelCount
+            Memory.write_i32(view_info + 68, 0)         # baseArrayLayer
+            Memory.write_i32(view_info + 72, 1)         # layerCount
+            
+            # Create image view
+            view_ptr: i64 = Memory.malloc_zeroed(8)
+            if view_ptr != 0:
+                Memory.set(view_ptr, 0, 8)
+                view_result: i32 = vkCreateImageView(device, view_info, 0, view_ptr)
+                
+                if view_result == 0:
+                    view_handle: i64 = Memory.read_ptr(view_ptr)
+                    Memory.write_ptr(self.swapchain_image_views + (i * 8), view_handle)
+                
+                Memory.free(view_ptr)
+            
+            Memory.free(view_info)
+            i = i + 1
+        
+        print("Image views created!")
+        return 1
+    
+    # Cleanup swapchain resources
+    fun cleanup(self, instance: i64, device: i64):
+        # Destroy image views
+        if self.swapchain_image_views != 0 && device != 0:
+            i: i32 = 0
+            while i < self.image_count:
+                view: i64 = Memory.read_ptr(self.swapchain_image_views + (i * 8))
+                if view != 0:
+                    vkDestroyImageView(device, view, 0)
+                i = i + 1
+            Memory.free(self.swapchain_image_views)
+            self.swapchain_image_views = 0
+        
+        # Destroy swapchain
+        if self.swapchain != 0 && device != 0:
+            vkDestroySwapchainKHR(device, self.swapchain, 0)
+            self.swapchain = 0
+            print("Swapchain destroyed")
+        
+        # Free images array
+        if self.swapchain_images != 0:
+            Memory.free(self.swapchain_images)
+            self.swapchain_images = 0
+        
+        # Destroy surface
+        if self.surface != 0:
+            vkDestroySurfaceKHR(instance, self.surface, 0)
+            self.surface = 0
+            print("Vulkan surface destroyed")
+

@@ -1,0 +1,444 @@
+##############################
+# Parser Statements
+# if/elif/else, while, for, return, match, break, continue, pass
+# variable declarations, assignments
+# Depends on: parser_core.dlt, ast_nodes.dlt, parser_expr.dlt
+# Forward-calls: parse_statement() defined in parser_main.dlt
+##############################
+
+# parse_indented_block is defined in parser_main.dlt (needs parse_statement)
+
+# ==========================================
+# If / Elif / Else
+# ==========================================
+fun parse_if_stmt() -> i64:
+    if_indent: i32 = cur_indent()
+
+    # Eat IF or ELIF
+    if cur_kind() == TK_IF:
+        eat(TK_IF)
+    elif cur_kind() == TK_ELIF:
+        eat(TK_ELIF)
+
+    cond: i64 = parse_expression()
+
+    # Optional colon
+    if cur_kind() == TK_COLON:
+        advance()
+
+    skip_newlines()
+    then_body: i64 = parse_indented_block(if_indent)
+    else_body: i64 = 0
+
+    skip_newlines()
+
+    # Check for elif
+    if cur_kind() == TK_ELIF and cur_indent() == if_indent:
+        eat(TK_ELIF)
+        elif_cond: i64 = parse_expression()
+        if cur_kind() == TK_COLON:
+            advance()
+        skip_newlines()
+        elif_body: i64 = parse_indented_block(if_indent)
+
+        # Create elif as nested IfNode
+        elif_else: i64 = 0
+
+        skip_newlines()
+        # Check for more elif or else after this elif
+        if cur_kind() == TK_ELIF and cur_indent() == if_indent:
+            elif_next: i64 = parse_if_stmt()
+            elif_else = mk_node_list(4)
+            nl_add(elif_else, elif_next)
+        elif cur_kind() == TK_ELSE and cur_indent() == if_indent:
+            eat(TK_ELSE)
+            if cur_kind() == TK_COLON:
+                advance()
+            skip_newlines()
+            elif_else = parse_indented_block(if_indent)
+
+        elif_node: i64 = mk_if(elif_cond, elif_body, elif_else)
+        else_body = mk_node_list(4)
+        nl_add(else_body, elif_node)
+
+    elif cur_kind() == TK_ELSE and cur_indent() == if_indent:
+        eat(TK_ELSE)
+        if cur_kind() == TK_COLON:
+            advance()
+        skip_newlines()
+
+        # else if (two keywords)
+        if cur_kind() == TK_IF:
+            else_if: i64 = parse_if_stmt()
+            else_body = mk_node_list(4)
+            nl_add(else_body, else_if)
+        else:
+            else_body = parse_indented_block(if_indent)
+
+    return mk_if(cond, then_body, else_body)
+
+# ==========================================
+# While Loop
+# ==========================================
+fun parse_while_stmt() -> i64:
+    wi: i32 = cur_indent()
+    eat(TK_WHILE)
+    cond: i64 = parse_expression()
+    if cur_kind() == TK_COLON:
+        advance()
+    skip_newlines()
+    body: i64 = parse_indented_block(wi)
+    return mk_while(cond, body)
+
+# ==========================================
+# For Loop (range-based and for-each)
+# for i in start to end:
+# for i in start to end step s:
+# for item in collection:
+# ==========================================
+fun parse_for_stmt() -> i64:
+    fi: i32 = cur_indent()
+    eat(TK_FOR)
+
+    var_name: str = cur_val()
+    eat(TK_IDENT)
+    eat(TK_IN)
+
+    start_expr: i64 = parse_expression()
+
+    # Check if range-based (has 'to')
+    if cur_kind() == TK_TO:
+        advance()
+        end_expr: i64 = parse_expression()
+
+        step_expr: i64 = mk_int_lit(1)
+        if cur_kind() == TK_STEP:
+            advance()
+            step_expr = parse_expression()
+
+        if cur_kind() == TK_COLON:
+            advance()
+        skip_newlines()
+        body: i64 = parse_indented_block(fi)
+
+        # Desugar: for i in start to end step s =>
+        #   init = var_decl("int", var_name, start)
+        #   cond = comparison("<=", var_ref(var_name), end)
+        #   update = assign(var_name, binary_op("+", var_ref(var_name), step))
+        f_init: i64 = mk_var_decl("int", var_name, start_expr, 0, 0, 1)
+        f_cond: i64 = mk_comparison("<=", mk_var_ref(var_name), end_expr)
+        f_update: i64 = mk_assign(var_name, mk_binary_op("+", mk_var_ref(var_name), step_expr))
+        return mk_for(f_init, f_cond, f_update, body, 1)
+
+    # For-each: for item in collection
+    if cur_kind() == TK_COLON:
+        advance()
+    skip_newlines()
+    fe_body: i64 = parse_indented_block(fi)
+    return mk_for_each(var_name, "", "", start_expr, fe_body)
+
+# ==========================================
+# Return Statement
+# ==========================================
+fun parse_return_stmt() -> i64:
+    eat(TK_RETURN)
+    if cur_kind() == TK_NEWLINE or cur_kind() == TK_EOF:
+        return mk_return(0)
+    val: i64 = parse_expression()
+    return mk_return(val)
+
+# ==========================================
+# Break / Continue / Pass
+# ==========================================
+fun parse_break_stmt() -> i64:
+    eat(TK_BREAK)
+    return mk_break()
+
+fun parse_continue_stmt() -> i64:
+    eat(TK_CONTINUE)
+    return mk_continue()
+
+fun parse_pass_stmt() -> i64:
+    eat(TK_PASS)
+    return mk_pass()
+
+# ==========================================
+# Match Statement
+# ==========================================
+fun parse_one_case(case_indent: i32) -> i64:
+    eat(TK_CASE)
+    patterns: i64 = mk_node_list(8)
+    nl_add(patterns, parse_pattern())
+    while cur_kind() == TK_COMMA:
+        advance()
+        nl_add(patterns, parse_pattern())
+
+    guard: i64 = 0
+    if cur_kind() == TK_IF:
+        advance()
+        guard = parse_expression()
+
+    if cur_kind() == TK_COLON:
+        advance()
+    skip_newlines()
+
+    cbody: i64 = parse_indented_block(case_indent)
+    return mk_case(patterns, cbody, guard)
+
+fun parse_match_stmt() -> i64:
+    mi: i32 = cur_indent()
+    eat(TK_MATCH)
+    expr: i64 = parse_expression()
+    if cur_kind() == TK_COLON:
+        advance()
+    skip_newlines()
+
+    cases: i64 = mk_node_list(16)
+    else_body: i64 = 0
+
+    while cur_kind() != TK_EOF:
+        ci: i32 = cur_indent()
+        if ci <= mi:
+            break
+        if cur_kind() == TK_CASE:
+            nl_add(cases, parse_one_case(ci))
+            skip_newlines()
+        elif cur_kind() == TK_ELSE:
+            eat(TK_ELSE)
+            if cur_kind() == TK_COLON:
+                advance()
+            skip_newlines()
+            else_body = parse_indented_block(ci)
+            break
+        else:
+            break
+
+    return mk_match(expr, cases, else_body, 0)
+
+# ==========================================
+# Pattern Parser (for match/case)
+# ==========================================
+fun parse_pattern() -> i64:
+    k: i32 = cur_kind()
+
+    # Integer pattern
+    if k == TK_INT or k == TK_HEX:
+        pval: str = cur_val()
+        advance()
+        # Check for range: 1..10
+        if cur_kind() == TK_RANGE:
+            advance()
+            end_val: str = cur_val()
+            eat(TK_INT)
+            return mk_pattern("range", 0, pval as i64, end_val as i64, 0, "", "", "", 0)
+        return mk_pattern("value", pval as i64, 0, 0, 0, "", "", "", 0)
+
+    # String/char pattern
+    if k == TK_STRING:
+        sv: str = cur_val()
+        advance()
+        return mk_pattern("value", sv as i64, 0, 0, 0, "", "", "", 0)
+
+    if k == TK_CHAR:
+        cv: str = cur_val()
+        advance()
+        return mk_pattern("value", cv as i64, 0, 0, 0, "", "", "", 0)
+
+    # Bool pattern
+    if k == TK_BOOL:
+        bv: str = cur_val()
+        advance()
+        return mk_pattern("value", bv as i64, 0, 0, 0, "", "", "", 0)
+
+    # Identifier: variable pattern or enum access
+    if k == TK_IDENT:
+        name: str = cur_val()
+        eat(TK_IDENT)
+
+        # Enum pattern: Direction.UP
+        if cur_kind() == TK_DOT:
+            advance()
+            variant: str = cur_val()
+            eat(TK_IDENT)
+            return mk_pattern("enum", 0, 0, 0, 0, "", name, variant, 0)
+
+        # Variable capture pattern
+        return mk_pattern("variable", 0, 0, 0, 0, name, "", "", 0)
+
+    # List pattern: [x, y, z]
+    if k == TK_LBRACKET:
+        eat(TK_LBRACKET)
+        elems: i64 = mk_node_list(8)
+        if cur_kind() != TK_RBRACKET:
+            nl_add(elems, parse_pattern())
+            while cur_kind() == TK_COMMA:
+                advance()
+                nl_add(elems, parse_pattern())
+        eat(TK_RBRACKET)
+        return mk_pattern("list", 0, 0, 0, elems, "", "", "", 0)
+
+    panic(@"Unexpected pattern token: kind={k}")
+    return 0
+
+# ==========================================
+# Variable Declaration
+# type_token name = expr
+# name : type = expr
+# ==========================================
+fun parse_var_decl_typed(type_str: str) -> i64:
+    # Type token already consumed, type_str has the type name
+    name: str = cur_val()
+    eat(TK_IDENT)
+
+    value: i64 = 0
+    if cur_kind() == TK_ASSIGN:
+        advance()
+        value = parse_expression()
+
+    return mk_var_decl(type_str, name, value, 0, 0, 0)
+
+fun parse_var_decl_ident() -> i64:
+    # IDENT : type = expr  OR  IDENT = expr  OR  IDENT(...) call
+    name: str = cur_val()
+    eat(TK_IDENT)
+
+    # name : type = expr
+    if cur_kind() == TK_COLON:
+        advance()
+        vtype: str = parse_type_name()
+        value: i64 = 0
+        if cur_kind() == TK_ASSIGN:
+            advance()
+            value = parse_expression()
+        return mk_var_decl(vtype, name, value, 0, 0, 0)
+
+    # name = expr (assignment)
+    if cur_kind() == TK_ASSIGN:
+        advance()
+        aval: i64 = parse_expression()
+        return mk_assign(name, aval)
+
+    # Compound assignment: name += expr, name -= expr, etc.
+    if cur_kind() == TK_PLUS_ASSIGN or cur_kind() == TK_MINUS_ASSIGN or cur_kind() == TK_MULT_ASSIGN or cur_kind() == TK_DIV_ASSIGN:
+        op_k: i32 = cur_kind()
+        advance()
+        cval: i64 = parse_expression()
+        # Desugar: name += expr  =>  name = name + expr
+        base_op: str = "+"
+        if op_k == TK_MINUS_ASSIGN:
+            base_op = "-"
+        elif op_k == TK_MULT_ASSIGN:
+            base_op = "*"
+        elif op_k == TK_DIV_ASSIGN:
+            base_op = "/"
+        combined: i64 = mk_binary_op(base_op, mk_var_ref(name), cval)
+        return mk_assign(name, combined)
+
+    # Increment/decrement: name++ or name--
+    if cur_kind() == TK_PLUS_PLUS:
+        advance()
+        inc: i64 = mk_binary_op("+", mk_var_ref(name), mk_int_lit(1))
+        return mk_assign(name, inc)
+    if cur_kind() == TK_MINUS_MINUS:
+        advance()
+        dec: i64 = mk_binary_op("-", mk_var_ref(name), mk_int_lit(1))
+        return mk_assign(name, dec)
+
+    # Function call: name(args)
+    if cur_kind() == TK_LPAREN:
+        cargs: i64 = parse_arg_list()
+        return mk_fun_call(name, cargs, 0)
+
+    # Dot access: name.something (method call, field access/assign)
+    if cur_kind() == TK_DOT:
+        return parse_dot_stmt(name)
+
+    # Array access as statement: name[idx] = expr
+    if cur_kind() == TK_LBRACKET:
+        eat(TK_LBRACKET)
+        idx: i64 = parse_expression()
+        eat(TK_RBRACKET)
+        if cur_kind() == TK_ASSIGN:
+            advance()
+            arr_val: i64 = parse_expression()
+            # Array element assignment — represent as special assign
+            access: i64 = mk_array_access(name as i64, idx, 0)
+            return mk_assign("", arr_val)
+        return mk_array_access(name as i64, idx, 0)
+
+    # Just a bare identifier expression (shouldn't normally happen)
+    return mk_var_ref(name)
+
+# ==========================================
+# Dot Access as Statement
+# name.method(args)  or  name.field = expr
+# ==========================================
+fun parse_dot_stmt(name: str) -> i64:
+    eat(TK_DOT)
+    member: str = cur_val()
+    eat(TK_IDENT)
+
+    # Method call
+    if cur_kind() == TK_LPAREN:
+        margs: i64 = parse_arg_list()
+        fc: i8 = Memory.read_i8(name as i64)
+        if fc >= 65 and fc <= 90:
+            return mk_static_method(name, member, margs)
+        return mk_inst_method(name, member, margs)
+
+    # Field assignment: name.field = expr
+    if cur_kind() == TK_ASSIGN:
+        advance()
+        fval: i64 = parse_expression()
+        fc2: i8 = Memory.read_i8(name as i64)
+        if fc2 >= 65 and fc2 <= 90:
+            return mk_static_field_assign(name, member, fval)
+        return mk_field_assign(name, member, fval)
+
+    # Compound assignment on field: name.field += expr
+    if cur_kind() == TK_PLUS_ASSIGN or cur_kind() == TK_MINUS_ASSIGN:
+        cop: i32 = cur_kind()
+        advance()
+        cval2: i64 = parse_expression()
+        bop: str = "+"
+        if cop == TK_MINUS_ASSIGN:
+            bop = "-"
+        fa: i64 = mk_field_access(name, member)
+        combined2: i64 = mk_binary_op(bop, fa, cval2)
+        return mk_field_assign(name, member, combined2)
+
+    # Chained: name.member.something
+    if cur_kind() == TK_DOT:
+        fc3: i8 = Memory.read_i8(name as i64)
+        base: i64 = 0
+        if fc3 >= 65 and fc3 <= 90:
+            base = mk_static_field(name, member)
+        else:
+            base = mk_field_access(name, member)
+        return parse_chained_dot(base)
+
+    # Just field access
+    fc4: i8 = Memory.read_i8(name as i64)
+    if fc4 >= 65 and fc4 <= 90:
+        return mk_static_field(name, member)
+    return mk_field_access(name, member)
+
+# ==========================================
+# Const Declaration: const name = expr  or  const name: type = expr
+# ==========================================
+fun parse_const_decl() -> i64:
+    eat(TK_CONST)
+    name: str = cur_val()
+    eat(TK_IDENT)
+
+    vtype: str = ""
+    if cur_kind() == TK_COLON:
+        advance()
+        vtype = parse_type_name()
+
+    eat(TK_ASSIGN)
+    val: i64 = parse_expression()
+
+    if str_eq(vtype, "") == 1:
+        return mk_var_decl("", name, val, 1, 1, 0)
+    return mk_var_decl(vtype, name, val, 0, 1, 0)

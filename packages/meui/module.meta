@@ -1,0 +1,16 @@
+# MeUI Module Metadata
+# Custom UI framework for Dolet
+
+[info]
+name = meui
+version = 1.0.0
+description = Custom UI framework for building user interfaces
+
+[libs]
+# No external libraries needed
+
+[dlls]
+# No runtime DLLs to copy
+
+[dependencies]
+# No external dependencies

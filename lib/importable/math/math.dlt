@@ -1,0 +1,92 @@
+# ============================
+#  Dolet Standard Math Library
+# ============================
+
+# ----- Basic Arithmetic -----
+
+fun add(a: i32, b: i32) -> i32:
+    return a + b
+
+fun subtract(a: i32, b: i32) -> i32:
+    return a - b
+
+fun multiply(a: i32, b: i32) -> i32:
+    return a * b
+
+fun divide(a: i32, b: i32) -> i32:
+    # ملاحظة: بدون تحقق من القسمة على صفر، خليها بسيطة
+    return a / b
+
+
+
+# ----- Absolute Value -----
+
+fun abs(x: i32) -> i32:
+    if x < 0:
+        return x*-1 # -x (but not work with dolet syntax)
+    return x
+
+# ----- Min / Max -----
+
+fun min(a: i32, b: i32) -> i32:
+    if a < b:
+        return a
+    return b
+
+fun max(a: i32, b: i32) -> i32:
+    if a > b:
+        return a
+    return b
+
+
+# ----- Power (only integer version) -----
+
+"""
+fun pow(base: i32, exp: i32) -> i32:
+    result: i32 = 1
+    i: i32 = 0
+    while i < exp:
+        result = result * base
+        i = i + 1
+    return result
+"""
+
+# ----- Clamp -----
+fun clamp(value: i32, min_val: i32, max_val: i32) -> i32:
+    if value < min_val:
+        return min_val
+    if value > max_val:
+        return max_val
+    return value
+
+
+# ----- Sign -----
+
+fun sign(x: i32) -> i32:
+    if x > 0:
+        return 1
+    else if x < 0:
+        return 1 # the -1 is not works !!!! its gave errors.
+    return 0
+
+
+# ----- Factorial -----
+
+fun factorial(n: i32) -> i32:
+    fact_result: i32 = 1
+    fact_i: i32 = 1
+    while fact_i <= n:
+        fact_result = fact_result * fact_i
+        fact_i = fact_i + 1
+    return fact_result
+
+
+fun dsqrt(x: f64) -> f64:
+    sqrt_guess: f64 = x / 2.0
+    sqrt_i: i32 = 0
+    while sqrt_i < 10:
+        sqrt_guess = (sqrt_guess + x / sqrt_guess) / 2.0
+        sqrt_i = sqrt_i + 1
+    return sqrt_guess
+    #return @sqrt(x) if you need high performance and accuracy, its silicon built-in function
+

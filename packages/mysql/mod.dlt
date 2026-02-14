@@ -1,0 +1,76 @@
+# ============================
+#  MySQL Database Library for Dolet
+# ============================
+# This is the required entry point (mod.dlt) for the MySQL module
+# It imports and re-exports all MySQL library components
+# Requirements: 1.1, 1.2, 1.3, 1.4
+
+# ============================================================================
+# Usage Example:
+# ============================================================================
+#   import mysql
+#   
+#   # Connect to MySQL server
+#   db = MySQL.connect("localhost", "root", "password", "mydb", 3306)
+#   
+#   # Or use default port (3306)
+#   db = MySQL.connect_default("localhost", "root", "password", "mydb")
+#   
+#   if db.is_connected() == 1:
+#       # Execute a SELECT query
+#       result = db.query("SELECT * FROM users")
+#       
+#       # Iterate over results
+#       while result.has_next() == 1:
+#           row = result.next()
+#           print(row.get(0))              # Get by index
+#           print(row.get_string("name"))  # Get by column name
+#       
+#       # Free result memory
+#       result.free()
+#       
+#       # Execute INSERT/UPDATE/DELETE
+#       db.execute("INSERT INTO users (name) VALUES ('John')")
+#       
+#       # Transaction support
+#       db.begin_transaction()
+#       db.execute("UPDATE users SET name = 'Jane' WHERE id = 1")
+#       db.commit()  # or db.rollback()
+#       
+#       # Close connection
+#       db.close()
+#   else:
+#       print(db.get_last_error())
+#
+# ============================================================================
+# Available Structs:
+# ============================================================================
+#   MySQL       - Main connection struct with query and transaction methods
+#   MySQLResult - Query result handler with iteration support
+#   MySQLRow    - Row data access with type conversion methods
+#
+# ============================================================================
+
+# ============================================================================
+# Internal Components (C library bindings)
+# These provide low-level access to libmysql functions
+# Requirements: 2.1, 3.1, 6.1, 6.2, 6.3
+# ============================================================================
+import bindings
+
+# ============================================================================
+# Public Components (exported to users)
+# These are the main API that users interact with
+# ============================================================================
+
+# MySQLRow - Row data access with type conversion
+# Requirements: 5.1, 5.2, 5.3, 5.4
+import row
+
+# MySQLResult - Query result handling and iteration
+# Requirements: 3.1, 4.1, 4.2, 4.3, 4.4
+import result
+
+# MySQL - Main connection struct
+# Requirements: 2.1, 2.2, 2.3, 2.4
+import mysql

@@ -1,0 +1,66 @@
+# MySQL C Library Bindings
+# ========================
+# Low-level bindings to libmysqlclient / libmysql
+
+extern lib "libmysql":
+    # Connection Functions
+    fun mysql_init(mysql: i64) -> i64
+    fun mysql_real_connect(mysql: i64, host: str, user: str, passwd: str, db: str, port: u32, unix_socket: i64, client_flag: u64) -> i64
+    fun mysql_close(mysql: i64)
+    fun mysql_ping(mysql: i64) -> i32
+    fun mysql_select_db(mysql: i64, db: str) -> i32
+    
+    # Query Execution
+    fun mysql_query(mysql: i64, query: str) -> i32
+    fun mysql_real_query(mysql: i64, query: str, length: u64) -> i32
+    
+    # Result Handling
+    fun mysql_store_result(mysql: i64) -> i64
+    fun mysql_use_result(mysql: i64) -> i64
+    fun mysql_free_result(result: i64)
+    fun mysql_fetch_row(result: i64) -> i64
+    fun mysql_fetch_lengths(result: i64) -> i64
+    fun mysql_num_rows(result: i64) -> u64
+    fun mysql_num_fields(result: i64) -> u32
+    fun mysql_affected_rows(mysql: i64) -> u64
+    fun mysql_insert_id(mysql: i64) -> u64
+    fun mysql_data_seek(result: i64, offset: u64)
+    
+    # Field Information
+    fun mysql_fetch_field(result: i64) -> i64
+    fun mysql_fetch_fields(result: i64) -> i64
+    fun mysql_field_seek(result: i64, offset: u32) -> u32
+    
+    # Error Handling
+    fun mysql_errno(mysql: i64) -> u32
+    fun mysql_error(mysql: i64) -> str
+    fun mysql_sqlstate(mysql: i64) -> str
+    
+    # Prepared Statements
+    fun mysql_stmt_init(mysql: i64) -> i64
+    fun mysql_stmt_prepare(stmt: i64, query: str, length: u64) -> i32
+    fun mysql_stmt_execute(stmt: i64) -> i32
+    fun mysql_stmt_store_result(stmt: i64) -> i32
+    fun mysql_stmt_num_rows(stmt: i64) -> u64
+    fun mysql_stmt_affected_rows(stmt: i64) -> u64
+    fun mysql_stmt_insert_id(stmt: i64) -> u64
+    fun mysql_stmt_close(stmt: i64) -> i32
+    fun mysql_stmt_errno(stmt: i64) -> u32
+    fun mysql_stmt_error(stmt: i64) -> str
+    
+    # Escaping & Security
+    fun mysql_real_escape_string(mysql: i64, dest: i64, src: str, length: u64) -> u64
+    
+    # Transaction Control
+    fun mysql_autocommit(mysql: i64, mode: i32) -> i32
+    fun mysql_commit(mysql: i64) -> i32
+    fun mysql_rollback(mysql: i64) -> i32
+    
+    # Server Information
+    fun mysql_get_server_info(mysql: i64) -> str
+    fun mysql_get_client_info() -> str
+    fun mysql_get_host_info(mysql: i64) -> str
+    
+    # Character Set
+    fun mysql_set_character_set(mysql: i64, csname: str) -> i32
+    fun mysql_character_set_name(mysql: i64) -> str

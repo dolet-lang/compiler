@@ -1,0 +1,22 @@
+# GLFW Module Metadata
+# This file tells the compiler which libraries to link
+
+[info]
+name = glfw
+version = 3.3.0
+description = GLFW - Multi-platform library for OpenGL, Vulkan and window management
+
+[libs]
+# Import libraries for linking (.lib or .a files)
+windows = glfw3dll.lib
+linux = libglfw.so
+macos = libglfw.dylib
+
+[dlls]
+# Runtime libraries to copy (.dll or .so files)
+windows = glfw3.dll
+linux = libglfw.so.3
+macos = libglfw.3.dylib
+
+[dependencies]
+# Other modules this module depends on (optional)

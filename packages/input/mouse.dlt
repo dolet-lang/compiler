@@ -1,0 +1,216 @@
+# ============================
+#  Mouse Constants and Functions
+# ============================
+# Mouse button constants and input functions
+# Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 4.1-4.9
+
+# Import platform-specific backend
+# This provides: platform_get_key_state(), platform_get_cursor_pos(), POINT
+import platform
+
+# ----- Mouse Button Constants -----
+# Requirements: 3.1, 3.2, 3.3, 3.4, 3.5
+MOUSE_LEFT: i32 = 0
+MOUSE_RIGHT: i32 = 1
+MOUSE_MIDDLE: i32 = 2
+MOUSE_X1: i32 = 3
+MOUSE_X2: i32 = 4
+
+# Virtual key codes for mouse buttons (used with GetAsyncKeyState)
+VK_LBUTTON: i32 = 1
+VK_RBUTTON: i32 = 2
+VK_MBUTTON: i32 = 4
+VK_XBUTTON1: i32 = 5
+VK_XBUTTON2: i32 = 6
+
+# ----- Global Mouse State -----
+# Mouse state variables for tracking position and deltas
+# Requirements: 4.4, 4.5, 4.6, 4.7, 4.8
+g_mouse_x: i32 = 0              # Current mouse X position
+g_mouse_y: i32 = 0              # Current mouse Y position
+g_mouse_prev_x: i32 = 0         # Previous frame X position
+g_mouse_prev_y: i32 = 0         # Previous frame Y position
+g_mouse_buttons: i32 = 0        # Bitmask for current button states
+g_mouse_prev_buttons: i32 = 0   # Previous frame button states
+g_mouse_scroll: f32 = 0.0       # Accumulated scroll wheel delta
+g_mouse_init: i32 = 0           # Flag indicating if mouse is initialized
+
+# ----- Mouse Position Functions -----
+# Requirements: 4.4, 4.5, 4.6, 4.7
+
+# Get current mouse X position in screen coordinates
+# Requirements: 4.4
+fun mouse_x() -> i32:
+    point: POINT = POINT()
+    platform_get_cursor_pos(point as i64)
+    return point.x
+
+# Get current mouse Y position in screen coordinates
+# Requirements: 4.5
+fun mouse_y() -> i32:
+    point: POINT = POINT()
+    platform_get_cursor_pos(point as i64)
+    return point.y
+
+# Get mouse movement delta X since last frame
+# Requirements: 4.6
+fun mouse_delta_x() -> i32:
+    point: POINT = POINT()
+    platform_get_cursor_pos(point as i64)
+    delta: i32 = point.x - g_mouse_prev_x
+    return delta
+
+# Get mouse movement delta Y since last frame
+# Requirements: 4.7
+fun mouse_delta_y() -> i32:
+    point: POINT = POINT()
+    platform_get_cursor_pos(point as i64)
+    delta: i32 = point.y - g_mouse_prev_y
+    return delta
+
+# ----- Mouse Button Functions -----
+# Requirements: 4.1, 4.2, 4.3, 4.9
+
+# Convert mouse button constant to virtual key code
+fun button_to_vk(button: i32) -> i32:
+    if button == MOUSE_LEFT:
+        return VK_LBUTTON
+    if button == MOUSE_RIGHT:
+        return VK_RBUTTON
+    if button == MOUSE_MIDDLE:
+        return VK_MBUTTON
+    if button == MOUSE_X1:
+        return VK_XBUTTON1
+    if button == MOUSE_X2:
+        return VK_XBUTTON2
+    return 0
+
+# Check if a mouse button is currently pressed
+# Returns 1 if pressed, 0 otherwise
+# Requirements: 4.1, 4.9
+fun mouse_pressed(button: i32) -> i32:
+    # Validate button code range
+    # Requirements: 4.9
+    if button < 0 or button > 4:
+        return 0
+    
+    # Convert button to virtual key code
+    vk: i32 = button_to_vk(button)
+    if vk == 0:
+        return 0
+    
+    # Use platform API - returns negative if key is pressed
+    # High bit (0x8000) is set if key is currently down
+    state: i16 = platform_get_key_state(vk)
+    if state < 0:
+        return 1
+    return 0
+
+# Check if a mouse button was just pressed this frame
+# Returns 1 only on the first frame the button was pressed
+# Requirements: 4.2
+fun mouse_just_pressed(button: i32) -> i32:
+    # Validate button code range
+    if button < 0 or button > 4:
+        return 0
+    
+    # Get current state
+    current: i32 = mouse_pressed(button)
+    
+    # Get previous state from bitmask
+    prev: i32 = (g_mouse_prev_buttons >> button) & 1
+    
+    # Just pressed if currently pressed but wasn't pressed last frame
+    if current == 1 and prev == 0:
+        return 1
+    return 0
+
+# Check if a mouse button was just released this frame
+# Returns 1 only on the first frame the button was released
+# Requirements: 4.3
+fun mouse_just_released(button: i32) -> i32:
+    # Validate button code range
+    if button < 0 or button > 4:
+        return 0
+    
+    # Get current state
+    current: i32 = mouse_pressed(button)
+    
+    # Get previous state from bitmask
+    prev: i32 = (g_mouse_prev_buttons >> button) & 1
+    
+    # Just released if currently not pressed but was pressed last frame
+    if current == 0 and prev == 1:
+        return 1
+    return 0
+
+# ----- Mouse State Update Function -----
+# Called once per frame to update mouse state
+fun update_mouse():
+    # Get current cursor position
+    point: POINT = POINT()
+    platform_get_cursor_pos(point as i64)
+    
+    # Store previous position
+    g_mouse_prev_x = g_mouse_x
+    g_mouse_prev_y = g_mouse_y
+    
+    # Update current position
+    g_mouse_x = point.x
+    g_mouse_y = point.y
+    
+    # Store previous button states
+    g_mouse_prev_buttons = g_mouse_buttons
+    
+    # Update current button states
+    g_mouse_buttons = 0
+    if mouse_pressed(MOUSE_LEFT) == 1:
+        g_mouse_buttons = g_mouse_buttons | (1 << MOUSE_LEFT)
+    if mouse_pressed(MOUSE_RIGHT) == 1:
+        g_mouse_buttons = g_mouse_buttons | (1 << MOUSE_RIGHT)
+    if mouse_pressed(MOUSE_MIDDLE) == 1:
+        g_mouse_buttons = g_mouse_buttons | (1 << MOUSE_MIDDLE)
+    if mouse_pressed(MOUSE_X1) == 1:
+        g_mouse_buttons = g_mouse_buttons | (1 << MOUSE_X1)
+    if mouse_pressed(MOUSE_X2) == 1:
+        g_mouse_buttons = g_mouse_buttons | (1 << MOUSE_X2)
+    
+    g_mouse_init = 1
+
+# Initialize mouse state
+fun init_mouse():
+    if g_mouse_init == 1:
+        return
+    
+    # Get initial cursor position
+    point: POINT = POINT()
+    platform_get_cursor_pos(point as i64)
+    
+    g_mouse_x = point.x
+    g_mouse_y = point.y
+    g_mouse_prev_x = point.x
+    g_mouse_prev_y = point.y
+    g_mouse_buttons = 0
+    g_mouse_prev_buttons = 0
+    g_mouse_scroll = 0.0
+    g_mouse_init = 1
+
+# ----- Scroll Wheel Functions -----
+# Requirements: 4.8, 5.4
+
+# Get accumulated scroll wheel delta
+# Returns the accumulated scroll delta since last call
+# Requirements: 4.8
+fun mouse_scroll() -> f32:
+    return g_mouse_scroll
+
+# Add scroll delta (called from window message handler)
+# Accumulates scroll delta until reset
+fun add_scroll(delta: f32):
+    g_mouse_scroll = g_mouse_scroll + delta
+
+# Reset scroll wheel delta to zero
+# Called by input_update at end of frame
+# Requirements: 5.4
+fun reset_scroll():
+    g_mouse_scroll = 0.0

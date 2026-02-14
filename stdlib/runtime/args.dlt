@@ -1,0 +1,145 @@
+# ============================================================================
+# Args - Command Line Arguments (Pure Dolet)
+# Uses GetCommandLineA() from kernel32.dll - no C runtime dependency
+#
+# Available methods:
+#   - get_raw() -> str              : Get the full raw command line string
+#   - count() -> i32                : Get number of arguments
+#   - get(index: i32) -> str        : Get argument at index (0 = program name)
+#
+# Usage Examples:
+#   raw: str = Args.get_raw()        # "dolet.exe compile app.dlt"
+#   n: i32 = Args.count()            # 3
+#   prog: str = Args.get(0)          # "dolet.exe"
+#   cmd: str = Args.get(1)           # "compile"
+#   file: str = Args.get(2)          # "app.dlt"
+#
+# Notes:
+#   - Arguments are split by spaces
+#   - Quoted strings are treated as a single argument: "hello world" = one arg
+#   - get() returns "" if index is out of bounds
+#   - Index 0 is always the program name/path
+# ============================================================================
+
+struct Args:
+    # ========== Raw Access ==========
+    
+    # Get the full raw command line string as-is from the OS
+    static fun get_raw() -> str:
+        return GetCommandLineA()
+    
+    # ========== Argument Parsing ==========
+    
+    # Count the number of arguments in the command line
+    # Handles quoted strings as single arguments
+    static fun count() -> i32:
+        line: str = GetCommandLineA()
+        len: i64 = Memory.strlen(line)
+        
+        if len == 0:
+            return 0
+        
+        n: i32 = 0
+        i: i64 = 0
+        
+        while i < len:
+            # Skip spaces
+            while i < len:
+                c: i32 = Memory.read_i8((line as i64) + i) as i32
+                if c != 32:
+                    break
+                i = i + 1
+            
+            if i >= len:
+                break
+            
+            # Check if quoted argument
+            c: i32 = Memory.read_i8((line as i64) + i) as i32
+            if c == 34:
+                # Skip opening quote
+                i = i + 1
+                # Find closing quote
+                while i < len:
+                    c = Memory.read_i8((line as i64) + i) as i32
+                    if c == 34:
+                        break
+                    i = i + 1
+                # Skip closing quote
+                if i < len:
+                    i = i + 1
+            else:
+                # Non-quoted: find next space
+                while i < len:
+                    c = Memory.read_i8((line as i64) + i) as i32
+                    if c == 32:
+                        break
+                    i = i + 1
+            
+            n = n + 1
+        
+        return n
+    
+    # Get argument at the given index (0-based)
+    # Index 0 = program name, 1 = first arg, etc.
+    # Returns "" if index is out of bounds
+    static fun get(index: i32) -> str:
+        line: str = GetCommandLineA()
+        len: i64 = Memory.strlen(line)
+        
+        if len == 0:
+            return ""
+        
+        n: i32 = 0
+        i: i64 = 0
+        
+        while i < len:
+            # Skip spaces
+            while i < len:
+                c: i32 = Memory.read_i8((line as i64) + i) as i32
+                if c != 32:
+                    break
+                i = i + 1
+            
+            if i >= len:
+                break
+            
+            # Mark start of this argument
+            arg_start: i64 = i
+            is_quoted: bool = false
+            
+            # Check if quoted argument
+            c: i32 = Memory.read_i8((line as i64) + i) as i32
+            if c == 34:
+                is_quoted = true
+                i = i + 1
+                arg_start = i
+                # Find closing quote
+                while i < len:
+                    c = Memory.read_i8((line as i64) + i) as i32
+                    if c == 34:
+                        break
+                    i = i + 1
+            else:
+                # Non-quoted: find next space
+                while i < len:
+                    c = Memory.read_i8((line as i64) + i) as i32
+                    if c == 32:
+                        break
+                    i = i + 1
+            
+            # If this is the argument we want, extract it
+            if n == index:
+                arg_len: i64 = i - arg_start
+                result: i64 = Memory.malloc_zeroed(arg_len + 1)
+                Memory.copy(result, (line as i64) + arg_start, arg_len)
+                Memory.write_i8(result + arg_len, 0 as i8)
+                return result as str
+            
+            # Skip closing quote if quoted
+            if is_quoted and i < len:
+                i = i + 1
+            
+            n = n + 1
+        
+        # Index out of bounds
+        return ""

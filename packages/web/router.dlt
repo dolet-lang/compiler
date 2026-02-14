@@ -1,0 +1,473 @@
+# ============================================================================
+# Router - URL routing for Dolet Web Framework
+# Requirements: 2.1, 2.2, 2.3, 2.4, 5.1, 5.2, 5.3, 5.4, 5.5
+# ============================================================================
+
+# Route struct - represents a single route registration
+# Requirements: 2.1, 2.2
+struct Route:
+    method: str = ""      # HTTP method: "GET", "POST", etc.
+    path: str = ""        # URL path pattern: "/user/{id}"
+    handler: i64 = 0      # Function pointer to handler
+
+# ============================================================================
+# WebRouter struct - URL routing with generic add() method
+# Requirements: 2.1, 2.2, 2.3, 2.4
+# ============================================================================
+struct WebRouter:
+    # Static storage for routes
+    # Each route takes 24 bytes (3 x i64 for method ptr, path ptr, handler)
+    static routes: i64 = 0          # Pointer to routes array
+    static route_count: i32 = 0     # Number of registered routes
+    static max_routes: i32 = 100    # Maximum routes capacity
+    static initialized: i32 = 0     # Initialization flag
+    static last_matched_pattern: str = ""  # Last matched route pattern for param extraction
+    
+    # ========== Helper Functions ==========
+    
+    # Initialize routes storage if not already done
+    static fun init():
+        if WebRouter.initialized == 0:
+            # Set max_routes (workaround for static field initialization)
+            WebRouter.max_routes = 100
+            # Allocate space for 100 routes (24 bytes each)
+            WebRouter.routes = Memory.malloc(2400)
+            WebRouter.route_count = 0
+            WebRouter.initialized = 1
+    
+    # Compare two strings for equality
+    # Returns: 1 if equal, 0 if not
+    static fun str_equals(a: str, b: str) -> i32:
+        len_a: i64 = Memory.strlen(a)
+        len_b: i64 = Memory.strlen(b)
+        
+        if len_a != len_b:
+            return 0
+        
+        i: i64 = 0
+        while i < len_a:
+            c1: i8 = Memory.read_i8((a as i64) + i)
+            c2: i8 = Memory.read_i8((b as i64) + i)
+            if c1 != c2:
+                return 0
+            i = i + 1
+        
+        return 1
+    
+    # Check if a path matches a pattern (supports {param} placeholders)
+    # Returns: 1 if matches, 0 if not
+    # Requirements: 2.3
+    static fun path_matches(pattern: str, path: str) -> i32:
+        pattern_len: i64 = Memory.strlen(pattern)
+        path_len: i64 = Memory.strlen(path)
+        
+        pi: i64 = 0  # pattern index
+        pa: i64 = 0  # path index
+        
+        while pi < pattern_len and pa < path_len:
+            pc: i8 = Memory.read_i8((pattern as i64) + pi)
+            
+            # Check for parameter placeholder {
+            if pc == 123 as i8:  # '{'
+                # Find closing }
+                end: i64 = pi + 1
+                while end < pattern_len:
+                    ec: i8 = Memory.read_i8((pattern as i64) + end)
+                    if ec == 125 as i8:  # '}'
+                        break
+                    end = end + 1
+                
+                # Skip to next / in path or end
+                while pa < path_len:
+                    path_char: i8 = Memory.read_i8((path as i64) + pa)
+                    if path_char == 47 as i8:  # '/'
+                        break
+                    pa = pa + 1
+                
+                pi = end + 1
+            else:
+                # Direct character match
+                path_char2: i8 = Memory.read_i8((path as i64) + pa)
+                if pc != path_char2:
+                    return 0
+                pi = pi + 1
+                pa = pa + 1
+        
+        # Both should be at end
+        if pi == pattern_len and pa == path_len:
+            return 1
+        return 0
+    
+    # ========== Route Registration ==========
+    
+    # Register a route with any HTTP method
+    # Requirements: 2.1, 2.2
+    static fun add(method: str, path: str, handler: i64):
+        WebRouter.init()
+        
+        if WebRouter.route_count >= WebRouter.max_routes:
+            return
+        
+        # Calculate offset for new route (24 bytes per route)
+        offset: i64 = (WebRouter.route_count as i64) * 24
+        
+        # Store method pointer
+        Memory.write_i64(WebRouter.routes + offset, method as i64)
+        
+        # Store path pointer
+        Memory.write_i64(WebRouter.routes + offset + 8, path as i64)
+        
+        # Store handler pointer
+        Memory.write_i64(WebRouter.routes + offset + 16, handler)
+        
+        WebRouter.route_count = WebRouter.route_count + 1
+    
+    # ========== Route Matching ==========
+    
+    # Find matching handler for method and path
+    # Returns: handler function pointer, or 0 if no match
+    # Also stores the matched pattern in last_matched_pattern for param extraction
+    # Requirements: 2.4 (first registered matching route wins)
+    static fun match(method: str, path: str) -> i64:
+        WebRouter.init()
+        
+        # Reset last matched pattern
+        WebRouter.last_matched_pattern = ""
+        
+        i: i32 = 0
+        while i < WebRouter.route_count:
+            # Calculate offset for this route
+            offset: i64 = (i as i64) * 24
+            
+            # Read stored method
+            stored_method: str = Memory.read_i64(WebRouter.routes + offset) as str
+            
+            # Read stored path
+            stored_path: str = Memory.read_i64(WebRouter.routes + offset + 8) as str
+            
+            # Read stored handler
+            stored_handler: i64 = Memory.read_i64(WebRouter.routes + offset + 16)
+            
+            # Check if method matches
+            if WebRouter.str_equals(method, stored_method) == 1:
+                # Check if path matches (with parameter support)
+                if WebRouter.path_matches(stored_path, path) == 1:
+                    # Store the matched pattern for parameter extraction
+                    WebRouter.last_matched_pattern = stored_path
+                    return stored_handler
+            
+            i = i + 1
+        
+        # No match found
+        return 0
+    
+    # Get the last matched route pattern
+    # Used by Request.param() to extract URL parameters
+    # Returns: the pattern string, or empty string if no match
+    static fun get_matched_pattern() -> str:
+        return WebRouter.last_matched_pattern
+    
+    # ========== Parameter Extraction ==========
+    
+    # Extract a specific named parameter from path based on pattern
+    # Returns: parameter value string, or empty string if not found
+    # Requirements: 2.3
+    static fun extract_param(pattern: str, path: str, name: str) -> str:
+        pattern_len: i64 = Memory.strlen(pattern)
+        path_len: i64 = Memory.strlen(path)
+        name_len: i64 = Memory.strlen(name)
+        
+        pi: i64 = 0  # pattern index
+        pa: i64 = 0  # path index
+        
+        while pi < pattern_len and pa < path_len:
+            pc: i8 = Memory.read_i8((pattern as i64) + pi)
+            
+            # Check for parameter placeholder {
+            if pc == 123 as i8:  # '{'
+                # Find closing } and extract param name
+                name_start: i64 = pi + 1
+                end: i64 = pi + 1
+                while end < pattern_len:
+                    ec: i8 = Memory.read_i8((pattern as i64) + end)
+                    if ec == 125 as i8:  # '}'
+                        break
+                    end = end + 1
+                
+                # Check if this is the parameter we're looking for
+                param_name_len: i64 = end - name_start
+                is_match: i32 = 1
+                
+                if param_name_len != name_len:
+                    is_match = 0
+                else:
+                    j: i64 = 0
+                    while j < param_name_len:
+                        c1: i8 = Memory.read_i8((pattern as i64) + name_start + j)
+                        c2: i8 = Memory.read_i8((name as i64) + j)
+                        if c1 != c2:
+                            is_match = 0
+                            break
+                        j = j + 1
+                
+                # Extract parameter value from path
+                param_start: i64 = pa
+                while pa < path_len:
+                    pac: i8 = Memory.read_i8((path as i64) + pa)
+                    if pac == 47 as i8:  # '/'
+                        break
+                    pa = pa + 1
+                
+                # If this is the parameter we want, return its value
+                if is_match == 1:
+                    param_len: i64 = pa - param_start
+                    if param_len > 0:
+                        result: i64 = Memory.malloc(param_len + 1)
+                        k: i64 = 0
+                        while k < param_len:
+                            c: i8 = Memory.read_i8((path as i64) + param_start + k)
+                            Memory.write_i8(result + k, c)
+                            k = k + 1
+                        Memory.write_i8(result + param_len, 0 as i8)
+                        return result as str
+                
+                pi = end + 1
+            else:
+                # Direct character match - advance both
+                pi = pi + 1
+                pa = pa + 1
+        
+        # Parameter not found - return empty string
+        return ""
+    
+    # ========== Utility Functions ==========
+    
+    # Clear all registered routes (useful for testing)
+    static fun clear():
+        WebRouter.route_count = 0
+
+
+# ============================================================================
+# Router struct - Legacy URL routing utilities (backward compatibility)
+# Requirements: 5.1, 5.2, 5.3, 5.4, 5.5
+# ============================================================================
+struct Router:
+    # Static storage for routes
+    # Each route takes 24 bytes (3 x i64 for method ptr, path ptr, handler)
+    static routes: i64 = 0          # Pointer to routes array
+    static route_count: i32 = 0     # Number of registered routes
+    static max_routes: i32 = 100    # Maximum routes capacity
+    static initialized: i32 = 0     # Initialization flag
+    
+    # ========== Helper Functions ==========
+    
+    # Initialize routes storage if not already done
+    static fun init():
+        if Router.initialized == 0:
+            # Allocate space for 100 routes (24 bytes each)
+            Router.routes = Memory.malloc(2400)
+            Router.route_count = 0
+            Router.initialized = 1
+    
+    # Compare two strings for equality
+    # Returns: 1 if equal, 0 if not
+    static fun str_equals(a: str, b: str) -> i32:
+        len_a: i64 = Memory.strlen(a)
+        len_b: i64 = Memory.strlen(b)
+        
+        if len_a != len_b:
+            return 0
+        
+        i: i64 = 0
+        while i < len_a:
+            c1: i8 = Memory.read_i8((a as i64) + i)
+            c2: i8 = Memory.read_i8((b as i64) + i)
+            if c1 != c2:
+                return 0
+            i = i + 1
+        
+        return 1
+
+    
+    # Check if a path matches a pattern (supports {param} placeholders)
+    # Returns: 1 if matches, 0 if not
+    static fun path_matches(pattern: str, path: str) -> i32:
+        pattern_len: i64 = Memory.strlen(pattern)
+        path_len: i64 = Memory.strlen(path)
+        
+        pi: i64 = 0  # pattern index
+        pa: i64 = 0  # path index
+        
+        while pi < pattern_len and pa < path_len:
+            pc: i8 = Memory.read_i8((pattern as i64) + pi)
+            
+            # Check for parameter placeholder {
+            if pc == 123 as i8:  # '{'
+                # Find closing }
+                end: i64 = pi + 1
+                while end < pattern_len:
+                    ec: i8 = Memory.read_i8((pattern as i64) + end)
+                    if ec == 125 as i8:  # '}'
+                        break
+                    end = end + 1
+                
+                # Skip to next / in path or end
+                while pa < path_len:
+                    path_char: i8 = Memory.read_i8((path as i64) + pa)
+                    if path_char == 47 as i8:  # '/'
+                        break
+                    pa = pa + 1
+                
+                pi = end + 1
+            else:
+                # Direct character match
+                path_char2: i8 = Memory.read_i8((path as i64) + pa)
+                if pc != path_char2:
+                    return 0
+                pi = pi + 1
+                pa = pa + 1
+        
+        # Both should be at end
+        if pi == pattern_len and pa == path_len:
+            return 1
+        return 0
+    
+    # ========== Route Registration ==========
+    
+    # Register a GET route
+    # Requirements: 5.1
+    static fun get(path: str, handler: i64):
+        Router.init()
+        
+        if Router.route_count >= Router.max_routes:
+            return
+        
+        # Calculate offset for new route (24 bytes per route)
+        offset: i64 = (Router.route_count as i64) * 24
+        
+        # Store method pointer (GET)
+        Memory.write_i64(Router.routes + offset, "GET" as i64)
+        
+        # Store path pointer
+        Memory.write_i64(Router.routes + offset + 8, path as i64)
+        
+        # Store handler pointer
+        Memory.write_i64(Router.routes + offset + 16, handler)
+        
+        Router.route_count = Router.route_count + 1
+    
+    # Register a POST route
+    # Requirements: 5.2
+    static fun post(path: str, handler: i64):
+        Router.init()
+        
+        if Router.route_count >= Router.max_routes:
+            return
+        
+        # Calculate offset for new route (24 bytes per route)
+        offset: i64 = (Router.route_count as i64) * 24
+        
+        # Store method pointer (POST)
+        Memory.write_i64(Router.routes + offset, "POST" as i64)
+        
+        # Store path pointer
+        Memory.write_i64(Router.routes + offset + 8, path as i64)
+        
+        # Store handler pointer
+        Memory.write_i64(Router.routes + offset + 16, handler)
+        
+        Router.route_count = Router.route_count + 1
+
+    
+    # ========== Route Matching ==========
+    
+    # Find matching handler for method and path
+    # Returns: handler function pointer, or 0 if no match
+    # Requirements: 5.4, 5.5
+    static fun match(method: str, path: str) -> i64:
+        Router.init()
+        
+        i: i32 = 0
+        while i < Router.route_count:
+            # Calculate offset for this route
+            offset: i64 = (i as i64) * 24
+            
+            # Read stored method
+            stored_method: str = Memory.read_i64(Router.routes + offset) as str
+            
+            # Read stored path
+            stored_path: str = Memory.read_i64(Router.routes + offset + 8) as str
+            
+            # Read stored handler
+            stored_handler: i64 = Memory.read_i64(Router.routes + offset + 16)
+            
+            # Check if method matches
+            if Router.str_equals(method, stored_method) == 1:
+                # Check if path matches (with parameter support)
+                if Router.path_matches(stored_path, path) == 1:
+                    return stored_handler
+            
+            i = i + 1
+        
+        # No match found
+        return 0
+    
+    # ========== Parameter Extraction ==========
+    
+    # Extract parameters from path based on pattern
+    # Returns: pointer to parameter value string, or 0 if no parameter
+    # Requirements: 5.3
+    static fun extract_params(pattern: str, path: str) -> i64:
+        pattern_len: i64 = Memory.strlen(pattern)
+        path_len: i64 = Memory.strlen(path)
+        
+        pi: i64 = 0  # pattern index
+        pa: i64 = 0  # path index
+        
+        while pi < pattern_len and pa < path_len:
+            pc: i8 = Memory.read_i8((pattern as i64) + pi)
+            
+            # Check for parameter placeholder {
+            if pc == 123 as i8:  # '{'
+                # Find closing }
+                end: i64 = pi + 1
+                while end < pattern_len:
+                    ec: i8 = Memory.read_i8((pattern as i64) + end)
+                    if ec == 125 as i8:  # '}'
+                        break
+                    end = end + 1
+                
+                # Extract parameter value from path
+                param_start: i64 = pa
+                while pa < path_len:
+                    pac: i8 = Memory.read_i8((path as i64) + pa)
+                    if pac == 47 as i8:  # '/'
+                        break
+                    pa = pa + 1
+                
+                # Allocate and copy parameter value
+                param_len: i64 = pa - param_start
+                if param_len > 0:
+                    result: i64 = Memory.malloc(param_len + 1)
+                    j: i64 = 0
+                    while j < param_len:
+                        c: i8 = Memory.read_i8((path as i64) + param_start + j)
+                        Memory.write_i8(result + j, c)
+                        j = j + 1
+                    Memory.write_i8(result + param_len, 0 as i8)
+                    return result
+                
+                pi = end + 1
+            else:
+                # Direct character match - advance both
+                pi = pi + 1
+                pa = pa + 1
+        
+        # No parameter found
+        return 0
+    
+    # ========== Utility Functions ==========
+    
+    # Clear all registered routes (useful for testing)
+    static fun clear():
+        Router.route_count = 0

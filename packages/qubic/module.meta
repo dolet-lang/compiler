@@ -1,0 +1,18 @@
+# Qubic Game Engine Module Metadata
+# Uses glfw and vulkan via 'import glfw' / 'import vulkan'
+# The compiler reads their module.meta automatically
+
+[info]
+name = qubic
+version = 1.0.0
+description = Qubic Game Engine - A Vulkan-based game engine
+
+[libs]
+# No direct native libs - glfw and vulkan are imported as Dolet modules
+
+[dlls]
+# No direct runtime DLLs - handled by glfw and vulkan modules
+
+[dependencies]
+glfw = true
+vulkan = true

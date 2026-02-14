@@ -1,0 +1,1301 @@
+# Qubic Engine - Render Resources
+# Handles render pass, framebuffers, command pool/buffers, sync objects, graphics pipeline
+
+import vulkan
+
+# ===== Render Resources =====
+
+struct RenderResources:
+    render_pass: i64 = 0
+    framebuffers: i64 = 0  # Array of VkFramebuffer handles
+    framebuffer_count: i32 = 0
+    command_pool: i64 = 0
+    command_buffers: i64 = 0  # Array of VkCommandBuffer handles
+    command_buffer_count: i32 = 0
+    
+    # Sync objects (arrays for double buffering)
+    image_available_semaphores: i64 = 0
+    render_finished_semaphores: i64 = 0
+    in_flight_fences: i64 = 0
+    max_frames_in_flight: i32 = 2
+    current_frame: i32 = 0
+    frame_counter: i32 = 0  # Actual frame count for debugging
+    
+    # Graphics pipeline
+    pipeline_layout: i64 = 0
+    graphics_pipeline: i64 = 0
+    descriptor_set_layout: i64 = 0
+    descriptor_pool: i64 = 0
+    descriptor_sets: i64 = 0  # Array of descriptor sets
+    
+    # Uniform buffers (one per frame in flight)
+    uniform_buffers: i64 = 0  # Array of VkBuffer
+    uniform_buffers_memory: i64 = 0  # Array of VkDeviceMemory
+    uniform_buffers_mapped: i64 = 0  # Array of mapped pointers
+    
+    # Vertex buffer
+    vertex_buffer: i64 = 0
+    vertex_buffer_memory: i64 = 0
+    
+    # Shader modules
+    vert_shader_module: i64 = 0
+    frag_shader_module: i64 = 0
+    
+    # Pre-allocated buffers for draw_frame (optimization to avoid per-frame malloc/free)
+    frame_fence_array: i64 = 0
+    frame_image_index_ptr: i64 = 0
+    frame_submit_info: i64 = 0
+    frame_wait_semaphores: i64 = 0
+    frame_wait_stages: i64 = 0
+    frame_signal_semaphores: i64 = 0
+    frame_command_buffers_arr: i64 = 0
+    frame_present_info: i64 = 0
+    frame_wait_sems_present: i64 = 0
+    frame_swapchains_arr: i64 = 0
+    frame_image_indices_arr: i64 = 0
+    frame_buffers_initialized: i32 = 0
+    
+    # Initialize pre-allocated frame buffers
+    fun init_frame_buffers(self) -> i32:
+        if self.frame_buffers_initialized == 1:
+            return 1
+        
+        self.frame_fence_array = Memory.malloc_zeroed(8)
+        if self.frame_fence_array == 0:
+            print("Error: Failed to allocate frame fence array")
+            return 0
+        
+        self.frame_image_index_ptr = Memory.malloc_zeroed(4)
+        if self.frame_image_index_ptr == 0:
+            print("Error: Failed to allocate frame image index ptr")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_submit_info = Memory.malloc_zeroed(96)
+        if self.frame_submit_info == 0:
+            print("Error: Failed to allocate frame submit info")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_wait_semaphores = Memory.malloc_zeroed(8)
+        if self.frame_wait_semaphores == 0:
+            print("Error: Failed to allocate frame wait semaphores")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_wait_stages = Memory.malloc_zeroed(4)
+        if self.frame_wait_stages == 0:
+            print("Error: Failed to allocate frame wait stages")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_signal_semaphores = Memory.malloc_zeroed(8)
+        if self.frame_signal_semaphores == 0:
+            print("Error: Failed to allocate frame signal semaphores")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_command_buffers_arr = Memory.malloc_zeroed(8)
+        if self.frame_command_buffers_arr == 0:
+            print("Error: Failed to allocate frame command buffers arr")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_present_info = Memory.malloc_zeroed(96)
+        if self.frame_present_info == 0:
+            print("Error: Failed to allocate frame present info")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_wait_sems_present = Memory.malloc_zeroed(8)
+        if self.frame_wait_sems_present == 0:
+            print("Error: Failed to allocate frame wait sems present")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_swapchains_arr = Memory.malloc_zeroed(8)
+        if self.frame_swapchains_arr == 0:
+            print("Error: Failed to allocate frame swapchains arr")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_image_indices_arr = Memory.malloc_zeroed(4)
+        if self.frame_image_indices_arr == 0:
+            print("Error: Failed to allocate frame image indices arr")
+            self.cleanup_frame_buffers()
+            return 0
+        
+        self.frame_buffers_initialized = 1
+        print("Frame buffers initialized (optimized allocation)")
+        return 1
+    
+    # Cleanup pre-allocated frame buffers
+    fun cleanup_frame_buffers(self):
+        if self.frame_fence_array != 0:
+            Memory.free(self.frame_fence_array)
+            self.frame_fence_array = 0
+        
+        if self.frame_image_index_ptr != 0:
+            Memory.free(self.frame_image_index_ptr)
+            self.frame_image_index_ptr = 0
+        
+        if self.frame_submit_info != 0:
+            Memory.free(self.frame_submit_info)
+            self.frame_submit_info = 0
+        
+        if self.frame_wait_semaphores != 0:
+            Memory.free(self.frame_wait_semaphores)
+            self.frame_wait_semaphores = 0
+        
+        if self.frame_wait_stages != 0:
+            Memory.free(self.frame_wait_stages)
+            self.frame_wait_stages = 0
+        
+        if self.frame_signal_semaphores != 0:
+            Memory.free(self.frame_signal_semaphores)
+            self.frame_signal_semaphores = 0
+        
+        if self.frame_command_buffers_arr != 0:
+            Memory.free(self.frame_command_buffers_arr)
+            self.frame_command_buffers_arr = 0
+        
+        if self.frame_present_info != 0:
+            Memory.free(self.frame_present_info)
+            self.frame_present_info = 0
+        
+        if self.frame_wait_sems_present != 0:
+            Memory.free(self.frame_wait_sems_present)
+            self.frame_wait_sems_present = 0
+        
+        if self.frame_swapchains_arr != 0:
+            Memory.free(self.frame_swapchains_arr)
+            self.frame_swapchains_arr = 0
+        
+        if self.frame_image_indices_arr != 0:
+            Memory.free(self.frame_image_indices_arr)
+            self.frame_image_indices_arr = 0
+        
+        self.frame_buffers_initialized = 0
+    
+    # Create render pass
+    fun create_render_pass(self, device: i64, swapchain_format: i32) -> i32:
+        print("Creating render pass...")
+        
+        # VkAttachmentDescription (36 bytes with padding)
+        color_attachment: i64 = Memory.malloc_zeroed(64)
+        if color_attachment == 0:
+            print("Error: Failed to allocate color attachment")
+            return 0
+        
+        Memory.set(color_attachment, 0, 64)
+        Memory.write_i32(color_attachment, 0)        # flags = 0
+        Memory.write_i32(color_attachment + 4, swapchain_format) # format
+        Memory.write_i32(color_attachment + 8, 1)    # samples = VK_SAMPLE_COUNT_1_BIT
+        Memory.write_i32(color_attachment + 12, 1)   # loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR
+        Memory.write_i32(color_attachment + 16, 0)   # storeOp = VK_ATTACHMENT_STORE_OP_STORE
+        Memory.write_i32(color_attachment + 20, 0)   # stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE
+        Memory.write_i32(color_attachment + 24, 0)   # stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE
+        Memory.write_i32(color_attachment + 28, 0)   # initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+        Memory.write_i32(color_attachment + 32, 2)   # finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+        
+        # VkAttachmentReference (8 bytes)
+        color_attachment_ref: i64 = Memory.malloc_zeroed(16)
+        if color_attachment_ref == 0:
+            print("Error: Failed to allocate attachment ref")
+            Memory.free(color_attachment)
+            return 0
+        
+        Memory.set(color_attachment_ref, 0, 16)
+        Memory.write_i32(color_attachment_ref, 0)    # attachment = 0
+        Memory.write_i32(color_attachment_ref + 4, 2) # layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        
+        # VkSubpassDescription (72 bytes with 64-bit alignment)
+        subpass: i64 = Memory.malloc_zeroed(128)
+        if subpass == 0:
+            print("Error: Failed to allocate subpass")
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        
+        Memory.set(subpass, 0, 128)
+        Memory.write_i32(subpass, 0)                      # flags = 0
+        Memory.write_i32(subpass + 4, 0)                  # pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS
+        Memory.write_i32(subpass + 8, 0)                  # inputAttachmentCount = 0
+        Memory.write_ptr(subpass + 16, 0)                 # pInputAttachments = NULL
+        Memory.write_i32(subpass + 24, 1)                 # colorAttachmentCount = 1
+        Memory.write_ptr(subpass + 32, color_attachment_ref) # pColorAttachments
+        Memory.write_ptr(subpass + 40, 0)                 # pResolveAttachments = NULL
+        Memory.write_ptr(subpass + 48, 0)                 # pDepthStencilAttachment = NULL
+        Memory.write_i32(subpass + 56, 0)                 # preserveAttachmentCount = 0
+        Memory.write_ptr(subpass + 64, 0)                 # pPreserveAttachments = NULL
+        
+        # VkSubpassDependency (28 bytes)
+        dependency: i64 = Memory.malloc_zeroed(32)
+        if dependency == 0:
+            print("Error: Failed to allocate dependency")
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        
+        Memory.set(dependency, 0, 32)
+        Memory.write_i32(dependency, -1)                  # srcSubpass = VK_SUBPASS_EXTERNAL
+        Memory.write_i32(dependency + 4, 0)               # dstSubpass = 0
+        Memory.write_i32(dependency + 8, 1024)            # srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        Memory.write_i32(dependency + 12, 1024)           # dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        Memory.write_i32(dependency + 16, 0)              # srcAccessMask = 0
+        Memory.write_i32(dependency + 20, 2)              # dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+        Memory.write_i32(dependency + 24, 0)              # dependencyFlags = 0
+        
+        # VkRenderPassCreateInfo (64 bytes with 64-bit alignment)
+        render_pass_info: i64 = Memory.malloc_zeroed(128)
+        if render_pass_info == 0:
+            print("Error: Failed to allocate render pass info")
+            Memory.free(dependency)
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        
+        Memory.set(render_pass_info, 0, 128)
+        Memory.write_i32(render_pass_info, 38)            # sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO
+        Memory.write_ptr(render_pass_info + 8, 0)         # pNext = NULL
+        Memory.write_i32(render_pass_info + 16, 0)        # flags = 0
+        Memory.write_i32(render_pass_info + 20, 1)        # attachmentCount = 1
+        Memory.write_ptr(render_pass_info + 24, color_attachment) # pAttachments
+        Memory.write_i32(render_pass_info + 32, 1)        # subpassCount = 1
+        Memory.write_ptr(render_pass_info + 40, subpass)  # pSubpasses
+        Memory.write_i32(render_pass_info + 48, 1)        # dependencyCount = 1
+        Memory.write_ptr(render_pass_info + 56, dependency) # pDependencies
+        
+        # Create render pass
+        render_pass_ptr: i64 = Memory.malloc_zeroed(8)
+        if render_pass_ptr == 0:
+            print("Error: Failed to allocate render pass pointer")
+            Memory.free(render_pass_info)
+            Memory.free(dependency)
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+        
+        Memory.set(render_pass_ptr, 0, 8)
+        result: i32 = vkCreateRenderPass(device, render_pass_info, 0, render_pass_ptr)
+        
+        if result == 0:
+            self.render_pass = Memory.read_ptr(render_pass_ptr)
+            print("Render pass created successfully!")
+            
+            Memory.free(render_pass_ptr)
+            Memory.free(render_pass_info)
+            Memory.free(dependency)
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 1
+        else:
+            print("Error: Failed to create render pass")
+            Memory.free(render_pass_ptr)
+            Memory.free(render_pass_info)
+            Memory.free(dependency)
+            Memory.free(subpass)
+            Memory.free(color_attachment_ref)
+            Memory.free(color_attachment)
+            return 0
+
+    
+    # Create framebuffers
+    fun create_framebuffers(self, device: i64, image_views: i64, count: i32, width: i32, height: i32) -> i32:
+        print("Creating framebuffers...")
+        
+        if self.render_pass == 0:
+            print("Error: Render pass not created")
+            return 0
+        
+        # Allocate array for framebuffers
+        self.framebuffers = Memory.malloc_zeroed(count * 8)
+        if self.framebuffers == 0:
+            print("Error: Failed to allocate framebuffers array")
+            return 0
+        
+        self.framebuffer_count = count
+        
+        i: i32 = 0
+        while i < count:
+            # Get image view
+            image_view: i64 = Memory.read_ptr(image_views + (i * 8))
+            
+            # Create array for attachments (just one color attachment)
+            attachments: i64 = Memory.malloc_zeroed(8)
+            if attachments == 0:
+                print("Error: Failed to allocate attachments")
+                return 0
+            
+            Memory.write_ptr(attachments, image_view)
+            
+            # VkFramebufferCreateInfo (64 bytes with 64-bit alignment)
+            framebuffer_info: i64 = Memory.malloc_zeroed(128)
+            if framebuffer_info == 0:
+                print("Error: Failed to allocate framebuffer info")
+                Memory.free(attachments)
+                return 0
+            
+            Memory.set(framebuffer_info, 0, 128)
+            Memory.write_i32(framebuffer_info, 37)           # sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO
+            Memory.write_ptr(framebuffer_info + 8, 0)        # pNext = NULL
+            Memory.write_i32(framebuffer_info + 16, 0)       # flags = 0
+            Memory.write_ptr(framebuffer_info + 24, self.render_pass) # renderPass
+            Memory.write_i32(framebuffer_info + 32, 1)       # attachmentCount = 1
+            Memory.write_ptr(framebuffer_info + 40, attachments) # pAttachments
+            Memory.write_i32(framebuffer_info + 48, width)   # width
+            Memory.write_i32(framebuffer_info + 52, height)  # height
+            Memory.write_i32(framebuffer_info + 56, 1)       # layers = 1
+            
+            # Create framebuffer
+            framebuffer_ptr: i64 = Memory.malloc_zeroed(8)
+            if framebuffer_ptr == 0:
+                print("Error: Failed to allocate framebuffer pointer")
+                Memory.free(framebuffer_info)
+                Memory.free(attachments)
+                return 0
+            
+            Memory.set(framebuffer_ptr, 0, 8)
+            result: i32 = vkCreateFramebuffer(device, framebuffer_info, 0, framebuffer_ptr)
+            
+            if result == 0:
+                framebuffer_handle: i64 = Memory.read_ptr(framebuffer_ptr)
+                Memory.write_ptr(self.framebuffers + (i * 8), framebuffer_handle)
+            else:
+                print("Error: Failed to create framebuffer")
+                Memory.free(framebuffer_ptr)
+                Memory.free(framebuffer_info)
+                Memory.free(attachments)
+                return 0
+            
+            Memory.free(framebuffer_ptr)
+            Memory.free(framebuffer_info)
+            Memory.free(attachments)
+            
+            i = i + 1
+        
+        print("Framebuffers created successfully!")
+        return 1
+    
+    # Create command pool
+    fun create_command_pool(self, device: i64, queue_family: i32) -> i32:
+        print("Creating command pool...")
+        
+        # VkCommandPoolCreateInfo (24 bytes with 64-bit alignment)
+        pool_info: i64 = Memory.malloc_zeroed(32)
+        if pool_info == 0:
+            print("Error: Failed to allocate pool info")
+            return 0
+        
+        Memory.set(pool_info, 0, 32)
+        Memory.write_i32(pool_info, 39)                  # sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO
+        Memory.write_ptr(pool_info + 8, 0)               # pNext = NULL
+        Memory.write_i32(pool_info + 16, 2)              # flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
+        Memory.write_i32(pool_info + 20, queue_family)   # queueFamilyIndex
+        
+        # Create command pool
+        pool_ptr: i64 = Memory.malloc_zeroed(8)
+        if pool_ptr == 0:
+            print("Error: Failed to allocate pool pointer")
+            Memory.free(pool_info)
+            return 0
+        
+        Memory.set(pool_ptr, 0, 8)
+        result: i32 = vkCreateCommandPool(device, pool_info, 0, pool_ptr)
+        
+        if result == 0:
+            self.command_pool = Memory.read_ptr(pool_ptr)
+            print("Command pool created successfully!")
+            Memory.free(pool_ptr)
+            Memory.free(pool_info)
+            return 1
+        else:
+            print("Error: Failed to create command pool")
+            Memory.free(pool_ptr)
+            Memory.free(pool_info)
+            return 0
+    
+    # Create command buffers
+    fun create_command_buffers(self, device: i64, count: i32) -> i32:
+        print("Creating command buffers...")
+        
+        if self.command_pool == 0:
+            print("Error: Command pool not created")
+            return 0
+        
+        # Allocate array for command buffers
+        self.command_buffers = Memory.malloc_zeroed(count * 8)
+        if self.command_buffers == 0:
+            print("Error: Failed to allocate command buffers array")
+            return 0
+        
+        self.command_buffer_count = count
+        
+        # VkCommandBufferAllocateInfo (32 bytes with 64-bit alignment)
+        alloc_info: i64 = Memory.malloc_zeroed(64)
+        if alloc_info == 0:
+            print("Error: Failed to allocate alloc info")
+            return 0
+        
+        Memory.set(alloc_info, 0, 64)
+        Memory.write_i32(alloc_info, 40)                 # sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO
+        Memory.write_ptr(alloc_info + 8, 0)              # pNext = NULL
+        Memory.write_ptr(alloc_info + 16, self.command_pool) # commandPool
+        Memory.write_i32(alloc_info + 24, 0)             # level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
+        Memory.write_i32(alloc_info + 28, count)         # commandBufferCount
+        
+        # Allocate command buffers
+        result: i32 = vkAllocateCommandBuffers(device, alloc_info, self.command_buffers)
+        
+        if result == 0:
+            print("Command buffers created successfully!")
+            Memory.free(alloc_info)
+            return 1
+        else:
+            print("Error: Failed to allocate command buffers")
+            Memory.free(alloc_info)
+            return 0
+    
+    # Create sync objects (semaphores and fences)
+    fun create_sync_objects(self, device: i64) -> i32:
+        # Allocate arrays for sync objects
+        self.image_available_semaphores = Memory.malloc_zeroed(self.max_frames_in_flight * 8)
+        self.render_finished_semaphores = Memory.malloc_zeroed(self.max_frames_in_flight * 8)
+        self.in_flight_fences = Memory.malloc_zeroed(self.max_frames_in_flight * 8)
+        
+        if self.image_available_semaphores == 0 || self.render_finished_semaphores == 0 || self.in_flight_fences == 0:
+            print("Error: Failed to allocate sync object arrays")
+            return 0
+        
+        # VkSemaphoreCreateInfo (24 bytes with 64-bit alignment)
+        semaphore_info: i64 = Memory.malloc_zeroed(32)
+        if semaphore_info == 0:
+            print("Error: Failed to allocate semaphore info")
+            return 0
+        
+        Memory.set(semaphore_info, 0, 32)
+        Memory.write_i32(semaphore_info, 9)            # sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
+        Memory.write_ptr(semaphore_info + 8, 0)        # pNext
+        Memory.write_i32(semaphore_info + 16, 0)       # flags
+        
+        # VkFenceCreateInfo (24 bytes with 64-bit alignment)
+        fence_info: i64 = Memory.malloc_zeroed(32)
+        if fence_info == 0:
+            print("Error: Failed to allocate fence info")
+            Memory.free(semaphore_info)
+            return 0
+        
+        Memory.set(fence_info, 0, 32)
+        Memory.write_i32(fence_info, 8)                # sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO
+        Memory.write_ptr(fence_info + 8, 0)            # pNext
+        Memory.write_i32(fence_info + 16, 1)           # flags = VK_FENCE_CREATE_SIGNALED_BIT
+        
+        # Create sync objects for each frame
+        i: i32 = 0
+        while i < self.max_frames_in_flight:
+            # Create image available semaphore
+            sem_ptr: i64 = Memory.malloc_zeroed(8)
+            if sem_ptr != 0:
+                Memory.set(sem_ptr, 0, 8)
+                result: i32 = vkCreateSemaphore(device, semaphore_info, 0, sem_ptr)
+                if result == 0:
+                    sem: i64 = Memory.read_ptr(sem_ptr)
+                    Memory.write_ptr(self.image_available_semaphores + (i * 8), sem)
+                Memory.free(sem_ptr)
+            
+            # Create render finished semaphore
+            sem_ptr2: i64 = Memory.malloc_zeroed(8)
+            if sem_ptr2 != 0:
+                Memory.set(sem_ptr2, 0, 8)
+                result2: i32 = vkCreateSemaphore(device, semaphore_info, 0, sem_ptr2)
+                if result2 == 0:
+                    sem2: i64 = Memory.read_ptr(sem_ptr2)
+                    Memory.write_ptr(self.render_finished_semaphores + (i * 8), sem2)
+                Memory.free(sem_ptr2)
+            
+            # Create fence
+            fence_ptr: i64 = Memory.malloc_zeroed(8)
+            if fence_ptr != 0:
+                Memory.set(fence_ptr, 0, 8)
+                result3: i32 = vkCreateFence(device, fence_info, 0, fence_ptr)
+                if result3 == 0:
+                    fence: i64 = Memory.read_ptr(fence_ptr)
+                    Memory.write_ptr(self.in_flight_fences + (i * 8), fence)
+                Memory.free(fence_ptr)
+            
+            i = i + 1
+        
+        Memory.free(fence_info)
+        Memory.free(semaphore_info)
+        
+        print("Sync objects created!")
+        return 1
+
+    
+    # Record command buffer for rendering
+    fun record_command_buffer(self, command_buffer: i64, framebuffer: i64, width: i32, height: i32, mvp_matrix: i64) -> i32:
+        # VkCommandBufferBeginInfo (32 bytes with 64-bit alignment)
+        begin_info: i64 = Memory.malloc_zeroed(64)
+        if begin_info == 0:
+            print("Error: Failed to allocate begin info")
+            return 0
+        
+        Memory.set(begin_info, 0, 64)
+        Memory.write_i32(begin_info, 42)               # sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
+        Memory.write_ptr(begin_info + 8, 0)            # pNext
+        Memory.write_i32(begin_info + 16, 0)           # flags
+        Memory.write_ptr(begin_info + 24, 0)           # pInheritanceInfo
+        
+        # Begin command buffer
+        result: i32 = vkBeginCommandBuffer(command_buffer, begin_info)
+        Memory.free(begin_info)
+        
+        if result != 0:
+            print("Error: Failed to begin command buffer")
+            return 0
+        
+        # VkRenderPassBeginInfo (64 bytes with 64-bit alignment)
+        render_pass_info: i64 = Memory.malloc_zeroed(96)
+        if render_pass_info == 0:
+            print("Error: Failed to allocate render pass begin info")
+            return 0
+        
+        Memory.set(render_pass_info, 0, 96)
+        Memory.write_i32(render_pass_info, 43)         # sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO
+        Memory.write_ptr(render_pass_info + 8, 0)      # pNext
+        Memory.write_ptr(render_pass_info + 16, self.render_pass) # renderPass
+        Memory.write_ptr(render_pass_info + 24, framebuffer) # framebuffer
+        # renderArea (offset + extent)
+        Memory.write_i32(render_pass_info + 32, 0)     # renderArea.offset.x
+        Memory.write_i32(render_pass_info + 36, 0)     # renderArea.offset.y
+        Memory.write_i32(render_pass_info + 40, width) # renderArea.extent.width
+        Memory.write_i32(render_pass_info + 44, height) # renderArea.extent.height
+        
+        # Clear color (VkClearValue union = 16 bytes)
+        clear_value: i64 = Memory.malloc_zeroed(16)
+        if clear_value != 0:
+            Memory.set(clear_value, 0, 16)
+            # Write clear color values - Nice blue color
+            Memory.write_f32(clear_value, 0.0)         # R = 0.0
+            Memory.write_f32(clear_value + 4, 0.5)     # G = 0.5
+            Memory.write_f32(clear_value + 8, 0.8)     # B = 0.8
+            Memory.write_f32(clear_value + 12, 1.0)    # A = 1.0 (opaque)
+            
+            # Set clearValueCount and pClearValues in render pass info
+            Memory.write_i32(render_pass_info + 48, 1) # clearValueCount
+            Memory.write_ptr(render_pass_info + 56, clear_value) # pClearValues
+        
+        # Begin render pass
+        vkCmdBeginRenderPass(command_buffer, render_pass_info, 0)  # VK_SUBPASS_CONTENTS_INLINE = 0
+        
+        # Bind graphics pipeline
+        if self.graphics_pipeline != 0:
+            vkCmdBindPipeline(command_buffer, 0, self.graphics_pipeline)  # VK_PIPELINE_BIND_POINT_GRAPHICS = 0
+            
+            # Push MVP matrix to vertex shader
+            if mvp_matrix != 0 && self.pipeline_layout != 0:
+                vkCmdPushConstants(command_buffer, self.pipeline_layout, 1, 0, 64, mvp_matrix)  # VK_SHADER_STAGE_VERTEX_BIT = 1
+            
+            # Set dynamic viewport
+            viewport: i64 = Memory.malloc_zeroed(24)
+            if viewport != 0:
+                Memory.write_f32(viewport, 0.0)         # x
+                Memory.write_f32(viewport + 4, 0.0)     # y
+                Memory.write_f32(viewport + 8, width)   # width (as float)
+                Memory.write_f32(viewport + 12, height) # height (as float)
+                Memory.write_f32(viewport + 16, 0.0)    # minDepth
+                Memory.write_f32(viewport + 20, 1.0)    # maxDepth
+                vkCmdSetViewport(command_buffer, 0, 1, viewport)
+                Memory.free(viewport)
+            
+            # Set dynamic scissor
+            scissor: i64 = Memory.malloc_zeroed(16)
+            if scissor != 0:
+                Memory.write_i32(scissor, 0)            # offset.x
+                Memory.write_i32(scissor + 4, 0)        # offset.y
+                Memory.write_i32(scissor + 8, width)    # extent.width
+                Memory.write_i32(scissor + 12, height)  # extent.height
+                vkCmdSetScissor(command_buffer, 0, 1, scissor)
+                Memory.free(scissor)
+            
+            # Draw cube (36 vertices = 12 triangles = 6 faces * 2 triangles)
+            vkCmdDraw(command_buffer, 36, 1, 0, 0)
+        
+        # End render pass
+        vkCmdEndRenderPass(command_buffer)
+        
+        # End command buffer
+        result2: i32 = vkEndCommandBuffer(command_buffer)
+        
+        # Free resources
+        if clear_value != 0:
+            Memory.free(clear_value)
+        Memory.free(render_pass_info)
+        
+        if result2 != 0:
+            print("Error: Failed to end command buffer")
+            return 0
+        
+        return 1
+    
+    # Render a frame (optimized - uses pre-allocated buffers)
+    fun draw_frame(self, device: i64, swapchain: i64, graphics_queue: i64, present_queue: i64, framebuffers: i64, width: i32, height: i32, mvp_matrix: i64) -> i32:
+        if self.command_buffers == 0 || self.in_flight_fences == 0:
+            print("Error: Rendering resources not ready")
+            return 0
+        
+        # Initialize frame buffers if not already done
+        if self.frame_buffers_initialized == 0:
+            init_result: i32 = self.init_frame_buffers()
+            if init_result == 0:
+                print("Error: Failed to initialize frame buffers")
+                return 0
+        
+        # Get current frame fence
+        current_fence: i64 = Memory.read_ptr(self.in_flight_fences + (self.current_frame * 8))
+        
+        # Wait for fence (using pre-allocated buffer)
+        Memory.write_ptr(self.frame_fence_array, current_fence)
+        vkWaitForFences(device, 1, self.frame_fence_array, 1, -1)
+        vkResetFences(device, 1, self.frame_fence_array)
+        
+        # Acquire next image (using pre-allocated buffer)
+        Memory.write_i32(self.frame_image_index_ptr, 0)
+        current_semaphore: i64 = Memory.read_ptr(self.image_available_semaphores + (self.current_frame * 8))
+        
+        result: i32 = vkAcquireNextImageKHR(device, swapchain, -1, current_semaphore, 0, self.frame_image_index_ptr)
+        image_index: i32 = Memory.read_i32(self.frame_image_index_ptr)
+        
+        if result != 0:
+            print("Error: Failed to acquire swapchain image, result =")
+            print(result)
+            if result == 1000001003:
+                print("Swapchain is out of date - needs recreation!")
+            return 0
+        
+        # Get command buffer
+        command_buffer: i64 = Memory.read_ptr(self.command_buffers + (self.current_frame * 8))
+        
+        # Reset command buffer
+        vkResetCommandBuffer(command_buffer, 0)
+        
+        # Get framebuffer for this image
+        framebuffer: i64 = Memory.read_ptr(framebuffers + (image_index * 8))
+        
+        # Record command buffer
+        rec_result: i32 = self.record_command_buffer(command_buffer, framebuffer, width, height, mvp_matrix)
+        if rec_result == 0:
+            return 0
+        
+        # Submit command buffer (using pre-allocated buffers)
+        Memory.set(self.frame_submit_info, 0, 96)
+        
+        Memory.write_ptr(self.frame_wait_semaphores, current_semaphore)
+        Memory.write_i32(self.frame_wait_stages, 1024)  # VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        
+        render_finished_sem: i64 = Memory.read_ptr(self.render_finished_semaphores + (self.current_frame * 8))
+        Memory.write_ptr(self.frame_signal_semaphores, render_finished_sem)
+        Memory.write_ptr(self.frame_command_buffers_arr, command_buffer)
+        
+        Memory.write_i32(self.frame_submit_info, 4)               # sType = VK_STRUCTURE_TYPE_SUBMIT_INFO
+        Memory.write_ptr(self.frame_submit_info + 8, 0)           # pNext
+        Memory.write_i32(self.frame_submit_info + 16, 1)          # waitSemaphoreCount
+        Memory.write_ptr(self.frame_submit_info + 24, self.frame_wait_semaphores) # pWaitSemaphores
+        Memory.write_ptr(self.frame_submit_info + 32, self.frame_wait_stages) # pWaitDstStageMask
+        Memory.write_i32(self.frame_submit_info + 40, 1)          # commandBufferCount
+        Memory.write_ptr(self.frame_submit_info + 48, self.frame_command_buffers_arr) # pCommandBuffers
+        Memory.write_i32(self.frame_submit_info + 56, 1)          # signalSemaphoreCount
+        Memory.write_ptr(self.frame_submit_info + 64, self.frame_signal_semaphores) # pSignalSemaphores
+        
+        result2: i32 = vkQueueSubmit(graphics_queue, 1, self.frame_submit_info, current_fence)
+        
+        if result2 != 0:
+            print("Error: Failed to submit draw command buffer, result =")
+            print(result2)
+            return 0
+        
+        # Present (using pre-allocated buffers)
+        Memory.set(self.frame_present_info, 0, 96)
+        
+        Memory.write_ptr(self.frame_wait_sems_present, render_finished_sem)
+        Memory.write_ptr(self.frame_swapchains_arr, swapchain)
+        Memory.write_i32(self.frame_image_indices_arr, image_index)
+        
+        Memory.write_i32(self.frame_present_info, 1000001001)     # sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR
+        Memory.write_ptr(self.frame_present_info + 8, 0)          # pNext
+        Memory.write_i32(self.frame_present_info + 16, 1)         # waitSemaphoreCount
+        Memory.write_ptr(self.frame_present_info + 24, self.frame_wait_sems_present) # pWaitSemaphores
+        Memory.write_i32(self.frame_present_info + 32, 1)         # swapchainCount
+        Memory.write_ptr(self.frame_present_info + 40, self.frame_swapchains_arr) # pSwapchains
+        Memory.write_ptr(self.frame_present_info + 48, self.frame_image_indices_arr) # pImageIndices
+        Memory.write_ptr(self.frame_present_info + 56, 0)         # pResults
+        
+        result3: i32 = vkQueuePresentKHR(present_queue, self.frame_present_info)
+        
+        if result3 != 0 && result3 != -1000001004:  # Allow VK_SUBOPTIMAL_KHR
+            print("Error: Failed to present swapchain image, result =")
+            print(result3)
+            if result3 == 1000001003:
+                print("Swapchain is out of date - needs recreation!")
+            return 0
+        
+        # Advance to next frame
+        self.current_frame = (self.current_frame + 1) % self.max_frames_in_flight
+        self.frame_counter = self.frame_counter + 1
+        
+        return 1
+
+    
+    # Load shader from SPIR-V file and create shader module
+    fun load_shader_module(device: i64, shader_path: str) -> i64:
+        print("Loading shader: ")
+        print(shader_path)
+        
+        zero_i64: i64 = 0
+        
+        # Open shader file using File.open (resolves path relative to executable)
+        shader_file: File = File.open(shader_path, "r")
+        if not shader_file.is_open:
+            print("Error: Failed to open shader file")
+            return zero_i64
+        
+        # Get file size
+        file_size: i64 = shader_file.get_size()
+        
+        print("Shader file size: ")
+        
+        # Allocate buffer for shader code
+        shader_code: i64 = Memory.malloc_zeroed(file_size)
+        if shader_code == 0:
+            print("Error: Failed to allocate shader buffer")
+            shader_file.close()
+            return zero_i64
+        
+        # Read shader code
+        bytes_read: i32 = shader_file.read_bytes(shader_code, file_size as i32)
+        shader_file.close()
+        
+        if bytes_read != (file_size as i32):
+            print("Error: Failed to read shader file")
+            Memory.free(shader_code)
+            return zero_i64
+        
+        print("Shader loaded successfully!")
+        
+        # Create VkShaderModuleCreateInfo
+        create_info: i64 = Memory.malloc_zeroed(64)
+        if create_info == 0:
+            print("Error: Failed to allocate create info")
+            Memory.free(shader_code)
+            return zero_i64
+        
+        Memory.set(create_info, 0, 64)
+        Memory.write_i32(create_info, 16)                # sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
+        Memory.write_ptr(create_info + 8, 0)             # pNext = NULL
+        Memory.write_i32(create_info + 16, 0)            # flags = 0
+        Memory.write_i64(create_info + 24, file_size)    # codeSize
+        Memory.write_ptr(create_info + 32, shader_code)  # pCode
+        
+        # Create shader module
+        shader_module_ptr: i64 = Memory.malloc_zeroed(8)
+        if shader_module_ptr == 0:
+            print("Error: Failed to allocate shader module pointer")
+            Memory.free(create_info)
+            Memory.free(shader_code)
+            return zero_i64
+        
+        Memory.set(shader_module_ptr, 0, 8)
+        result: i32 = vkCreateShaderModule(device, create_info, 0, shader_module_ptr)
+        
+        if result == 0:
+            shader_module: i64 = Memory.read_ptr(shader_module_ptr)
+            print("Shader module created successfully!")
+            
+            Memory.free(shader_module_ptr)
+            Memory.free(create_info)
+            Memory.free(shader_code)
+            return shader_module
+        else:
+            print("Error: Failed to create shader module")
+            Memory.free(shader_module_ptr)
+            Memory.free(create_info)
+            Memory.free(shader_code)
+            return zero_i64
+    
+    # Helper: Create shader stages for pipeline
+    fun create_shader_stages(self, vert_shader: i64, frag_shader: i64) -> i64:
+        # Allocate array for 2 shader stages (48 bytes each = 96 bytes total)
+        stages: i64 = Memory.malloc_zeroed(96)
+        if stages == 0:
+            print("Error: Failed to allocate shader stages")
+            zero: i64 = 0
+            return zero
+        
+        Memory.set(stages, 0, 96)
+        
+        # Create "main" entry point string
+        main_str: str = "main"
+        
+        # Configure vertex shader stage (first 48 bytes)
+        Memory.write_i32(stages, 18)                    # sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO
+        Memory.write_i64(stages + 8, 0)                 # pNext = NULL
+        Memory.write_i32(stages + 16, 0)                # flags = 0
+        Memory.write_i32(stages + 20, 1)                # stage = VK_SHADER_STAGE_VERTEX_BIT
+        Memory.write_i64(stages + 24, vert_shader)      # module
+        Memory.write_i64(stages + 32, main_str)         # pName = "main"
+        Memory.write_i64(stages + 40, 0)                # pSpecializationInfo = NULL
+        
+        # Configure fragment shader stage (second 48 bytes)
+        frag_stage: i64 = stages + 48
+        Memory.write_i32(frag_stage, 18)                # sType
+        Memory.write_i64(frag_stage + 8, 0)             # pNext = NULL
+        Memory.write_i32(frag_stage + 16, 0)            # flags = 0
+        Memory.write_i32(frag_stage + 20, 16)           # stage = VK_SHADER_STAGE_FRAGMENT_BIT
+        Memory.write_i64(frag_stage + 24, frag_shader)  # module
+        Memory.write_i64(frag_stage + 32, main_str)     # pName = "main"
+        Memory.write_i64(frag_stage + 40, 0)            # pSpecializationInfo = NULL
+        
+        return stages
+    
+    # Helper: Create vertex input state (empty - vertices in shader)
+    fun create_vertex_input_state(self) -> i64:
+        vertex_input: i64 = Memory.malloc_zeroed(48)
+        if vertex_input == 0:
+            zero: i64 = 0
+            return zero
+        
+        Memory.set(vertex_input, 0, 48)
+        Memory.write_i32(vertex_input, 20)              # sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+        Memory.write_i64(vertex_input + 8, 0)           # pNext = NULL
+        Memory.write_i32(vertex_input + 16, 0)          # flags = 0
+        Memory.write_i32(vertex_input + 20, 0)          # vertexBindingDescriptionCount = 0
+        Memory.write_i64(vertex_input + 24, 0)          # pVertexBindingDescriptions = NULL
+        Memory.write_i32(vertex_input + 32, 0)          # vertexAttributeDescriptionCount = 0
+        Memory.write_i64(vertex_input + 40, 0)          # pVertexAttributeDescriptions = NULL
+        
+        return vertex_input
+    
+    # Helper: Create input assembly state
+    fun create_input_assembly_state(self) -> i64:
+        input_assembly: i64 = Memory.malloc_zeroed(32)
+        if input_assembly == 0:
+            zero: i64 = 0
+            return zero
+        
+        Memory.set(input_assembly, 0, 32)
+        Memory.write_i32(input_assembly, 21)            # sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
+        Memory.write_i64(input_assembly + 8, 0)         # pNext = NULL
+        Memory.write_i32(input_assembly + 16, 0)        # flags = 0
+        Memory.write_i32(input_assembly + 20, 3)        # topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+        Memory.write_i32(input_assembly + 24, 0)        # primitiveRestartEnable = VK_FALSE
+        
+        return input_assembly
+    
+    # Helper: Create viewport state (dynamic)
+    fun create_viewport_state(self) -> i64:
+        viewport_state: i64 = Memory.malloc_zeroed(48)
+        if viewport_state == 0:
+            zero: i64 = 0
+            return zero
+        
+        Memory.set(viewport_state, 0, 48)
+        Memory.write_i32(viewport_state, 22)            # sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO
+        Memory.write_i64(viewport_state + 8, 0)         # pNext = NULL
+        Memory.write_i32(viewport_state + 16, 0)        # flags = 0
+        Memory.write_i32(viewport_state + 20, 1)        # viewportCount = 1
+        Memory.write_i64(viewport_state + 24, 0)        # pViewports = NULL (dynamic)
+        Memory.write_i32(viewport_state + 32, 1)        # scissorCount = 1
+        Memory.write_i64(viewport_state + 40, 0)        # pScissors = NULL (dynamic)
+        
+        return viewport_state
+    
+    # Helper: Create rasterization state
+    fun create_rasterization_state(self) -> i64:
+        rasterization: i64 = Memory.malloc_zeroed(64)
+        if rasterization == 0:
+            zero: i64 = 0
+            return zero
+        
+        Memory.set(rasterization, 0, 64)
+        Memory.write_i32(rasterization, 23)             # sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO
+        Memory.write_i64(rasterization + 8, 0)          # pNext = NULL
+        Memory.write_i32(rasterization + 16, 0)         # flags = 0
+        Memory.write_i32(rasterization + 20, 0)         # depthClampEnable = VK_FALSE
+        Memory.write_i32(rasterization + 24, 0)         # rasterizerDiscardEnable = VK_FALSE
+        Memory.write_i32(rasterization + 28, 0)         # polygonMode = VK_POLYGON_MODE_FILL
+        Memory.write_i32(rasterization + 32, 1)         # cullMode = VK_CULL_MODE_BACK_BIT
+        Memory.write_i32(rasterization + 36, 0)         # frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE
+        Memory.write_i32(rasterization + 40, 0)         # depthBiasEnable = VK_FALSE
+        Memory.write_f32(rasterization + 44, 0.0)       # depthBiasConstantFactor = 0.0
+        Memory.write_f32(rasterization + 48, 0.0)       # depthBiasClamp = 0.0
+        Memory.write_f32(rasterization + 52, 0.0)       # depthBiasSlopeFactor = 0.0
+        Memory.write_f32(rasterization + 56, 1.0)       # lineWidth = 1.0
+        
+        return rasterization
+    
+    # Helper: Create multisample state
+    fun create_multisample_state(self) -> i64:
+        multisample: i64 = Memory.malloc_zeroed(48)
+        if multisample == 0:
+            zero: i64 = 0
+            return zero
+        
+        Memory.set(multisample, 0, 48)
+        Memory.write_i32(multisample, 24)               # sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
+        Memory.write_i64(multisample + 8, 0)            # pNext = NULL
+        Memory.write_i32(multisample + 16, 0)           # flags = 0
+        Memory.write_i32(multisample + 20, 1)           # rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
+        Memory.write_i32(multisample + 24, 0)           # sampleShadingEnable = VK_FALSE
+        Memory.write_f32(multisample + 28, 0.0)         # minSampleShading = 0.0
+        Memory.write_i64(multisample + 32, 0)           # pSampleMask = NULL
+        Memory.write_i32(multisample + 40, 0)           # alphaToCoverageEnable = VK_FALSE
+        Memory.write_i32(multisample + 44, 0)           # alphaToOneEnable = VK_FALSE
+        
+        return multisample
+    
+    # Helper: Create color blend state
+    fun create_color_blend_state(self) -> i64:
+        # Allocate color blend attachment state (32 bytes)
+        attachment: i64 = Memory.malloc_zeroed(32)
+        if attachment == 0:
+            zero: i64 = 0
+            return zero
+        
+        Memory.set(attachment, 0, 32)
+        Memory.write_i32(attachment, 0)                 # blendEnable = VK_FALSE
+        Memory.write_i32(attachment + 4, 1)             # srcColorBlendFactor = VK_BLEND_FACTOR_ONE
+        Memory.write_i32(attachment + 8, 0)             # dstColorBlendFactor = VK_BLEND_FACTOR_ZERO
+        Memory.write_i32(attachment + 12, 0)            # colorBlendOp = VK_BLEND_OP_ADD
+        Memory.write_i32(attachment + 16, 1)            # srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE
+        Memory.write_i32(attachment + 20, 0)            # dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO
+        Memory.write_i32(attachment + 24, 0)            # alphaBlendOp = VK_BLEND_OP_ADD
+        Memory.write_i32(attachment + 28, 15)           # colorWriteMask = VK_COLOR_COMPONENT_R|G|B|A_BIT
+        
+        # Allocate color blend state (56 bytes)
+        color_blend: i64 = Memory.malloc_zeroed(56)
+        if color_blend == 0:
+            Memory.free(attachment)
+            null_ptr: i64 = 0
+            return null_ptr
+        
+        Memory.set(color_blend, 0, 56)
+        Memory.write_i32(color_blend, 26)               # sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO
+        Memory.write_i64(color_blend + 8, 0)            # pNext = NULL
+        Memory.write_i32(color_blend + 16, 0)           # flags = 0
+        Memory.write_i32(color_blend + 20, 0)           # logicOpEnable = VK_FALSE
+        Memory.write_i32(color_blend + 24, 0)           # logicOp = VK_LOGIC_OP_COPY
+        Memory.write_i32(color_blend + 28, 1)           # attachmentCount = 1
+        Memory.write_i64(color_blend + 32, attachment)  # pAttachments
+        Memory.write_f32(color_blend + 40, 0.0)         # blendConstants[0]
+        Memory.write_f32(color_blend + 44, 0.0)         # blendConstants[1]
+        Memory.write_f32(color_blend + 48, 0.0)         # blendConstants[2]
+        Memory.write_f32(color_blend + 52, 0.0)         # blendConstants[3]
+        
+        return color_blend
+    
+    # Helper: Create dynamic state
+    fun create_dynamic_state(self) -> i64:
+        # Allocate array for dynamic states (2 states * 4 bytes = 8 bytes)
+        dynamic_states: i64 = Memory.malloc_zeroed(8)
+        if dynamic_states == 0:
+            zero: i64 = 0
+            return zero
+        
+        Memory.write_i32(dynamic_states, 0)             # VK_DYNAMIC_STATE_VIEWPORT
+        Memory.write_i32(dynamic_states + 4, 1)         # VK_DYNAMIC_STATE_SCISSOR
+        
+        # Allocate dynamic state create info (32 bytes)
+        dynamic_state: i64 = Memory.malloc_zeroed(32)
+        if dynamic_state == 0:
+            Memory.free(dynamic_states)
+            null_ptr: i64 = 0
+            return null_ptr
+        
+        Memory.set(dynamic_state, 0, 32)
+        Memory.write_i32(dynamic_state, 27)             # sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO
+        Memory.write_i64(dynamic_state + 8, 0)          # pNext = NULL
+        Memory.write_i32(dynamic_state + 16, 0)         # flags = 0
+        Memory.write_i32(dynamic_state + 20, 2)         # dynamicStateCount = 2
+        Memory.write_i64(dynamic_state + 24, dynamic_states) # pDynamicStates
+        
+        return dynamic_state
+
+    
+    # Create graphics pipeline
+    fun create_graphics_pipeline(self, device: i64, vert_shader: i64, frag_shader: i64, width: i32, height: i32) -> i32:
+        print("Creating graphics pipeline...")
+        
+        # Step 1: Create pipeline layout with push constants for MVP matrix
+        push_constant_range: i64 = Memory.malloc_zeroed(16)
+        if push_constant_range == 0:
+            print("Error: Failed to allocate push constant range")
+            return 0
+        
+        Memory.set(push_constant_range, 0, 16)
+        Memory.write_i32(push_constant_range, 1)        # stageFlags = VK_SHADER_STAGE_VERTEX_BIT
+        Memory.write_i32(push_constant_range + 4, 0)    # offset = 0
+        Memory.write_i32(push_constant_range + 8, 64)   # size = 64 bytes (4x4 matrix)
+        
+        layout_info: i64 = Memory.malloc_zeroed(48)
+        if layout_info == 0:
+            print("Error: Failed to allocate layout info")
+            Memory.free(push_constant_range)
+            return 0
+        
+        Memory.set(layout_info, 0, 48)
+        Memory.write_i32(layout_info, 30)               # sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
+        Memory.write_i64(layout_info + 8, 0)            # pNext = NULL
+        Memory.write_i32(layout_info + 16, 0)           # flags = 0
+        Memory.write_i32(layout_info + 20, 0)           # setLayoutCount = 0
+        Memory.write_i64(layout_info + 24, 0)           # pSetLayouts = NULL
+        Memory.write_i32(layout_info + 32, 1)           # pushConstantRangeCount = 1
+        Memory.write_i64(layout_info + 40, push_constant_range) # pPushConstantRanges
+        
+        layout_ptr: i64 = Memory.malloc_zeroed(8)
+        if layout_ptr == 0:
+            print("Error: Failed to allocate layout pointer")
+            Memory.free(layout_info)
+            Memory.free(push_constant_range)
+            return 0
+        
+        Memory.set(layout_ptr, 0, 8)
+        layout_result: i32 = vkCreatePipelineLayout(device, layout_info, 0, layout_ptr)
+        
+        if layout_result != 0:
+            print("Error: Failed to create pipeline layout")
+            Memory.free(layout_ptr)
+            Memory.free(layout_info)
+            Memory.free(push_constant_range)
+            return 0
+        
+        self.pipeline_layout = Memory.read_i64(layout_ptr)
+        print("Pipeline layout created!")
+        
+        Memory.free(layout_ptr)
+        Memory.free(layout_info)
+        Memory.free(push_constant_range)
+        
+        # Step 2: Create all pipeline state objects
+        shader_stages: i64 = self.create_shader_stages(vert_shader, frag_shader)
+        if shader_stages == 0:
+            return 0
+        
+        vertex_input: i64 = self.create_vertex_input_state()
+        if vertex_input == 0:
+            Memory.free(shader_stages)
+            return 0
+        
+        input_assembly: i64 = self.create_input_assembly_state()
+        if input_assembly == 0:
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            return 0
+        
+        viewport_state: i64 = self.create_viewport_state()
+        if viewport_state == 0:
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            Memory.free(input_assembly)
+            return 0
+        
+        rasterization: i64 = self.create_rasterization_state()
+        if rasterization == 0:
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            Memory.free(input_assembly)
+            Memory.free(viewport_state)
+            return 0
+        
+        multisample: i64 = self.create_multisample_state()
+        if multisample == 0:
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            Memory.free(input_assembly)
+            Memory.free(viewport_state)
+            Memory.free(rasterization)
+            return 0
+        
+        color_blend: i64 = self.create_color_blend_state()
+        if color_blend == 0:
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            Memory.free(input_assembly)
+            Memory.free(viewport_state)
+            Memory.free(rasterization)
+            Memory.free(multisample)
+            return 0
+        
+        dynamic_state: i64 = self.create_dynamic_state()
+        if dynamic_state == 0:
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            Memory.free(input_assembly)
+            Memory.free(viewport_state)
+            Memory.free(rasterization)
+            Memory.free(multisample)
+            Memory.free(color_blend)
+            return 0
+        
+        # Step 3: Create pipeline info structure
+        pipeline_info: i64 = Memory.malloc_zeroed(144)
+        if pipeline_info == 0:
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            Memory.free(input_assembly)
+            Memory.free(viewport_state)
+            Memory.free(rasterization)
+            Memory.free(multisample)
+            Memory.free(color_blend)
+            Memory.free(dynamic_state)
+            return 0
+        
+        Memory.set(pipeline_info, 0, 144)
+        Memory.write_i32(pipeline_info, 28)             # sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO
+        Memory.write_i64(pipeline_info + 8, 0)          # pNext = NULL
+        Memory.write_i32(pipeline_info + 16, 0)         # flags = 0
+        Memory.write_i32(pipeline_info + 20, 2)         # stageCount = 2
+        Memory.write_i64(pipeline_info + 24, shader_stages)    # pStages
+        Memory.write_i64(pipeline_info + 32, vertex_input)     # pVertexInputState
+        Memory.write_i64(pipeline_info + 40, input_assembly)   # pInputAssemblyState
+        Memory.write_i64(pipeline_info + 48, 0)                # pTessellationState = NULL
+        Memory.write_i64(pipeline_info + 56, viewport_state)   # pViewportState
+        Memory.write_i64(pipeline_info + 64, rasterization)    # pRasterizationState
+        Memory.write_i64(pipeline_info + 72, multisample)      # pMultisampleState
+        Memory.write_i64(pipeline_info + 80, 0)                # pDepthStencilState = NULL
+        Memory.write_i64(pipeline_info + 88, color_blend)      # pColorBlendState
+        Memory.write_i64(pipeline_info + 96, dynamic_state)    # pDynamicState
+        Memory.write_i64(pipeline_info + 104, self.pipeline_layout) # layout
+        Memory.write_i64(pipeline_info + 112, self.render_pass)     # renderPass
+        Memory.write_i32(pipeline_info + 120, 0)               # subpass = 0
+        Memory.write_i64(pipeline_info + 128, 0)               # basePipelineHandle = VK_NULL_HANDLE
+        Memory.write_i32(pipeline_info + 136, -1)              # basePipelineIndex = -1
+        
+        # Step 4: Create the pipeline
+        pipeline_ptr: i64 = Memory.malloc_zeroed(8)
+        if pipeline_ptr == 0:
+            Memory.free(pipeline_info)
+            Memory.free(shader_stages)
+            Memory.free(vertex_input)
+            Memory.free(input_assembly)
+            Memory.free(viewport_state)
+            Memory.free(rasterization)
+            Memory.free(multisample)
+            Memory.free(color_blend)
+            Memory.free(dynamic_state)
+            return 0
+        
+        Memory.set(pipeline_ptr, 0, 8)
+        
+        print("Calling vkCreateGraphicsPipelines...")
+        pipeline_result: i32 = vkCreateGraphicsPipelines(device, 0, 1, pipeline_info, 0, pipeline_ptr)
+        
+        if pipeline_result == 0:
+            self.graphics_pipeline = Memory.read_i64(pipeline_ptr)
+            print("Graphics pipeline created successfully!")
+        else:
+            print("Error: vkCreateGraphicsPipelines failed with code:")
+            print(pipeline_result)
+        
+        # Step 5: Cleanup all temporary resources
+        Memory.free(pipeline_ptr)
+        Memory.free(pipeline_info)
+        Memory.free(shader_stages)
+        Memory.free(vertex_input)
+        Memory.free(input_assembly)
+        Memory.free(viewport_state)
+        Memory.free(rasterization)
+        Memory.free(multisample)
+        Memory.free(color_blend)
+        Memory.free(dynamic_state)
+        
+        if pipeline_result == 0:
+            return 1
+        else:
+            return 0
+    
+    # Cleanup render resources
+    fun cleanup(self, device: i64):
+        if device == 0:
+            return
+        
+        # Destroy framebuffers
+        if self.framebuffers != 0:
+            i: i32 = 0
+            while i < self.framebuffer_count:
+                fb: i64 = Memory.read_ptr(self.framebuffers + (i * 8))
+                if fb != 0:
+                    vkDestroyFramebuffer(device, fb, 0)
+                i = i + 1
+            Memory.free(self.framebuffers)
+            self.framebuffers = 0
+            print("Framebuffers destroyed")
+        
+        # Destroy render pass
+        if self.render_pass != 0:
+            vkDestroyRenderPass(device, self.render_pass, 0)
+            self.render_pass = 0
+            print("Render pass destroyed")
+    
+    # Cleanup command resources
+    fun cleanup_commands(self, device: i64):
+        if device == 0:
+            return
+        
+        # Free command buffers
+        if self.command_buffers != 0 && self.command_pool != 0:
+            vkFreeCommandBuffers(device, self.command_pool, self.command_buffer_count, self.command_buffers)
+            Memory.free(self.command_buffers)
+            self.command_buffers = 0
+            print("Command buffers freed")
+        
+        # Destroy command pool
+        if self.command_pool != 0:
+            vkDestroyCommandPool(device, self.command_pool, 0)
+            self.command_pool = 0
+            print("Command pool destroyed")
+    
+    # Cleanup sync objects
+    fun cleanup_sync(self, device: i64):
+        if device == 0:
+            return
+        
+        # Destroy semaphores and fences
+        if self.image_available_semaphores != 0:
+            i: i64 = 0
+            while i < self.max_frames_in_flight:
+                sem: i64 = Memory.read_ptr(self.image_available_semaphores + (i * 8))
+                if sem != 0:
+                    vkDestroySemaphore(device, sem, 0)
+                i = i + 1
+            Memory.free(self.image_available_semaphores)
+            self.image_available_semaphores = 0
+        
+        if self.render_finished_semaphores != 0:
+            j: i64 = 0
+            while j < self.max_frames_in_flight:
+                sem2: i64 = Memory.read_ptr(self.render_finished_semaphores + (j * 8))
+                if sem2 != 0:
+                    vkDestroySemaphore(device, sem2, 0)
+                j = j + 1
+            Memory.free(self.render_finished_semaphores)
+            self.render_finished_semaphores = 0
+        
+        if self.in_flight_fences != 0:
+            k: i64 = 0
+            while k < self.max_frames_in_flight:
+                fence: i64 = Memory.read_ptr(self.in_flight_fences + (k * 8))
+                if fence != 0:
+                    vkDestroyFence(device, fence, 0)
+                k = k + 1
+            Memory.free(self.in_flight_fences)
+            self.in_flight_fences = 0
+        
+        # Also cleanup pre-allocated frame buffers
+        self.cleanup_frame_buffers()
+        
+        print("Sync objects destroyed")
+

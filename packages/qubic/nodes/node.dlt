@@ -1,0 +1,114 @@
+# Node - Base class for all game objects
+# Part of Qubic Game Engine
+# Requirements: 1.1, 1.2, 1.3, 1.4
+
+struct Node:
+    # Core properties (Requirements 1.1, 1.2, 1.3, 1.4)
+    name: str = ""
+    owner: i64 = 0                  # Pointer to owner Node (nullable)
+    unique_name_in_owner: bool = false
+    children: i64 = 0               # Pointer to children array (array of i64 pointers)
+    children_count: i32 = 0
+    children_capacity: i32 = 0
+
+
+imple Node:
+    # Set the node name
+    fun set_name(self, new_name: str):
+        self.name = new_name
+    
+    # Get the node name
+    fun get_name(self) -> str:
+        return self.name
+    
+    # Initialize children array if needed
+    fun _ensure_capacity(self):
+        if self.children == 0:
+            # Allocate initial array (4 pointers = 32 bytes)
+            self.children = Memory.malloc_zeroed(4 * 8)
+            if self.children != 0:
+                Memory.set(self.children, 0, 4 * 8)
+                self.children_capacity = 4
+        else:
+            # Check if we need to grow
+            if self.children_count >= self.children_capacity:
+                new_capacity: i32 = self.children_capacity * 2
+                new_array: i64 = Memory.malloc_zeroed(new_capacity * 8)
+                if new_array != 0:
+                    # Copy existing children
+                    Memory.copy(new_array, self.children, self.children_capacity * 8)
+                    Memory.free(self.children)
+                    self.children = new_array
+                    self.children_capacity = new_capacity
+    
+    # Add a child node (Requirement 1.5)
+    fun add_child(self, child: i64):
+        if child == 0:
+            return
+        
+        # Ensure we have capacity
+        self._ensure_capacity()
+        
+        if self.children == 0:
+            return
+        
+        # Add child to array
+        offset: i64 = self.children_count * 8
+        Memory.write_ptr(self.children + offset, child)
+        self.children_count = self.children_count + 1
+    
+    # Remove a child node (Requirement 1.6)
+    fun remove_child(self, child: i64):
+        if child == 0 || self.children == 0 || self.children_count == 0:
+            return
+        
+        # Find the child
+        i: i32 = 0
+        found_index: i32 = -1
+        while i < self.children_count:
+            offset: i64 = i * 8
+            current: i64 = Memory.read_ptr(self.children + offset)
+            if current == child:
+                found_index = i
+                i = self.children_count  # Break loop
+            else:
+                i = i + 1
+        
+        # If found, remove by shifting remaining elements
+        if found_index >= 0:
+            j: i32 = found_index
+            while j < self.children_count - 1:
+                src_offset: i64 = (j + 1) * 8
+                dst_offset: i64 = j * 8
+                next_child: i64 = Memory.read_ptr(self.children + src_offset)
+                Memory.write_ptr(self.children + dst_offset, next_child)
+                j = j + 1
+            
+            self.children_count = self.children_count - 1
+    
+    # Get child at index (Requirement 1.7)
+    fun get_child(self, index: i32) -> i64:
+        zero: i64 = 0
+        if self.children == zero || index < 0 || index >= self.children_count:
+            return zero
+        
+        offset: i64 = index * 8
+        return Memory.read_ptr(self.children + offset)
+    
+    # Get number of children (Requirement 1.8)
+    fun get_child_count(self) -> i32:
+        return self.children_count
+    
+    # Check if node has children
+    fun has_children(self) -> bool:
+        return self.children_count > 0
+    
+    # Free resources
+    fun free_node(self):
+        if self.children != 0:
+            Memory.free(self.children)
+            self.children = 0
+            self.children_count = 0
+            self.children_capacity = 0
+
+

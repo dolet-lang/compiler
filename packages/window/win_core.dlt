@@ -1,0 +1,447 @@
+# ============================
+#  Window Component
+# ============================
+# Core Window struct and management functions
+# Requirements: 1.1, 1.2, 1.3, 5.1, 5.2, 5.3, 5.4, 9.1, 9.2
+#
+# NOTE: Input handling has been moved to the standalone Input Library.
+# Use "import input" for keyboard and mouse input functions.
+
+# ----- Vulkan Surface Extern Functions -----
+extern lib "vulkan-1":
+    fun vkCreateWin32SurfaceKHR(instance: i64, pCreateInfo: i64, pAllocator: i64, pSurface: i64) -> i32
+    fun vkDestroySurfaceKHR(instance: i64, surface: i64, pAllocator: i64) -> i32
+
+# ----- VkWin32SurfaceCreateInfoKHR Structure -----
+struct VkWin32SurfaceCreateInfoKHR:
+    sType: i32 = 1000009000
+    padding1: i32 = 0
+    pNext: i64 = 0
+    flags: i32 = 0
+    padding2: i32 = 0
+    hinstance: i64 = 0
+    hwnd: i64 = 0
+
+# ----- Global Resize Callback -----
+g_resize_callback: i64 = 0
+g_resize_callback_data: i64 = 0
+
+# ----- Win32 Extern Functions -----
+extern lib "user32":
+    fun RegisterClassExA(lpWndClass: i64) -> i16
+    fun UnregisterClassA(lpClassName: i64, hInstance: i64) -> i32
+    fun CreateWindowExA(dwExStyle: i32, lpClassName: i64, lpWindowName: i64, dwStyle: i32, x: i32, y: i32, nWidth: i32, nHeight: i32, hWndParent: i64, hMenu: i64, hInstance: i64, lpParam: i64) -> i64
+    fun DestroyWindow(hWnd: i64) -> i32
+    fun ShowWindow(hWnd: i64, nCmdShow: i32) -> i32
+    fun SetWindowTextA(hWnd: i64, lpString: i64) -> i32
+    fun SetWindowPos(hWnd: i64, hWndInsertAfter: i64, X: i32, Y: i32, cx: i32, cy: i32, uFlags: i32) -> i32
+    fun GetClientRect(hWnd: i64, lpRect: i64) -> i32
+    fun DefWindowProcA(hWnd: i64, Msg: i32, wParam: i64, lParam: i64) -> i64
+    fun LoadCursorA(hInstance: i64, lpCursorName: i64) -> i64
+    fun GetLastError() -> i32
+    fun PeekMessageA(lpMsg: i64, hWnd: i64, wMsgFilterMin: i32, wMsgFilterMax: i32, wRemoveMsg: i32) -> i32
+    fun TranslateMessage(lpMsg: i64) -> i32
+    fun DispatchMessageA(lpMsg: i64) -> i64
+    fun ShowCursor(bShow: i32) -> i32
+    fun ClipCursor(lpRect: i64) -> i32
+    fun SetCursorPos(X: i32, Y: i32) -> i32
+    fun GetWindowRect(hWnd: i64, lpRect: i64) -> i32
+    fun WaitMessage() -> i32
+    fun MsgWaitForMultipleObjects(nCount: i32, pHandles: i64, fWaitAll: i32, dwMilliseconds: i32, dwWakeMask: i32) -> i32
+
+extern lib "kernel32":
+    fun GetModuleHandleA(lpModuleName: i64) -> i64
+
+# ----- Global Error State -----
+g_last_error: i32 = 0
+g_win32_error: i32 = 0
+
+# ----- Global Window State -----
+g_current_window: i64 = 0
+g_class_name_data: i64 = 0
+g_class_registered: i32 = 0
+g_should_close: i32 = 0
+g_window_resized: i32 = 0
+g_window_focused: i32 = 1
+g_window_width: i32 = 0
+g_window_height: i32 = 0
+
+# ----- Cursor State -----
+g_cursor_visible: i32 = 1
+g_cursor_locked: i32 = 0
+
+
+# ----- WndProc Callback Function -----
+# Handles only window events (close, resize, focus)
+# Input events are handled by the Input Library via GetAsyncKeyState
+fun WndProc(hWnd: i64, uMsg: i32, wParam: i64, lParam: i64) -> i64:
+    new_width: i32 = 0
+    new_height: i32 = 0
+    
+    # Handle window close message
+    if uMsg == WM_CLOSE:
+        g_should_close = 1
+        return 0
+    
+    # Handle window resize message
+    if uMsg == WM_SIZE:
+        new_width = (lParam & 65535) as i32
+        new_height = ((lParam >> 16) & 65535) as i32
+        g_window_width = new_width
+        g_window_height = new_height
+        g_window_resized = 1
+        return 0
+    
+    # Handle focus gained
+    if uMsg == WM_SETFOCUS:
+        g_window_focused = 1
+        return 0
+    
+    # Handle focus lost
+    if uMsg == WM_KILLFOCUS:
+        g_window_focused = 0
+        return 0
+    
+    # Default message handling
+    return DefWindowProcA(hWnd, uMsg, wParam, lParam)
+
+# ----- Window Struct -----
+struct Window:
+    handle: i64 = 0
+    hinstance: i64 = 0
+    width: i32 = 0
+    height: i32 = 0
+    should_close_flag: i32 = 0
+    is_resized: i32 = 0
+    is_focused: i32 = 1
+    vulkan_surface: i64 = 0
+
+# ----- Window Implementation -----
+imple Window:
+    static fun create(title: str, width: i32, height: i32) -> Window:
+        if width <= 0 or height <= 0:
+            g_last_error = WINDOW_ERROR_INVALID_PARAMETER
+            return Window()
+        
+        hinstance: i64 = GetModuleHandleA(0)
+        if hinstance == 0:
+            g_last_error = WINDOW_ERROR_CREATE_WINDOW
+            g_win32_error = GetLastError()
+            return Window()
+        
+        if g_class_registered == 0:
+            wc: WNDCLASSEXW = WNDCLASSEXW()
+            wc.cbSize = 80
+            wc.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC
+            wc.lpfnWndProc = WndProc as i64
+            wc.cbClsExtra = 0
+            wc.cbWndExtra = 0
+            wc.hInstance = hinstance
+            wc.hIcon = 0
+            wc.hCursor = LoadCursorA(0, IDC_ARROW)
+            wc.hbrBackground = 0
+            wc.lpszMenuName = 0
+            class_name: str = "DoletWindow"
+            wc.lpszClassName = class_name as i64
+            wc.hIconSm = 0
+            
+            atom: i16 = RegisterClassExA(wc as i64)
+            if atom == 0:
+                g_last_error = WINDOW_ERROR_REGISTER_CLASS
+                g_win32_error = GetLastError()
+                return Window()
+            
+            g_class_registered = 1
+        
+        style: i32 = WS_OVERLAPPEDWINDOW | WS_VISIBLE
+        class_name_ptr: str = "DoletWindow"
+        
+        hwnd: i64 = CreateWindowExA(
+            0,
+            class_name_ptr as i64,
+            title as i64,
+            style,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            width,
+            height,
+            0,
+            0,
+            hinstance,
+            0
+        )
+        
+        if hwnd == 0:
+            g_last_error = WINDOW_ERROR_CREATE_WINDOW
+            g_win32_error = GetLastError()
+            return Window()
+        
+        window: Window = Window(
+            handle=hwnd,
+            hinstance=hinstance,
+            width=width,
+            height=height,
+            should_close_flag=0,
+            is_resized=0,
+            is_focused=1,
+            vulkan_surface=0
+        )
+        
+        g_current_window = window as i64
+        g_should_close = 0
+        g_window_resized = 0
+        g_window_focused = 1
+        g_window_width = width
+        g_window_height = height
+        
+        ShowWindow(hwnd, SW_SHOW)
+        g_last_error = WINDOW_ERROR_NONE
+        
+        return window
+    
+    fun destroy(self):
+        if self.handle != 0:
+            DestroyWindow(self.handle)
+            self.handle = 0
+        
+        if g_current_window == self as i64:
+            g_current_window = 0
+        
+        if g_class_registered == 1:
+            class_name: str = "DoletWindow"
+            UnregisterClassA(class_name as i64, self.hinstance)
+            g_class_registered = 0
+        
+        self.hinstance = 0
+        self.width = 0
+        self.height = 0
+        self.should_close_flag = 0
+        self.is_resized = 0
+        self.is_focused = 0
+        self.vulkan_surface = 0
+    
+    fun should_close(self) -> i32:
+        if g_should_close == 1:
+            self.should_close_flag = 1
+        return self.should_close_flag
+    
+    fun poll_events(self):
+        if self.handle == 0:
+            return
+        
+        msg: MSG = MSG()
+        
+        while PeekMessageA(msg as i64, 0, 0, 0, PM_REMOVE) != 0:
+            TranslateMessage(msg as i64)
+            DispatchMessageA(msg as i64)
+        
+        if g_should_close == 1:
+            self.should_close_flag = 1
+        if g_window_resized == 1:
+            self.width = g_window_width
+            self.height = g_window_height
+            self.is_resized = 1
+        self.is_focused = g_window_focused
+    
+    fun get_width(self) -> i32:
+        if g_window_resized == 1:
+            self.width = g_window_width
+            self.height = g_window_height
+            self.is_resized = 1
+        
+        rect: RECT = RECT()
+        GetClientRect(self.handle, rect as i64)
+        actual_width: i32 = rect.right - rect.left
+        self.width = actual_width
+        return actual_width
+    
+    fun get_height(self) -> i32:
+        if g_window_resized == 1:
+            self.width = g_window_width
+            self.height = g_window_height
+            self.is_resized = 1
+        
+        rect: RECT = RECT()
+        GetClientRect(self.handle, rect as i64)
+        actual_height: i32 = rect.bottom - rect.top
+        self.height = actual_height
+        return actual_height
+    
+    fun set_size(self, width: i32, height: i32):
+        if self.handle == 0:
+            return
+        flags: i32 = SWP_NOMOVE | SWP_NOZORDER
+        SetWindowPos(self.handle, 0, 0, 0, width, height, flags)
+        self.width = width
+        self.height = height
+    
+    fun set_title(self, title: str):
+        if self.handle == 0:
+            return
+        SetWindowTextA(self.handle, title as i64)
+    
+    fun show(self):
+        if self.handle == 0:
+            return
+        ShowWindow(self.handle, SW_SHOW)
+    
+    fun hide(self):
+        if self.handle == 0:
+            return
+        ShowWindow(self.handle, SW_HIDE)
+    
+    fun was_resized(self) -> i32:
+        if g_window_resized == 1:
+            self.is_resized = 1
+            self.width = g_window_width
+            self.height = g_window_height
+        return self.is_resized
+    
+    fun reset_resize_flag(self):
+        self.is_resized = 0
+        g_window_resized = 0
+    
+    fun has_focus(self) -> i32:
+        self.is_focused = g_window_focused
+        return self.is_focused
+    
+    fun get_handle(self) -> i64:
+        return self.handle
+    
+    fun get_hinstance(self) -> i64:
+        return self.hinstance
+
+    
+    # ----- Vulkan Surface Methods -----
+    fun create_vulkan_surface(self, instance: i64) -> i64:
+        if self.handle == 0 or instance == 0:
+            g_last_error = WINDOW_ERROR_INVALID_HANDLE
+            return 0
+        
+        create_info: VkWin32SurfaceCreateInfoKHR = VkWin32SurfaceCreateInfoKHR()
+        create_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR
+        create_info.pNext = 0
+        create_info.flags = 0
+        create_info.hinstance = self.hinstance
+        create_info.hwnd = self.handle
+        
+        surface_ptr: i64 = Memory.malloc(8)
+        if surface_ptr == 0:
+            g_last_error = WINDOW_ERROR_VULKAN_SURFACE
+            return 0
+        
+        Memory.write_i64(surface_ptr, 0)
+        result: i32 = vkCreateWin32SurfaceKHR(instance, create_info as i64, 0, surface_ptr)
+        
+        if result != VK_SUCCESS:
+            g_last_error = WINDOW_ERROR_VULKAN_SURFACE
+            g_win32_error = result
+            Memory.free(surface_ptr)
+            return 0
+        
+        surface: i64 = Memory.read_i64(surface_ptr)
+        Memory.free(surface_ptr)
+        self.vulkan_surface = surface
+        return surface
+    
+    static fun get_required_extension_1() -> str:
+        return "VK_KHR_surface"
+    
+    static fun get_required_extension_2() -> str:
+        return "VK_KHR_win32_surface"
+    
+    fun destroy_vulkan_surface(self, instance: i64):
+        if self.vulkan_surface == 0 or instance == 0:
+            return
+        vkDestroySurfaceKHR(instance, self.vulkan_surface, 0)
+        self.vulkan_surface = 0
+    
+    fun set_resize_callback(self, callback: i64, user_data: i64):
+        g_resize_callback = callback
+        g_resize_callback_data = user_data
+    
+    fun clear_resize_callback(self):
+        g_resize_callback = 0
+        g_resize_callback_data = 0
+    
+    fun get_vulkan_surface(self) -> i64:
+        return self.vulkan_surface
+    
+    # ----- Event Waiting Methods -----
+    # Block until an event arrives, then process all pending events
+    # CPU usage: ~0% while waiting
+    # Use case: GUI applications that don't need constant updates
+    fun wait_events(self):
+        if self.handle == 0:
+            return
+        
+        # Block until a message arrives
+        WaitMessage()
+        
+        # Process all pending events
+        self.poll_events()
+    
+    # Wait for an event or timeout, then process all pending events
+    # CPU usage: ~0% while waiting
+    # Use case: Games with frame rate limiting, hybrid applications
+    # timeout_ms: Maximum wait time in milliseconds
+    #   - 0 or negative: behaves like poll_events() (non-blocking)
+    #   - positive: waits up to timeout_ms for an event
+    fun wait_events_timeout(self, timeout_ms: i32):
+        if self.handle == 0:
+            return
+        
+        # If timeout is 0 or negative, just poll (non-blocking)
+        if timeout_ms <= 0:
+            self.poll_events()
+            return
+        
+        # Wait for message or timeout
+        # nCount=0, pHandles=0, fWaitAll=0, dwMilliseconds=timeout_ms, dwWakeMask=QS_ALLINPUT
+        MsgWaitForMultipleObjects(0, 0, 0, timeout_ms, QS_ALLINPUT)
+        
+        # Process all pending events
+        self.poll_events()
+
+# ----- Helper Functions -----
+fun get_last_error() -> i32:
+    return g_last_error
+
+fun get_win32_error() -> i32:
+    return g_win32_error
+
+fun clear_error():
+    g_last_error = WINDOW_ERROR_NONE
+    g_win32_error = 0
+
+fun set_error(error_code: i32, win32_error: i32):
+    g_last_error = error_code
+    g_win32_error = win32_error
+
+# ----- Cursor Control Functions -----
+fun set_cursor_visible(visible: i32):
+    if visible == 1 and g_cursor_visible == 0:
+        ShowCursor(1)
+        g_cursor_visible = 1
+    elif visible == 0 and g_cursor_visible == 1:
+        ShowCursor(0)
+        g_cursor_visible = 0
+
+fun is_cursor_visible() -> i32:
+    return g_cursor_visible
+
+fun set_cursor_locked(locked: i32, window_handle: i64):
+    if locked == 1 and g_cursor_locked == 0:
+        rect: RECT = RECT()
+        GetWindowRect(window_handle, rect as i64)
+        ClipCursor(rect as i64)
+        g_cursor_locked = 1
+    elif locked == 0 and g_cursor_locked == 1:
+        ClipCursor(0)
+        g_cursor_locked = 0
+
+fun is_cursor_locked() -> i32:
+    return g_cursor_locked
+
+fun set_cursor_position(x: i32, y: i32):
+    SetCursorPos(x, y)

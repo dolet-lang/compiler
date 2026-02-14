@@ -1,0 +1,255 @@
+# MySQL Connection Management
+# ===========================
+# Main MySQL connection struct with query and transaction methods
+
+struct MySQL:
+    handle: i64 = 0
+    connected: i32 = 0
+    last_error: str = ""
+    last_errno: u32 = 0
+    host: str = ""
+    user: str = ""
+    database: str = ""
+    port: u32 = 3306
+    
+    # Connect to MySQL server with all parameters
+    static fun connect(host: str, user: str, password: str, database: str, port: u32) -> MySQL:
+        db: MySQL = MySQL()
+        db.host = host
+        db.user = user
+        db.database = database
+        db.port = port
+        
+        db.handle = mysql_init(0)
+        if db.handle == 0:
+            db.last_error = "Failed to initialize MySQL"
+            db.connected = 0
+            return db
+        
+        result: i64 = mysql_real_connect(db.handle, host, user, password, database, port, 0, 0)
+        
+        if result == 0:
+            db.last_errno = mysql_errno(db.handle)
+            db.last_error = mysql_error(db.handle)
+            db.connected = 0
+        else:
+            db.connected = 1
+        
+        return db
+    
+    # Connect with default port (3306)
+    static fun connect_default(host: str, user: str, password: str, database: str) -> MySQL:
+        return MySQL.connect(host, user, password, database, 3306)
+    
+    # Check if connected
+    fun is_connected() -> i32:
+        return self.connected
+    
+    # Ping server to check connection
+    fun ping() -> i32:
+        if self.connected == 0:
+            return 0
+        result: i32 = mysql_ping(self.handle)
+        if result != 0:
+            self.last_errno = mysql_errno(self.handle)
+            self.last_error = mysql_error(self.handle)
+            self.connected = 0
+            return 0
+        return 1
+
+    
+    # Close connection
+    fun close():
+        if self.handle != 0:
+            mysql_close(self.handle)
+            self.handle = 0
+            self.connected = 0
+    
+    # Select a different database
+    fun select_database(db_name: str) -> i32:
+        if self.connected == 0:
+            self.last_error = "Not connected"
+            return 0
+        
+        result: i32 = mysql_select_db(self.handle, db_name)
+        if result != 0:
+            self.last_errno = mysql_errno(self.handle)
+            self.last_error = mysql_error(self.handle)
+            return 0
+        
+        self.database = db_name
+        return 1
+
+    
+    # Execute query and return result set
+    fun query(sql: str) -> MySQLResult:
+        res: MySQLResult = MySQLResult()
+        
+        if self.connected == 0:
+            res.error = "Not connected"
+            res.success = 0
+            return res
+        
+        query_result: i32 = mysql_query(self.handle, sql)
+        if query_result != 0:
+            res.errno = mysql_errno(self.handle)
+            res.error = mysql_error(self.handle)
+            res.success = 0
+            self.last_errno = res.errno
+            self.last_error = res.error
+            return res
+        
+        res.handle = mysql_store_result(self.handle)
+        res.success = 1
+        
+        if res.handle != 0:
+            res.num_rows = mysql_num_rows(res.handle)
+            res.num_fields = mysql_num_fields(res.handle)
+            res.has_data = 1
+        else:
+            res.affected_rows = mysql_affected_rows(self.handle)
+            res.insert_id = mysql_insert_id(self.handle)
+            res.has_data = 0
+        
+        return res
+    
+    # Execute statement without returning results (INSERT/UPDATE/DELETE)
+    fun execute(sql: str) -> i32:
+        if self.connected == 0:
+            self.last_error = "Not connected"
+            return 0
+        
+        result: i32 = mysql_query(self.handle, sql)
+        if result != 0:
+            self.last_errno = mysql_errno(self.handle)
+            self.last_error = mysql_error(self.handle)
+            return 0
+        
+        return 1
+    
+    # Execute query and return single row
+    fun query_one(sql: str) -> MySQLRow:
+        res: MySQLResult = self.query(sql)
+        row: MySQLRow = MySQLRow()
+        
+        if res.success == 0:
+            row.valid = 0
+            return row
+        if res.has_data == 0:
+            row.valid = 0
+            return row
+        
+        if res.has_next() == 1:
+            row = res.next()
+        else:
+            row.valid = 0
+        
+        res.free()
+        return row
+
+    
+    # Start a new transaction
+    fun begin_transaction() -> i32:
+        return self.execute("START TRANSACTION")
+    
+    # Commit current transaction
+    fun commit() -> i32:
+        if self.connected == 0:
+            return 0
+        result: i32 = mysql_commit(self.handle)
+        if result != 0:
+            self.last_errno = mysql_errno(self.handle)
+            self.last_error = mysql_error(self.handle)
+            return 0
+        return 1
+    
+    # Rollback current transaction
+    fun rollback() -> i32:
+        if self.connected == 0:
+            return 0
+        result: i32 = mysql_rollback(self.handle)
+        if result != 0:
+            self.last_errno = mysql_errno(self.handle)
+            self.last_error = mysql_error(self.handle)
+            return 0
+        return 1
+    
+    # Set autocommit mode (1 = on, 0 = off)
+    fun set_autocommit(enabled: i32) -> i32:
+        if self.connected == 0:
+            return 0
+        result: i32 = mysql_autocommit(self.handle, enabled)
+        if result != 0:
+            self.last_errno = mysql_errno(self.handle)
+            self.last_error = mysql_error(self.handle)
+            return 0
+        return 1
+
+    
+    # Escape string for safe SQL insertion
+    fun escape_string(input: str) -> str:
+        if self.connected == 0:
+            return input
+        
+        input_len: i64 = Memory.strlen(input)
+        buffer_size: i64 = (input_len * 2) + 1
+        buffer: i64 = Memory.malloc(buffer_size)
+        
+        mysql_real_escape_string(self.handle, buffer, input, input_len as u64)
+        
+        escaped: str = buffer as str
+        Memory.free(buffer)
+        return escaped
+    
+    # Get last error message
+    fun get_last_error() -> str:
+        return self.last_error
+    
+    # Get last error code
+    fun get_last_errno() -> u32:
+        return self.last_errno
+    
+    # Get last insert ID
+    fun get_insert_id() -> u64:
+        if self.connected == 0:
+            return 0
+        return mysql_insert_id(self.handle)
+    
+    # Get number of affected rows from last query
+    fun get_affected_rows() -> u64:
+        if self.connected == 0:
+            return 0
+        return mysql_affected_rows(self.handle)
+    
+    # Get server version string
+    fun get_server_version() -> str:
+        if self.connected == 0:
+            return ""
+        return mysql_get_server_info(self.handle)
+    
+    # Get host info string
+    fun get_host_info() -> str:
+        if self.connected == 0:
+            return ""
+        return mysql_get_host_info(self.handle)
+    
+    # Set character set
+    fun set_charset(charset: str) -> i32:
+        if self.connected == 0:
+            return 0
+        result: i32 = mysql_set_character_set(self.handle, charset)
+        if result != 0:
+            self.last_errno = mysql_errno(self.handle)
+            self.last_error = mysql_error(self.handle)
+            return 0
+        return 1
+    
+    # Get current character set name
+    fun get_charset() -> str:
+        if self.connected == 0:
+            return ""
+        return mysql_character_set_name(self.handle)
+    
+    # Get client library version (static method)
+    static fun get_client_version() -> str:
+        return mysql_get_client_info()

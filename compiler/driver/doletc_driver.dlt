@@ -1,0 +1,283 @@
+##############################
+# Dolet Compiler CLI Driver
+# Reads .dlt file, tokenizes, parses, generates MLIR, writes .mlir file
+# Uses Windows API directly (kernel32 auto-included)
+##############################
+
+# ==========================================
+# Command Line Parsing (manual, using GetCommandLineA)
+# ==========================================
+fun cli_get_arg(index: i32) -> str:
+    line: str = GetCommandLineA()
+    slen: i64 = Memory.strlen(line)
+    if slen == 0:
+        return ""
+
+    cur_arg: i32 = 0
+    i: i64 = 0
+    in_quotes: i32 = 0
+    arg_start: i64 = 0
+
+    # Skip leading whitespace
+    while i < slen:
+        c: i8 = Memory.read_i8((line as i64) + i)
+        if c != 32:
+            break
+        i = i + 1
+
+    arg_start = i
+    while i <= slen:
+        c2: i8 = 0
+        if i < slen:
+            c2 = Memory.read_i8((line as i64) + i)
+
+        if c2 == 34:
+            in_quotes = 1 - in_quotes
+            i = i + 1
+            continue
+
+        if (c2 == 32 and in_quotes == 0) or i == slen:
+            if cur_arg == index:
+                # Extract this argument
+                result: str = str_from_range(line, arg_start, i)
+                # Strip quotes if present
+                rlen: i64 = Memory.strlen(result)
+                if rlen >= 2:
+                    fc: i8 = Memory.read_i8(result as i64)
+                    lc: i8 = Memory.read_i8((result as i64) + rlen - 1)
+                    if fc == 34 and lc == 34:
+                        return str_from_range(result, 1, rlen - 1)
+                return result
+            cur_arg = cur_arg + 1
+            i = i + 1
+            # Skip whitespace between args
+            while i < slen:
+                c3: i8 = Memory.read_i8((line as i64) + i)
+                if c3 != 32:
+                    break
+                i = i + 1
+            arg_start = i
+            continue
+        i = i + 1
+    return ""
+
+fun cli_arg_count() -> i32:
+    line: str = GetCommandLineA()
+    slen: i64 = Memory.strlen(line)
+    if slen == 0:
+        return 0
+
+    count: i32 = 0
+    i: i64 = 0
+    in_quotes: i32 = 0
+    in_arg: i32 = 0
+
+    while i < slen:
+        c: i8 = Memory.read_i8((line as i64) + i)
+        if c == 34:
+            in_quotes = 1 - in_quotes
+            if in_arg == 0:
+                in_arg = 1
+                count = count + 1
+        elif c == 32 and in_quotes == 0:
+            in_arg = 0
+        else:
+            if in_arg == 0:
+                in_arg = 1
+                count = count + 1
+        i = i + 1
+    return count
+
+# ==========================================
+# File I/O (using kernel32 directly)
+# ==========================================
+fun read_file_to_string(path: str) -> str:
+    # GENERIC_READ = 0x80000000 (as signed i32 = -2147483648)
+    # FILE_SHARE_READ = 1, OPEN_EXISTING = 3, FILE_ATTRIBUTE_NORMAL = 128
+    access: i32 = 0 - 2147483648
+    handle: i64 = CreateFileA(path, access, 1, 0, 3, 128, 0)
+    if handle == -1:
+        return ""
+
+    # Get file size
+    fsize: i32 = GetFileSize(handle, 0)
+    if fsize <= 0:
+        CloseHandle(handle)
+        return ""
+
+    # Allocate buffer (+1 for null terminator)
+    buf: i64 = Memory.malloc_zeroed((fsize as i64) + 1)
+
+    # Read file
+    bytes_read_p: i64 = Memory.malloc_zeroed(4)
+    ReadFile(handle, buf, fsize, bytes_read_p, 0)
+    actual: i32 = Memory.read_i32(bytes_read_p)
+
+    # Null-terminate
+    Memory.write_i8(buf + (actual as i64), 0)
+
+    CloseHandle(handle)
+    return buf as str
+
+fun write_string_to_file(path: str, content: str) -> i32:
+    # GENERIC_WRITE = 0x40000000, CREATE_ALWAYS = 2
+    handle: i64 = CreateFileA(path, 1073741824, 0, 0, 2, 128, 0)
+    if handle == -1:
+        return 0
+
+    slen: i64 = Memory.strlen(content)
+    bytes_written_p: i64 = Memory.malloc_zeroed(4)
+    WriteFile(handle, content as i64, slen as i32, bytes_written_p, 0)
+
+    CloseHandle(handle)
+    return 1
+
+# ==========================================
+# Path Helpers
+# ==========================================
+fun replace_extension(path: str, new_ext: str) -> str:
+    slen: i64 = Memory.strlen(path)
+    # Find last '.'
+    dot_pos: i64 = -1
+    i: i64 = slen - 1
+    while i >= 0:
+        c: i8 = Memory.read_i8((path as i64) + i)
+        if c == 46:
+            dot_pos = i
+            break
+        if c == 92 or c == 47:
+            break
+        i = i - 1
+
+    base: str = path
+    if dot_pos >= 0:
+        base = str_from_range(path, 0, dot_pos)
+    return Str.concat(base, new_ext)
+
+# ==========================================
+# Runtime Auto-Import
+# ==========================================
+fun get_exe_dir() -> str:
+    buf: i64 = Memory.malloc_zeroed(512)
+    GetModuleFileNameA(0, buf, 512)
+    # Find last backslash
+    slen: i64 = Memory.strlen(buf as str)
+    pos: i64 = slen - 1
+    while pos >= 0:
+        c: i8 = Memory.read_i8(buf + pos)
+        if c == 92:
+            Memory.write_i8(buf + pos, 0)
+            return buf as str
+        pos = pos - 1
+    return buf as str
+
+fun load_runtime(exe_dir: str) -> str:
+    # Runtime is at: <exe_dir>/../stdlib/runtime/  (bin/doletc.exe → stdlib/runtime/)
+    rt_base: str = Str.concat(exe_dir, "\\..\\stdlib\\runtime\\")
+
+    runtime_src: str = ""
+    # Read runtime files in dependency order
+    r1: str = read_file_to_string(Str.concat(rt_base, "kernel32_bindings.dlt"))
+    if Memory.strlen(r1) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r1))
+
+    r2: str = read_file_to_string(Str.concat(rt_base, "memory.dlt"))
+    if Memory.strlen(r2) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r2))
+
+    # math.dlt skipped — complex standalone functions, not needed for basic runtime
+
+    r4: str = read_file_to_string(Str.concat(rt_base, "convert.dlt"))
+    if Memory.strlen(r4) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r4))
+
+    r5: str = read_file_to_string(Str.concat(rt_base, "strOps.dlt"))
+    if Memory.strlen(r5) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r5))
+
+    r6: str = read_file_to_string(Str.concat(rt_base, "ioOps.dlt"))
+    if Memory.strlen(r6) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r6))
+
+    # Auto-import std/io.dlt (print overloads) — overload support via name mangling
+    std_base: str = Str.concat(exe_dir, "\\..\\stdlib\\std\\")
+    r7: str = read_file_to_string(Str.concat(std_base, "io.dlt"))
+    if Memory.strlen(r7) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r7))
+
+    return runtime_src
+
+# ==========================================
+# Main Compiler Driver
+# ==========================================
+fun main() -> i32:
+    # Initialize all constants (workaround for global init bug)
+    init_pipeline()
+
+    argc: i32 = cli_arg_count()
+    if argc < 2:
+        IOOps.io_println("Dolet Self-Hosting Compiler v0.2")
+        IOOps.io_println("Usage: doletc <input.dlt>")
+        return 1
+
+    # Check for --no-runtime flag
+    no_runtime: i32 = 0
+    input_path: str = ""
+    if argc >= 3:
+        flag: str = cli_get_arg(1)
+        if str_eq(flag, "--no-runtime") == 1:
+            no_runtime = 1
+            input_path = cli_get_arg(2)
+        else:
+            input_path = cli_get_arg(1)
+    else:
+        input_path = cli_get_arg(1)
+
+    IOOps.io_println(Str.concat("Compiling: ", input_path))
+
+    # Read source file
+    user_src: str = read_file_to_string(input_path)
+    user_len: i64 = Memory.strlen(user_src)
+    if user_len == 0:
+        IOOps.io_println("Error: Cannot read file or file is empty")
+        return 1
+
+    # Auto-import runtime (unless --no-runtime)
+    source: str = user_src
+    if no_runtime == 0:
+        exe_dir: str = get_exe_dir()
+        rt: str = load_runtime(exe_dir)
+        rt_len: i64 = Memory.strlen(rt)
+        if rt_len > 0:
+            source = Str.concat(rt, Str.concat("\n", user_src))
+            IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(rt_len), " chars")))
+
+    src_len: i64 = Memory.strlen(source)
+    IOOps.io_println(Str.concat("Source: ", Str.concat(Convert.i64_to_str(src_len), " chars (total)")))
+
+    # Phase 1: Tokenize
+    tokenize(source)
+    IOOps.io_println(Str.concat("Tokens: ", Convert.i64_to_str(out_count as i64)))
+
+    # Phase 2: Parse
+    init_parser(out_kinds, out_values, out_indents, out_count)
+    ast: i64 = parse()
+    stmt_count: i32 = nl_count(ast)
+    IOOps.io_println(Str.concat("AST nodes: ", Convert.i64_to_str(stmt_count as i64)))
+
+    # Phase 3: Generate MLIR
+    mlir: str = generate(ast)
+    mlir_len: i64 = Memory.strlen(mlir)
+    IOOps.io_println(Str.concat("MLIR: ", Str.concat(Convert.i64_to_str(mlir_len), " chars")))
+
+    # Write .mlir file
+    output_path: str = replace_extension(input_path, ".mlir")
+    ok: i32 = write_string_to_file(output_path, mlir)
+    if ok == 1:
+        IOOps.io_println(Str.concat("Output: ", output_path))
+    else:
+        IOOps.io_println("Error: Failed to write output file")
+        return 1
+
+    IOOps.io_println("Done!")
+    return 0

@@ -1,0 +1,36 @@
+# Build artifacts
+build/pipeline_build.dlt
+build/*.exe
+build/*.mlir
+build/*.ll
+build/*.obj
+bin/doletc.exe
+
+# Intermediate compiler output
+*.mlir
+*.ll
+*.obj
+*.exe
+!dltc.bat
+
+# LLVM tools (too large for git — see tools/README.md)
+tools/*.exe
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Embedded git repos in packages
+packages/**/.git/
+
+# OS
+Thumbs.db
+.DS_Store
