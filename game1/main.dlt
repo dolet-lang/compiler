@@ -1,0 +1,149 @@
+# Simple 3D Game with Qubic Engine
+# Player-Camera hierarchy: Player moves, Camera rotates
+
+import qubic
+#import sqrt from math
+import input
+
+print("=== Starting Simple 3D Game ===")
+
+# Create window
+window = Window()
+window.title("3D Game - WASD to move, Mouse to look")
+window.set_size(1280, 720)
+
+# Initialize window
+init_result: i32 = window.init()
+if init_result == 0:
+    print("Failed to create window!")
+
+print("Window created!")
+
+# Bind input to window
+InputKey.bind_window(window)
+
+# Capture mouse
+InputKey.capture_mouse()
+#Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED) #this one is better but not yet implemented
+print("Mouse captured!")
+
+# Create Player (Node3D) - this will move with WASD
+player = Node3D()
+player.set_position(0.0, 0.0, 5.0)
+print("Player created at (0, 0, 5)")
+
+# Create Camera as child of Player - this will rotate with mouse
+camera = Camera3D()
+camera.set_position(0.0, 1.5, 0.0)  # Slightly above player (eye level)
+
+# Set camera's parent to player
+camera.set_parent(player)
+print("Camera attached to Player")
+
+window.set_camera(camera)
+
+# Create player mesh (visible body) using MeshInstance3D
+playerMeshData = CubeMesh3D()
+playerMeshData.cull_mode = 0  # BACK cull - solid cube visible from outside
+playerMeshData.generate()
+
+playerMesh = MeshInstance3D()
+playerMesh.set_position(0.0, 0.0, 0.0)  # Local offset from player
+playerMesh.set_scale(0.5, 1.0, 0.3)     # Scale to look like a body # 
+playerMesh.set_parent(player)
+print("PlayerMesh attached to Player")
+
+# Add player mesh to scene with transform support
+player_vertices: i64 = playerMeshData.get_vertices()
+player_vertex_count: i32 = playerMeshData.get_vertex_count()
+playerMesh_ptr: i64 = playerMesh.get_ptr()
+window.add_mesh_instance(playerMesh_ptr, player_vertices, player_vertex_count)
+
+
+# Create a cube at origin (world object) - static, no parent
+worldCubeData = CubeMesh3D()
+worldCubeData.cull_mode = 1  # FRONT cull - solid cube visible from outside
+worldCubeData.generate()
+
+worldCube = MeshInstance3D()
+worldCube.set_position(0.0, 0.0, 0.0)  # At origin
+worldCube.set_scale(2.0, 2.0, 2.0)
+print("World cube created at origin")
+
+world_vertices: i64 = worldCubeData.get_vertices()
+world_vertex_count: i32 = worldCubeData.get_vertex_count()
+worldCube_ptr: i64 = worldCube.get_ptr()
+window.add_mesh_instance(worldCube_ptr, world_vertices, world_vertex_count)
+
+# Main loop
+print("Use WASD to move Player, Mouse to rotate Camera, ESC to release mouse")
+speed: f32 = 0.05
+mouse_sensitivity: f32 = 0.001
+
+# Initialize Process with window
+Process.init(window)
+
+# Game Loop - much cleaner!
+Process.loop():
+    if InputKey.is_mouse_captured():
+        # Mouse rotation - rotates CAMERA only
+        if InputKey.is_MouseMotion():
+                mouse_delta_x: f64 = InputKey.get_mouse_delta_x()
+                mouse_delta_y: f64 = InputKey.get_mouse_delta_y()
+                rot_x: f32 = mouse_delta_x * mouse_sensitivity
+                rot_y: f32 = mouse_delta_y * mouse_sensitivity
+                camera.rotate_y(-rot_x)
+                camera.rotate_x(-rot_y)
+        #######################################################
+        # WASD moves PLAYER (camera follows because it's a child)
+        # W - forward
+        if Input.is_key_pressed(KEY_W):
+            player.pos_z = player.pos_z - speed
+            #print("moving forward")
+        # S - backward
+        if Input.is_key_pressed(KEY_S):
+            player.pos_z = player.pos_z + speed
+        # A - left
+        if Input.is_key_pressed(KEY_A):
+            player.pos_x = player.pos_x - speed
+        # D - right
+        if Input.is_key_pressed(KEY_D):
+            player.pos_x = player.pos_x + speed
+        # Q - up
+        if Input.is_key_pressed(KEY_Q):
+            player.pos_y = player.pos_y + speed
+        # E - down
+        if Input.is_key_pressed(KEY_E):
+            player.pos_y = player.pos_y - speed
+        ######################################################
+    # ESC - toggle mouse capture
+    if Input.is_key_just_pressed(KEY_ESCAPE):
+        if InputKey.is_mouse_captured():
+            InputKey.release_mouse()
+            print("Mouse released!")
+        else:
+            InputKey.capture_mouse()
+            print("Mouse captured!")
+
+    window._render_frame()
+
+InputKey.cleanup()
+window.cleanup()
+#cube.free()
+print("Game ended!")
+
+
+
+"""
+Display.set_window_mode(Display.WINDOW_MODE_FULLSCREEN)
+Display.set_vsync = true
+Display.set_window_size(1000, 600)
+"""
+
+
+"""
+File.open("text.txt", "r") as f:
+    content: ptr = f.read()
+    print(content)
+"""
+

@@ -208,6 +208,34 @@ fun load_runtime(exe_dir: str) -> str:
     return runtime_src
 
 # ==========================================
+# Path Helper: extract base name (without extension)
+# ==========================================
+fun path_base_name(path: str) -> str:
+    slen: i64 = Memory.strlen(path)
+    dot_pos: i64 = -1
+    i: i64 = slen - 1
+    while i >= 0:
+        c: i8 = Memory.read_i8((path as i64) + i)
+        if c == 46:
+            dot_pos = i
+            break
+        if c == 92 or c == 47:
+            break
+        i = i - 1
+    if dot_pos >= 0:
+        return str_from_range(path, 0, dot_pos)
+    return path
+
+# ==========================================
+# File Delete Helper
+# ==========================================
+fun delete_file(path: str):
+    # Open for DELETE access and immediately close (DeleteFileA not in bindings)
+    # Use Process.run("cmd /c del ...") instead
+    cmd: str = Str.concat(Str.concat("cmd /c del \"", path), "\" >nul 2>nul")
+    Process.run(cmd)
+
+# ==========================================
 # Main Compiler Driver
 # ==========================================
 fun main() -> i32:
@@ -216,22 +244,59 @@ fun main() -> i32:
 
     argc: i32 = cli_arg_count()
     if argc < 2:
-        IOOps.io_println("Dolet Self-Hosting Compiler v0.2")
-        IOOps.io_println("Usage: doletc <input.dlt>")
+        IOOps.io_println("Dolet Compiler v0.3")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output.exe] [--keep-mlir] [--keep-llvm] [--no-runtime]")
+        IOOps.io_println("")
+        IOOps.io_println("Options:")
+        IOOps.io_println("  -o <path>       Output executable path")
+        IOOps.io_println("  --keep-mlir     Keep intermediate .mlir file")
+        IOOps.io_println("  --keep-llvm     Keep intermediate .ll file")
+        IOOps.io_println("  --no-runtime    Don't auto-import runtime libraries")
         return 1
 
-    # Check for --no-runtime flag
+    # Parse arguments
     no_runtime: i32 = 0
+    keep_mlir: i32 = 0
+    keep_llvm: i32 = 0
     input_path: str = ""
-    if argc >= 3:
-        flag: str = cli_get_arg(1)
-        if str_eq(flag, "--no-runtime") == 1:
+    output_exe: str = ""
+
+    ai: i32 = 1
+    while ai < argc:
+        arg: str = cli_get_arg(ai)
+        if str_eq(arg, "--no-runtime") == 1:
             no_runtime = 1
-            input_path = cli_get_arg(2)
+        elif str_eq(arg, "--keep-mlir") == 1:
+            keep_mlir = 1
+        elif str_eq(arg, "--keep-llvm") == 1:
+            keep_llvm = 1
+        elif str_eq(arg, "-o") == 1:
+            ai = ai + 1
+            if ai < argc:
+                output_exe = cli_get_arg(ai)
         else:
-            input_path = cli_get_arg(1)
-    else:
-        input_path = cli_get_arg(1)
+            if Memory.strlen(input_path) == 0:
+                input_path = arg
+        ai = ai + 1
+
+    if Memory.strlen(input_path) == 0:
+        IOOps.io_println("Error: No input file specified")
+        return 1
+
+    # Derive paths
+    base_path: str = path_base_name(input_path)
+    mlir_path: str = Str.concat(base_path, ".mlir")
+    ll_path: str = Str.concat(base_path, ".ll")
+    obj_path: str = Str.concat(base_path, ".obj")
+    if Memory.strlen(output_exe) == 0:
+        output_exe = Str.concat(base_path, ".exe")
+
+    # Determine if we need full pipeline (-o given or output is .exe)
+    has_output: i32 = 0
+    # Check if output_exe was explicitly set or default .exe
+    oelen: i64 = Memory.strlen(output_exe)
+    if oelen > 4:
+        has_output = 1
 
     IOOps.io_println(Str.concat("Compiling: ", input_path))
 
@@ -244,8 +309,8 @@ fun main() -> i32:
 
     # Auto-import runtime (unless --no-runtime)
     source: str = user_src
+    exe_dir: str = get_exe_dir()
     if no_runtime == 0:
-        exe_dir: str = get_exe_dir()
         rt: str = load_runtime(exe_dir)
         rt_len: i64 = Memory.strlen(rt)
         if rt_len > 0:
@@ -256,28 +321,68 @@ fun main() -> i32:
     IOOps.io_println(Str.concat("Source: ", Str.concat(Convert.i64_to_str(src_len), " chars (total)")))
 
     # Phase 1: Tokenize
+    IOOps.io_println("[1/4] Tokenizing...")
     tokenize(source)
-    IOOps.io_println(Str.concat("Tokens: ", Convert.i64_to_str(out_count as i64)))
+    IOOps.io_println(Str.concat("  Tokens: ", Convert.i64_to_str(out_count as i64)))
 
     # Phase 2: Parse
+    IOOps.io_println("[2/4] Parsing...")
     init_parser(out_kinds, out_values, out_indents, out_count)
     ast: i64 = parse()
     stmt_count: i32 = nl_count(ast)
-    IOOps.io_println(Str.concat("AST nodes: ", Convert.i64_to_str(stmt_count as i64)))
+    IOOps.io_println(Str.concat("  AST nodes: ", Convert.i64_to_str(stmt_count as i64)))
 
     # Phase 3: Generate MLIR
+    IOOps.io_println("[3/4] Generating MLIR...")
     mlir: str = generate(ast)
     mlir_len: i64 = Memory.strlen(mlir)
-    IOOps.io_println(Str.concat("MLIR: ", Str.concat(Convert.i64_to_str(mlir_len), " chars")))
+    IOOps.io_println(Str.concat("  MLIR: ", Str.concat(Convert.i64_to_str(mlir_len), " chars")))
 
     # Write .mlir file
-    output_path: str = replace_extension(input_path, ".mlir")
-    ok: i32 = write_string_to_file(output_path, mlir)
-    if ok == 1:
-        IOOps.io_println(Str.concat("Output: ", output_path))
-    else:
-        IOOps.io_println("Error: Failed to write output file")
+    ok: i32 = write_string_to_file(mlir_path, mlir)
+    if ok != 1:
+        IOOps.io_println("Error: Failed to write .mlir file")
         return 1
 
-    IOOps.io_println("Done!")
+    # Phase 4: Full pipeline (MLIR → LLVM IR → Object → Executable)
+    IOOps.io_println("[4/4] Building executable...")
+    tools_dir: str = Str.concat(exe_dir, "\\..\\tools\\")
+    sys_libs: str = Str.concat(exe_dir, "\\..\\stdlib\\sys\\windows")
+
+    # Step 1: mlir-translate (MLIR → LLVM IR)
+    cmd1: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), "mlir-translate.exe\" --mlir-to-llvmir \""), mlir_path), Str.concat("\" -o \"", Str.concat(ll_path, "\"")))
+    rc1: i32 = Process.run(cmd1)
+    if rc1 != 0:
+        IOOps.io_println("Error: MLIR translation failed")
+        return 1
+    IOOps.io_println("  MLIR -> LLVM IR OK")
+
+    # Step 2: clang (LLVM IR → Object)
+    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), "clang.exe\" -c \""), ll_path), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
+    rc2: i32 = Process.run(cmd2)
+    if rc2 != 0:
+        IOOps.io_println("Error: Compilation to object failed")
+        return 1
+    IOOps.io_println("  LLVM IR -> Object OK")
+
+    # Step 3: lld-link (Object → Executable)
+    cmd3: str = Str.concat(Str.concat("\"", tools_dir), "lld-link.exe\" ")
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-out:\"", output_exe), "\" "))
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-libpath:\"", sys_libs), "\" "))
+    cmd3 = Str.concat(cmd3, "-defaultlib:kernel32 -subsystem:console -entry:main")
+    rc3: i32 = Process.run(cmd3)
+    if rc3 != 0:
+        IOOps.io_println("Error: Linking failed")
+        return 1
+    IOOps.io_println("  Object -> Executable OK")
+
+    # Cleanup intermediate files
+    delete_file(obj_path)
+    if keep_mlir == 0:
+        delete_file(mlir_path)
+    if keep_llvm == 0:
+        delete_file(ll_path)
+
+    IOOps.io_println(Str.concat("[SUCCESS] ", output_exe))
     return 0
