@@ -42,12 +42,46 @@ fun parse_primary() -> i64:
         advance()
         return mk_str_lit(v3)
 
-    # F-string literal — store raw template text
+    # F-string literal — parse {expr} interpolation into parts
     if k == TK_FSTRING:
         v4: str = cur_val()
         advance()
-        parts: i64 = mk_node_list(1)
-        nl_add(parts, mk_str_lit(v4))
+        parts: i64 = mk_node_list(8)
+        flen: i64 = Memory.strlen(v4)
+        fi: i64 = 0
+        seg_start: i64 = 0
+        while fi < flen:
+            ch: i8 = Memory.read_i8((v4 as i64) + fi)
+            if ch == 123:
+                # '{' — add literal text before this
+                if fi > seg_start:
+                    nl_add(parts, mk_str_lit(str_from_range(v4, seg_start, fi)))
+                # Find matching '}'
+                fi = fi + 1
+                expr_start: i64 = fi
+                brace_depth: i32 = 1
+                while fi < flen and brace_depth > 0:
+                    bc: i8 = Memory.read_i8((v4 as i64) + fi)
+                    if bc == 123:
+                        brace_depth = brace_depth + 1
+                    elif bc == 125:
+                        brace_depth = brace_depth - 1
+                    if brace_depth > 0:
+                        fi = fi + 1
+                # Extract expression name and create var ref
+                if fi > expr_start:
+                    expr_name: str = str_from_range(v4, expr_start, fi)
+                    nl_add(parts, mk_var_ref(expr_name))
+                if fi < flen:
+                    fi = fi + 1
+                seg_start = fi
+            else:
+                fi = fi + 1
+        # Add remaining literal text
+        if seg_start < flen:
+            nl_add(parts, mk_str_lit(str_from_range(v4, seg_start, flen)))
+        if nl_count(parts) == 0:
+            nl_add(parts, mk_str_lit(""))
         return mk_fstring(parts)
 
     # Char literal

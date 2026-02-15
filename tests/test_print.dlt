@@ -1,0 +1,4 @@
+print("Hello World")
+print(5 + 5)
+print(42)
+print(100)
