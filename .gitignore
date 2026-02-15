@@ -4,7 +4,7 @@ build/*.exe
 build/*.mlir
 build/*.ll
 build/*.obj
-bin/doletc.exe
+#bin/doletc.exe
 
 # Intermediate compiler output
 *.mlir
@@ -12,9 +12,8 @@ bin/doletc.exe
 *.obj
 *.exe
 !dltc.bat
-
-# LLVM tools (too large for git — see tools/README.md)
-tools/*.exe
+!bin/doletc.exe
+!tools/*.exe
 
 # Python
 __pycache__/
