@@ -2,3 +2,43 @@ print("Hello World")
 print(5 + 5)
 print(42)
 print(100)
+
+myi8: i8 = 8
+myi16: i16 = 16
+myi32: i32 = 32
+myi64: i64 = 64
+myi128: i128 = 128
+
+myu8: u8 = 8
+myu16: u16 = 16
+myu32: u32 = 32
+myu64: u64 = 64
+myu128: u128 = 128
+
+myf32: f32 = 3.14
+myf64: f64 = 6.28
+
+mybool: bool = true
+
+mystr: str = "hello"
+mychar: char = 'A'
+
+print(myi8)
+print(myi16)
+print(myi32)
+print(myi64)
+print(myi128)
+
+print(myu8)
+print(myu16)
+print(myu32)
+print(myu64)
+print(myu128)
+
+print(myf32)
+print(myf64)
+
+print(mybool)
+
+print(mystr)
+print(mychar)

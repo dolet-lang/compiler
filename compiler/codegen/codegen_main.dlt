@@ -462,7 +462,10 @@ fun generate(ast: i64) -> str:
                     mn: str = get_mlir_name(gname)
                     vt: str = get_var_type(gname)
                     mt: str = mlir_type(vt)
+                    actual_t: str = infer_expr_type(val_node)
                     val: str = gen_expr(val_node, vt)
+                    if str_eq(actual_t, vt) == 0 and str_eq(actual_t, "unknown") == 0:
+                        val = implicit_cast(val, actual_t, vt)
                     ga: str = emit_addr_of(mn)
                     emit_store(val, ga, mt)
                 gi = gi + 1

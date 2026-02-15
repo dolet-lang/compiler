@@ -166,7 +166,7 @@ fun gen_int_lit(node: i64, expected: str) -> str:
         vs: str = Str.concat(Convert.i64_to_str(val), ".0")
         emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.constant("), vs), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
         return tmp
-    # Always emit as i32 — implicit_cast handles widening to i64 etc.
+    # Always emit as i32 — implicit_cast handles widening/narrowing
     tmp2: str = new_tmp()
     vs2: str = Convert.i64_to_str(val)
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp2, " = llvm.mlir.constant("), vs2), " : i32"), ") : i32"))
@@ -175,11 +175,9 @@ fun gen_int_lit(node: i64, expected: str) -> str:
 fun gen_float_lit(node: i64, expected: str) -> str:
     # Float value stored as string at f0
     fstr: str = Memory.read_i64(node + 8) as str
-    mt: str = mlir_type(expected)
-    if str_eq(mt, "f32") == 0 and str_eq(mt, "f64") == 0:
-        mt = "f64"
+    # Always emit as f64 — implicit_cast handles narrowing to f32
     tmp: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.constant("), fstr), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.constant("), fstr), " : f64"), ") : f64"))
     return tmp
 
 fun gen_str_lit(node: i64) -> str:
