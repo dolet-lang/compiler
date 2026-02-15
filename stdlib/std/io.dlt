@@ -63,7 +63,11 @@ fun print(value: bool):
 
 # Character
 fun print(value: char):
-    IOOps.io_print_char(value)
+    buf: ptr = Memory.malloc(2)
+    Memory.write_i8(buf as i64, value)
+    Memory.write_i8((buf as i64) + 1, 0 as i8)
+    IOOps.io_println(buf as str)
+    Memory.free(buf as i64)
 
 # ==========================================
 # Print Without Newline

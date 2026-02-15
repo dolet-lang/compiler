@@ -12,16 +12,6 @@ struct IOOps:
         WriteFile(handle, text as i64, text_len as i32, 0, 0)
         WriteFile(handle, newline as i64, 1, 0, 0)
     
-    # Print single character with newline
-    static fun io_print_char(c: char):
-        handle: i64 = GetStdHandle(-11)
-        buf: i64 = Memory.malloc_zeroed(2)
-        Memory.write_i8(buf, c)
-        WriteFile(handle, buf, 1, 0, 0)
-        Memory.free(buf)
-        newline: str = "\n"
-        WriteFile(handle, newline as i64, 1, 0, 0)
-
     # Print string without newline
     static fun io_print(text: str):
         handle: i64 = GetStdHandle(-11)
