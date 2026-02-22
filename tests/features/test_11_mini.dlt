@@ -1,0 +1,5 @@
+ptr: i64 = Memory.malloc_zeroed(64)
+Memory.write_i32(ptr, 42)
+val: i32 = Memory.read_i32(ptr)
+print(val)
+Memory.free(ptr)

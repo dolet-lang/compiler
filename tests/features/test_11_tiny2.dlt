@@ -1,0 +1,2 @@
+mem: i64 = Memory.malloc(64)
+print(mem)

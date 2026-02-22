@@ -105,6 +105,26 @@ fun collect_declarations(ast: i64):
         if nt == NODE_STRUCT_DECL:
             sname: str = Memory.read_i64(node + 8) as str
             fields: i64 = Memory.read_i64(node + 16)
+            base_class: str = Memory.read_i64(node + 32) as str
+            # Merge parent fields if struct extends another
+            if str_eq(base_class, "") == 0:
+                parent_fields: i64 = get_struct_fields(base_class)
+                if parent_fields != 0:
+                    pfc: i32 = nl_count(parent_fields)
+                    # Create merged field list: parent fields first, then child fields
+                    merged: i64 = mk_node_list(64)
+                    pi: i32 = 0
+                    while pi < pfc:
+                        nl_add(merged, nl_get(parent_fields, pi))
+                        pi = pi + 1
+                    # Add child-specific fields
+                    if fields != 0:
+                        cfc: i32 = nl_count(fields)
+                        ci: i32 = 0
+                        while ci < cfc:
+                            nl_add(merged, nl_get(fields, ci))
+                            ci = ci + 1
+                    fields = merged
             if fields != 0:
                 register_struct(sname, fields)
             # Register inline method signatures with param types (methods at +40)

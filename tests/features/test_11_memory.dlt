@@ -4,24 +4,25 @@
 ##############################
 
 # Allocate memory
-ptr: i64 = Memory.malloc_zeroed(64)
-print(@"Allocated at: {ptr}")
+mem_ptr: i64 = Memory.malloc_zeroed(64)
+print(@"Allocated at: {mem_ptr}")
 
 # Write and read i32
-Memory.write_i32(ptr, 42)
-val: i32 = Memory.read_i32(ptr)
+Memory.write_i32(mem_ptr, 42)
+val: i32 = Memory.read_i32(mem_ptr)
 print(@"i32 value: {val}")
 
 # Write and read i64
-Memory.write_i64(ptr + 8, 123456789)
-val64: i64 = Memory.read_i64(ptr + 8)
+Memory.write_i64(mem_ptr + 8, 123456789)
+val64: i64 = Memory.read_i64(mem_ptr + 8)
 print(@"i64 value: {val64}")
 
 # Write and read i8
-Memory.write_i8(ptr + 16, 65)
-val8: i8 = Memory.read_i8(ptr + 16)
+Memory.write_i8(mem_ptr + 16, 65)
+val8: i8 = Memory.read_i8(mem_ptr + 16)
 print(@"i8 value: {val8}")
 
 # Free memory
-Memory.free(ptr)
+Memory.free(mem_ptr)
 print("Memory freed!")
+

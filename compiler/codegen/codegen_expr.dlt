@@ -760,30 +760,73 @@ fun gen_struct_instantiation(node: i64) -> str:
     sz: str = emit_const_i64(ssize as i64)
     mem_p: str = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
 
-    # Initialize fields from field_val nodes
+    # Count passed field_vals
+    fvc: i32 = 0
     if field_vals != 0:
-        fvc: i32 = nl_count(field_vals)
-        i: i32 = 0
-        while i < fvc:
-            fv_node: i64 = nl_get(field_vals, i)
-            fname: str = Memory.read_i64(fv_node + 8) as str
-            fval_node: i64 = Memory.read_i64(fv_node + 16)
-            fidx: i32 = get_field_index(sname, fname)
-            if fidx >= 0:
-                ftype: str = get_field_type(sname, fname)
-                fval: str = gen_expr(fval_node, ftype)
-                # Implicit cast if expression type differs from field type
-                actual_type: str = infer_expr_type(fval_node)
-                if str_eq(actual_type, ftype) == 0 and str_eq(actual_type, "unknown") == 0:
-                    fval = implicit_cast(fval, actual_type, ftype)
-                mt: str = mlir_type(ftype)
-                # GEP to field offset
-                fi_val: str = emit_const_i32(fidx)
-                struct_mlir: str = get_struct_mlir_type(sname)
-                fp: str = new_tmp()
-                emit_ind(Str.concat(Str.concat(Str.concat(fp, " = llvm.getelementptr "), mem_p), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir))))
-                emit_store(fval, fp, mt)
-            i = i + 1
+        fvc = nl_count(field_vals)
+
+    # Initialize explicitly-passed fields
+    i: i32 = 0
+    while i < fvc:
+        fv_node: i64 = nl_get(field_vals, i)
+        fname: str = Memory.read_i64(fv_node + 8) as str
+        fval_node: i64 = Memory.read_i64(fv_node + 16)
+        fidx: i32 = get_field_index(sname, fname)
+        if fidx >= 0:
+            ftype: str = get_field_type(sname, fname)
+            fval: str = gen_expr(fval_node, ftype)
+            # Implicit cast if expression type differs from field type
+            actual_type: str = infer_expr_type(fval_node)
+            if str_eq(actual_type, ftype) == 0 and str_eq(actual_type, "unknown") == 0:
+                fval = implicit_cast(fval, actual_type, ftype)
+            mt: str = mlir_type(ftype)
+            # GEP to field offset
+            struct_mlir: str = get_struct_mlir_type(sname)
+            fp: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(fp, " = llvm.getelementptr "), mem_p), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir))))
+            emit_store(fval, fp, mt)
+        i = i + 1
+
+    # Initialize un-passed fields with default values or zero
+    all_fields: i64 = get_struct_fields(sname)
+    if all_fields != 0:
+        afc: i32 = nl_count(all_fields)
+        di: i32 = 0
+        while di < afc:
+            dfnode: i64 = nl_get(all_fields, di)
+            dfname: str = Memory.read_i64(dfnode + 8) as str
+            # Check if this field was already set by scanning field_vals
+            was_set: i32 = 0
+            j: i32 = 0
+            while j < fvc:
+                fv2: i64 = nl_get(field_vals, j)
+                fv2_name: str = Memory.read_i64(fv2 + 8) as str
+                if str_eq(fv2_name, dfname) == 1:
+                    was_set = 1
+                j = j + 1
+            if was_set == 0:
+                dftype: str = Memory.read_i64(dfnode + 16) as str
+                dft_mlir: str = mlir_type(dftype)
+                struct_mlir2: str = get_struct_mlir_type(sname)
+                dfp: str = new_tmp()
+                emit_ind(Str.concat(Str.concat(Str.concat(dfp, " = llvm.getelementptr "), mem_p), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(di as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir2))))
+                # Check if field has a default value node at +32
+                def_val_node: i64 = Memory.read_i64(dfnode + 32)
+                if def_val_node != 0:
+                    # Generate the default value expression
+                    dfval: str = gen_expr(def_val_node, dftype)
+                    emit_store(dfval, dfp, dft_mlir)
+                else:
+                    # No default — store zero
+                    dz: str = new_tmp()
+                    if is_float_type(dftype) == 1:
+                        emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0.0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
+                    elif str_eq(dftype, "str") == 1 or str_eq(dftype, "string") == 1 or str_eq(dft_mlir, "!llvm.ptr") == 1:
+                        emit_ind(Str.concat(dz, " = llvm.mlir.zero : !llvm.ptr"))
+                    else:
+                        emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
+                    emit_store(dz, dfp, dft_mlir)
+            di = di + 1
 
     return mem_p
 
