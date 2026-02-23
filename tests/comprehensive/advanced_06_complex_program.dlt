@@ -1,0 +1,122 @@
+##############################
+# Comprehensive Advanced Test 06
+# Complex Program: Student Grade Tracker
+# Tests structs, impl, functions, loops, strings, memory, conditionals
+##############################
+
+# === Memory-based student array ===
+fun store_student_data(arr: i64, idx: i32, name: str, g1: i32, g2: i32, g3: i32):
+    idx64: i64 = idx as i64
+    off: i64 = idx64 * 20
+    Memory.write_i64(arr + off, name as i64)
+    Memory.write_i32(arr + off + 8, g1)
+    Memory.write_i32(arr + off + 12, g2)
+    Memory.write_i32(arr + off + 16, g3)
+
+fun get_student_name(arr: i64, idx: i32) -> str:
+    idx64: i64 = idx as i64
+    off: i64 = idx64 * 20
+    return Memory.read_i64(arr + off) as str
+
+fun get_student_avg(arr: i64, idx: i32) -> i32:
+    idx64: i64 = idx as i64
+    off: i64 = idx64 * 20
+    g1: i32 = Memory.read_i32(arr + off + 8)
+    g2: i32 = Memory.read_i32(arr + off + 12)
+    g3: i32 = Memory.read_i32(arr + off + 16)
+    return (g1 + g2 + g3) / 3
+
+fun print_student_report(arr: i64, idx: i32):
+    idx64: i64 = idx as i64
+    off: i64 = idx64 * 20
+    n: str = Memory.read_i64(arr + off) as str
+    g1: i32 = Memory.read_i32(arr + off + 8)
+    g2: i32 = Memory.read_i32(arr + off + 12)
+    g3: i32 = Memory.read_i32(arr + off + 16)
+    avg: i32 = (g1 + g2 + g3) / 3
+    passed: str = "PASS"
+    if avg < 50:
+        passed = "FAIL"
+    print(@"  {n}: avg={avg} [{passed}]")
+
+# === Statistics ===
+fun find_highest_avg(arr: i64, count: i32) -> str:
+    best_name: str = ""
+    best_avg: i32 = 0
+    for i in 0 to count - 1:
+        avg: i32 = get_student_avg(arr, i)
+        if avg > best_avg:
+            best_avg = avg
+            best_name = get_student_name(arr, i)
+    return best_name
+
+fun count_passed(arr: i64, count: i32) -> i32:
+    total: i32 = 0
+    for i in 0 to count - 1:
+        avg: i32 = get_student_avg(arr, i)
+        if avg >= 50:
+            total = total + 1
+    return total
+
+fun class_average(arr: i64, count: i32) -> i32:
+    total: i32 = 0
+    for i in 0 to count - 1:
+        total = total + get_student_avg(arr, i)
+    return total / count
+
+# === Main Program ===
+print("========================================")
+print("       STUDENT GRADE TRACKER")
+print("========================================")
+
+num_students: i32 = 5
+alloc_i32: i32 = num_students * 20
+alloc_size: i64 = alloc_i32 as i64
+students: i64 = Memory.malloc_zeroed(alloc_size)
+
+store_student_data(students, 0, "Alice", 95, 88, 92)
+store_student_data(students, 1, "Bob", 72, 68, 75)
+store_student_data(students, 2, "Charlie", 55, 60, 48)
+store_student_data(students, 3, "Diana", 88, 92, 85)
+store_student_data(students, 4, "Eve", 40, 35, 45)
+
+print("")
+print("--- Individual Reports ---")
+for i in 0 to num_students - 1:
+    print_student_report(students, i)
+
+print("")
+print("--- Class Statistics ---")
+best: str = find_highest_avg(students, num_students)
+passed: i32 = count_passed(students, num_students)
+avg: i32 = class_average(students, num_students)
+print(@"Highest average: {best}")
+print(@"Students passed: {passed}/{num_students}")
+print(@"Class average: {avg}")
+
+print("")
+print("--- Grade Distribution ---")
+a_count: i32 = 0
+b_count: i32 = 0
+c_count: i32 = 0
+f_count: i32 = 0
+for i in 0 to num_students - 1:
+    avg2: i32 = get_student_avg(students, i)
+    if avg2 >= 90:
+        a_count = a_count + 1
+    elif avg2 >= 75:
+        b_count = b_count + 1
+    elif avg2 >= 50:
+        c_count = c_count + 1
+    else:
+        f_count = f_count + 1
+
+print(@"A (>=90): {a_count}")
+print(@"B (>=75): {b_count}")
+print(@"C (>=50): {c_count}")
+print(@"F (<50):  {f_count}")
+
+Memory.free(students)
+print("")
+print("========================================")
+print("=== DONE ===")

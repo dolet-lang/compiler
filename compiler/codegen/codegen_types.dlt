@@ -349,18 +349,40 @@ fun get_type_size(t: str) -> i32:
     # Pointers, strings, structs: 8 bytes (64-bit)
     return 8
 
+fun align_to(offset: i32, alignment: i32) -> i32:
+    rem: i32 = offset % alignment
+    if rem == 0:
+        return offset
+    return offset + (alignment - rem)
+
+fun get_type_alignment(t: str) -> i32:
+    sz: i32 = get_type_size(t)
+    if sz > 8:
+        return 8
+    if sz < 1:
+        return 1
+    return sz
+
 fun calculate_struct_size(struct_name: str) -> i32:
     fields: i64 = get_struct_fields(struct_name)
     if fields == 0:
         return 0
     fc: i32 = nl_count(fields)
     total: i32 = 0
+    max_align: i32 = 1
     i: i32 = 0
     while i < fc:
         fnode: i64 = nl_get(fields, i)
         ftype: str = Memory.read_i64(fnode + 16) as str
-        total = total + get_type_size(ftype)
+        fsz: i32 = get_type_size(ftype)
+        falign: i32 = get_type_alignment(ftype)
+        if falign > max_align:
+            max_align = falign
+        total = align_to(total, falign)
+        total = total + fsz
         i = i + 1
+    # Pad to struct alignment
+    total = align_to(total, max_align)
     return total
 
 fun get_struct_mlir_type(struct_name: str) -> str:

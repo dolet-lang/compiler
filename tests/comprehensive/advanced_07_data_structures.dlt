@@ -1,0 +1,169 @@
+##############################
+# Comprehensive Advanced Test 07
+# Data Structures: Linked List, Stack, Queue (all manual memory)
+##############################
+
+# === Node: 8 bytes value + 8 bytes next_ptr = 16 bytes ===
+fun node_new(value: i32) -> i64:
+    n: i64 = Memory.malloc_zeroed(16)
+    Memory.write_i32(n, value)
+    Memory.write_i64(n + 8, 0)
+    return n
+
+fun node_value(n: i64) -> i32:
+    return Memory.read_i32(n)
+
+fun node_next(n: i64) -> i64:
+    return Memory.read_i64(n + 8)
+
+fun node_set_next(n: i64, next: i64):
+    Memory.write_i64(n + 8, next)
+
+# === Linked List ===
+# List header: head_ptr(8) + size(4) = 12 bytes
+
+fun list_new() -> i64:
+    lst: i64 = Memory.malloc_zeroed(16)
+    Memory.write_i64(lst, 0)
+    Memory.write_i32(lst + 8, 0)
+    return lst
+
+fun list_head(lst: i64) -> i64:
+    return Memory.read_i64(lst)
+
+fun list_size(lst: i64) -> i32:
+    return Memory.read_i32(lst + 8)
+
+fun list_push_front(lst: i64, value: i32):
+    n: i64 = node_new(value)
+    node_set_next(n, list_head(lst))
+    Memory.write_i64(lst, n)
+    Memory.write_i32(lst + 8, list_size(lst) + 1)
+
+fun list_print(lst: i64):
+    curr: i64 = list_head(lst)
+    while curr != 0:
+        print(node_value(curr))
+        curr = node_next(curr)
+
+fun list_sum(lst: i64) -> i32:
+    total: i32 = 0
+    curr: i64 = list_head(lst)
+    while curr != 0:
+        total = total + node_value(curr)
+        curr = node_next(curr)
+    return total
+
+fun list_contains(lst: i64, target: i32) -> bool:
+    curr: i64 = list_head(lst)
+    while curr != 0:
+        if node_value(curr) == target:
+            return true
+        curr = node_next(curr)
+    return false
+
+fun list_free(lst: i64):
+    curr: i64 = list_head(lst)
+    while curr != 0:
+        next: i64 = node_next(curr)
+        Memory.free(curr)
+        curr = next
+    Memory.free(lst)
+
+# === Stack (using array) ===
+# Stack: data_ptr(8) + top(4) + capacity(4) = 16 bytes
+fun stack_new() -> i64:
+    s: i64 = Memory.malloc_zeroed(16)
+    data: i64 = Memory.malloc_zeroed(256)
+    Memory.write_i64(s, data)
+    Memory.write_i32(s + 8, 0)
+    Memory.write_i32(s + 12, 64)
+    return s
+
+fun stack_push(s: i64, value: i32):
+    top: i32 = Memory.read_i32(s + 8)
+    data: i64 = Memory.read_i64(s)
+    top64: i64 = top as i64
+    Memory.write_i32(data + top64 * 4, value)
+    Memory.write_i32(s + 8, top + 1)
+
+fun stack_pop(s: i64) -> i32:
+    top: i32 = Memory.read_i32(s + 8) - 1
+    Memory.write_i32(s + 8, top)
+    data: i64 = Memory.read_i64(s)
+    top64: i64 = top as i64
+    return Memory.read_i32(data + top64 * 4)
+
+fun stack_peek(s: i64) -> i32:
+    top: i32 = Memory.read_i32(s + 8) - 1
+    data: i64 = Memory.read_i64(s)
+    top64: i64 = top as i64
+    return Memory.read_i32(data + top64 * 4)
+
+fun stack_size(s: i64) -> i32:
+    return Memory.read_i32(s + 8)
+
+fun stack_is_empty(s: i64) -> bool:
+    return Memory.read_i32(s + 8) == 0
+
+fun stack_free(s: i64):
+    Memory.free(Memory.read_i64(s))
+    Memory.free(s)
+
+# === Run Tests ===
+print("=== Linked List ===")
+lst: i64 = list_new()
+list_push_front(lst, 10)
+list_push_front(lst, 20)
+list_push_front(lst, 30)
+list_push_front(lst, 40)
+list_push_front(lst, 50)
+
+lsz: i32 = list_size(lst)
+print(@"Size: {lsz}")
+print("Elements (reversed insertion order):")
+list_print(lst)
+
+lsum: i32 = list_sum(lst)
+lc1: bool = list_contains(lst, 30)
+lc2: bool = list_contains(lst, 99)
+print(@"Sum: {lsum}")
+print(@"Contains 30: {lc1}")
+print(@"Contains 99: {lc2}")
+
+list_free(lst)
+print("List freed")
+
+print("=== Stack ===")
+stk: i64 = stack_new()
+stack_push(stk, 1)
+stack_push(stk, 2)
+stack_push(stk, 3)
+stack_push(stk, 4)
+stack_push(stk, 5)
+
+ssz: i32 = stack_size(stk)
+spk: i32 = stack_peek(stk)
+print(@"Stack size: {ssz}")
+print(@"Peek: {spk}")
+
+print("Popping all:")
+while stack_is_empty(stk) == false:
+    val: i32 = stack_pop(stk)
+    print(val)
+
+sem: bool = stack_is_empty(stk)
+print(@"Empty: {sem}")
+
+# Use stack to reverse a sequence
+print("=== Reverse with Stack ===")
+for i in 1 to 5:
+    stack_push(stk, i)
+print("Reversed:")
+while stack_is_empty(stk) == false:
+    print(stack_pop(stk))
+
+stack_free(stk)
+print("Stack freed")
+
+print("=== DONE ===")

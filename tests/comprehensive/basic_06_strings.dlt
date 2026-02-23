@@ -1,0 +1,90 @@
+##############################
+# Comprehensive Basic Test 06
+# Strings: concat, interpolation, comparison, methods
+##############################
+
+print("=== String Literals ===")
+s1: str = "Hello"
+s2: str = "World"
+print(s1)
+print(s2)
+
+print("=== String Concatenation with + ===")
+s3: str = s1 + " " + s2
+print(s3)
+
+print("=== String Interpolation ===")
+name: str = "Dolet"
+version: i32 = 1
+print(@"Language: {name}, Version: {version}")
+
+age: i32 = 25
+score: f64 = 98.5
+print(@"Age: {age}, Score: {score}")
+
+# Multiple interpolations
+a: i32 = 10
+b: i32 = 20
+c: i32 = a + b
+print(@"{a} + {b} = {c}")
+
+print("=== String Comparison ===")
+x: str = "hello"
+y: str = "hello"
+z: str = "world"
+
+if x == y:
+    print("hello == hello: true")
+if x != z:
+    print("hello != world: true")
+
+print("=== String Methods ===")
+test_str: str = "Hello World"
+
+# Length
+len: i64 = Memory.strlen(test_str)
+print(@"Length: {len}")
+
+# Contains
+if Str.contains(test_str, "World") == 1:
+    print("Contains 'World': true")
+if Str.contains(test_str, "xyz") == 0:
+    print("Contains 'xyz': false")
+
+# Starts with
+if Str.starts_with(test_str, "Hello") == 1:
+    print("Starts with 'Hello': true")
+
+# Ends with
+if Str.ends_with(test_str, "World") == 1:
+    print("Ends with 'World': true")
+
+print("=== String Building ===")
+result: str = ""
+for i in 0 to 4:
+    result = result + Convert.i32_to_str(i) + " "
+print(result)
+
+print("=== Convert Numbers to Strings ===")
+n1: i32 = 42
+n2: i64 = 123456789
+n3: f64 = 3.14
+
+print(Convert.i32_to_str(n1))
+print(Convert.i64_to_str(n2))
+print(Convert.f64_to_str(n3))
+
+print("=== String in Functions ===")
+fun make_label(key: str, val: i32) -> str:
+    return key + ": " + Convert.i32_to_str(val)
+
+print(make_label("Width", 800))
+print(make_label("Height", 600))
+
+print("=== Empty String Checks ===")
+empty: str = ""
+notempty: str = "x"
+print(Memory.strlen(empty))
+print(Memory.strlen(notempty))
+
+print("=== DONE ===")

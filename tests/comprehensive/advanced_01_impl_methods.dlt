@@ -1,0 +1,121 @@
+##############################
+# Comprehensive Advanced Test 01
+# Impl Blocks: methods, static methods, constructors, self
+##############################
+
+struct Vector2:
+    x: f64
+    y: f64
+
+impl Vector2:
+    static fun new(x: f64, y: f64) -> Vector2:
+        return Vector2(x=x, y=y)
+
+    static fun zero() -> Vector2:
+        return Vector2(x=0.0, y=0.0)
+
+    fun length_squared() -> f64:
+        return self.x * self.x + self.y * self.y
+
+    fun add(other: Vector2) -> Vector2:
+        return Vector2(x=self.x + other.x, y=self.y + other.y)
+
+    fun scale(factor: f64) -> Vector2:
+        return Vector2(x=self.x * factor, y=self.y * factor)
+
+    fun to_string() -> str:
+        return @"({self.x}, {self.y})"
+
+# === Rectangle with area/perimeter ===
+struct Rectangle:
+    width: f64
+    height: f64
+
+impl Rectangle:
+    static fun new(w: f64, h: f64) -> Rectangle:
+        return Rectangle(width=w, height=h)
+
+    static fun square(size: f64) -> Rectangle:
+        return Rectangle(width=size, height=size)
+
+    fun area() -> f64:
+        return self.width * self.height
+
+    fun perimeter() -> f64:
+        return 2.0 * (self.width + self.height)
+
+    fun is_square() -> bool:
+        return self.width == self.height
+
+    fun scale_by(factor: f64) -> Rectangle:
+        return Rectangle(width=self.width * factor, height=self.height * factor)
+
+# === Counter with state ===
+struct Counter:
+    value: i32
+
+impl Counter:
+    static fun new() -> Counter:
+        return Counter(value=0)
+
+    static fun from_val(start: i32) -> Counter:
+        return Counter(value=start)
+
+    fun get() -> i32:
+        return self.value
+
+# === Run tests ===
+print("=== Vector2 Static Constructors ===")
+v1: Vector2 = Vector2.new(3.0, 4.0)
+print(v1.x)
+print(v1.y)
+
+v0: Vector2 = Vector2.zero()
+print(v0.x)
+print(v0.y)
+
+print("=== Vector2 Methods ===")
+len_sq: f64 = v1.length_squared()
+print(len_sq)
+
+v2: Vector2 = Vector2.new(1.0, 2.0)
+v3: Vector2 = v1.add(v2)
+print(v3.x)
+print(v3.y)
+
+v4: Vector2 = v1.scale(2.0)
+print(v4.x)
+print(v4.y)
+
+print(v1.to_string())
+
+print("=== Rectangle ===")
+r1: Rectangle = Rectangle.new(10.0, 5.0)
+print(r1.area())
+print(r1.perimeter())
+print(r1.is_square())
+
+sq: Rectangle = Rectangle.square(7.0)
+print(sq.area())
+print(sq.is_square())
+
+r2: Rectangle = r1.scale_by(2.0)
+print(r2.width)
+print(r2.height)
+print(r2.area())
+
+print("=== Counter ===")
+c: Counter = Counter.new()
+print(c.get())
+
+c2: Counter = Counter.from_val(42)
+print(c2.get())
+
+print("=== Chained Usage ===")
+origin: Vector2 = Vector2.zero()
+moved: Vector2 = origin.add(Vector2.new(5.0, 10.0))
+print(moved.to_string())
+scaled: Vector2 = moved.scale(3.0)
+print(scaled.to_string())
+
+print("=== DONE ===")

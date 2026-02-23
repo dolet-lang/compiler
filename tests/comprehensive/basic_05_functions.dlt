@@ -1,0 +1,113 @@
+##############################
+# Comprehensive Basic Test 05
+# Functions: params, return, recursion, multiple calls
+##############################
+
+# === Simple function ===
+fun say_hello():
+    print("Hello from function!")
+
+# === Function with params and return ===
+fun add(a: i32, b: i32) -> i32:
+    return a + b
+
+fun multiply(a: i32, b: i32) -> i32:
+    return a * b
+
+# === String function ===
+fun greet(name: str) -> str:
+    return Str.concat("Welcome, ", Str.concat(name, "!"))
+
+# === Boolean function ===
+fun is_even(n: i32) -> bool:
+    if n % 2 == 0:
+        return true
+    return false
+
+# === Recursive function: factorial ===
+fun factorial(n: i32) -> i32:
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+# === Recursive function: fibonacci ===
+fun fibonacci(n: i32) -> i32:
+    if n <= 0:
+        return 0
+    if n == 1:
+        return 1
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+# === Function with multiple params ===
+fun clamp(val: i32, min_val: i32, max_val: i32) -> i32:
+    if val < min_val:
+        return min_val
+    if val > max_val:
+        return max_val
+    return val
+
+# === Function calling other functions ===
+fun sum_range(start: i32, end_val: i32) -> i32:
+    total: i32 = 0
+    for i in start to end_val:
+        total = total + i
+    return total
+
+# === Function with loop ===
+fun power(base: i32, exp: i32) -> i32:
+    result: i32 = 1
+    for i in 0 to exp - 1:
+        result = result * base
+    return result
+
+# === Float function ===
+fun average(a: f64, b: f64, c: f64) -> f64:
+    return (a + b + c) / 3.0
+
+# === Run tests ===
+print("=== Simple Call ===")
+say_hello()
+
+print("=== Params and Return ===")
+print(add(10, 20))
+print(multiply(6, 7))
+
+print("=== String Function ===")
+print(greet("Ali"))
+print(greet("Dolet"))
+
+print("=== Boolean Function ===")
+print(is_even(4))
+print(is_even(7))
+
+print("=== Factorial ===")
+print(factorial(1))
+print(factorial(5))
+print(factorial(10))
+
+print("=== Fibonacci ===")
+print(fibonacci(0))
+print(fibonacci(1))
+print(fibonacci(5))
+print(fibonacci(10))
+
+print("=== Clamp ===")
+print(clamp(5, 0, 10))
+print(clamp(-5, 0, 10))
+print(clamp(50, 0, 10))
+
+print("=== Sum Range ===")
+print(sum_range(1, 100))
+
+print("=== Power ===")
+print(power(2, 10))
+print(power(3, 5))
+
+print("=== Average ===")
+print(average(10.0, 20.0, 30.0))
+
+print("=== Nested Calls ===")
+print(add(multiply(3, 4), multiply(5, 6)))
+print(add(add(1, 2), add(3, 4)))
+
+print("=== DONE ===")

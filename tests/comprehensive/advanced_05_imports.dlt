@@ -1,0 +1,36 @@
+##############################
+# Comprehensive Advanced Test 05
+# Module Imports + Complex Struct Interaction
+##############################
+
+import advanced_05_math_lib
+
+print("=== Imported Math Functions ===")
+neg42: i32 = 0 - 42
+ma1: i32 = math_abs(neg42)
+ma2: i32 = math_abs(42)
+mx1: i32 = math_max(10, 20)
+mn1: i32 = math_min(10, 20)
+mc1: i32 = math_clamp(5, 0, 10)
+neg5: i32 = 0 - 5
+mc2: i32 = math_clamp(neg5, 0, 10)
+mc3: i32 = math_clamp(50, 0, 10)
+print(@"abs(-42) = {ma1}")
+print(@"abs(42) = {ma2}")
+print(@"max(10, 20) = {mx1}")
+print(@"min(10, 20) = {mn1}")
+print(@"clamp(5, 0, 10) = {mc1}")
+print(@"clamp(-5, 0, 10) = {mc2}")
+print(@"clamp(50, 0, 10) = {mc3}")
+
+print("=== Imported Struct ===")
+r: MathRange = MathRange(low=10, high=50)
+print(@"Range: {r.low} to {r.high}")
+rc1: i32 = range_contains(r, 25)
+rc2: i32 = range_contains(r, 5)
+rs1: i32 = range_span(r)
+print(@"contains(25) = {rc1}")
+print(@"contains(5) = {rc2}")
+print(@"span = {rs1}")
+
+print("=== DONE ===")

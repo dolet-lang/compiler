@@ -1,0 +1,114 @@
+##############################
+# Comprehensive Basic Test 02
+# All Operators: Arithmetic, Comparison, Logical, Bitwise
+##############################
+
+print("=== Arithmetic Operators ===")
+print(10 + 3)
+print(10 - 3)
+print(10 * 3)
+print(10 / 3)
+print(10 % 3)
+
+# Float arithmetic
+print(10.5 + 2.5)
+print(10.5 - 2.5)
+print(10.5 * 2.0)
+print(10.5 / 2.0)
+
+# Mixed precedence
+print(2 + 3 * 4)
+print((2 + 3) * 4)
+print(10 - 2 * 3 + 1)
+
+print("=== Comparison Operators ===")
+a: i32 = 10
+b: i32 = 20
+
+if a < b:
+    print("10 < 20: true")
+if a <= 10:
+    print("10 <= 10: true")
+if b > a:
+    print("20 > 10: true")
+if b >= 20:
+    print("20 >= 20: true")
+if a == 10:
+    print("10 == 10: true")
+if a != b:
+    print("10 != 20: true")
+
+print("=== Logical Operators ===")
+t: bool = true
+f: bool = false
+
+if t and t:
+    print("true and true = true")
+if t and f:
+    print("ERROR: should not print")
+else:
+    print("true and false = false")
+if t or f:
+    print("true or false = true")
+if f or f:
+    print("ERROR: should not print")
+else:
+    print("false or false = false")
+if not f:
+    print("not false = true")
+if not t:
+    print("ERROR: should not print")
+else:
+    print("not true = false")
+
+# Complex logical
+if (a > 5) and (b < 30):
+    print("(10>5) and (20<30) = true")
+if (a > 50) or (b == 20):
+    print("(10>50) or (20==20) = true")
+
+print("=== Bitwise Operators ===")
+x: i32 = 0xFF
+y: i32 = 0x0F
+
+# AND
+r1: i32 = x & y
+print(r1)
+
+# OR
+r2: i32 = x | 0x100
+print(r2)
+
+# XOR
+r3: i32 = 0xAA ^ 0x55
+print(r3)
+
+# Shift left
+r4: i32 = 1 << 8
+print(r4)
+
+# Shift right
+r5: i32 = 256 >> 4
+print(r5)
+
+print("=== Increment/Decrement ===")
+counter: i32 = 0
+counter++
+counter++
+counter++
+print(counter)
+counter--
+print(counter)
+
+print("=== Compound Assignment ===")
+val: i32 = 10
+val = val + 5
+print(val)
+val = val - 3
+print(val)
+val = val * 2
+print(val)
+val = val / 6
+print(val)
+
+print("=== DONE ===")

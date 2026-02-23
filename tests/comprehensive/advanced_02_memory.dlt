@@ -1,0 +1,85 @@
+##############################
+# Comprehensive Advanced Test 02
+# Memory Operations: malloc, free, read/write
+##############################
+
+print("=== Basic Allocation ===")
+mem: i64 = Memory.malloc_zeroed(256)
+if mem != 0:
+    print("Allocated 256 bytes")
+
+print("=== Write/Read i8 ===")
+Memory.write_i8(mem, 65)
+Memory.write_i8(mem + 1, 66)
+Memory.write_i8(mem + 2, 67)
+va: i8 = Memory.read_i8(mem)
+vb: i8 = Memory.read_i8(mem + 1)
+vc: i8 = Memory.read_i8(mem + 2)
+print(va)
+print(vb)
+print(vc)
+
+print("=== Write/Read i32 ===")
+Memory.write_i32(mem + 16, 42)
+Memory.write_i32(mem + 20, 100)
+Memory.write_i32(mem + 24, 999)
+ra: i32 = Memory.read_i32(mem + 16)
+rb: i32 = Memory.read_i32(mem + 20)
+rc: i32 = Memory.read_i32(mem + 24)
+print(ra)
+print(rb)
+print(rc)
+
+print("=== Write/Read i64 ===")
+Memory.write_i64(mem + 32, 123456789)
+Memory.write_i64(mem + 40, 987654321)
+rd: i64 = Memory.read_i64(mem + 32)
+re: i64 = Memory.read_i64(mem + 40)
+print(rd)
+print(re)
+
+print("=== Pointer as Array ===")
+arr: i64 = Memory.malloc_zeroed(40)
+aidx: i64 = 0
+for i in 0 to 9:
+    Memory.write_i32(arr + aidx * 4, i * i)
+    aidx = aidx + 1
+
+aidx = 0
+for i in 0 to 9:
+    aval: i32 = Memory.read_i32(arr + aidx * 4)
+    print(aval)
+    aidx = aidx + 1
+
+Memory.free(arr)
+
+print("=== Memory Zero ===")
+Memory.write_i64(mem + 64, 12345)
+chk1: i64 = Memory.read_i64(mem + 64)
+print(@"Before zero: {chk1}")
+Memory.zero(mem + 64, 8)
+chk2: i64 = Memory.read_i64(mem + 64)
+print(@"After zero: {chk2}")
+
+print("=== Memory Copy ===")
+sbuf: i64 = Memory.malloc_zeroed(32)
+dbuf: i64 = Memory.malloc_zeroed(32)
+Memory.write_i32(sbuf, 111)
+Memory.write_i32(sbuf + 4, 222)
+Memory.write_i32(sbuf + 8, 333)
+Memory.copy(dbuf, sbuf, 12)
+print(Memory.read_i32(dbuf))
+print(Memory.read_i32(dbuf + 4))
+print(Memory.read_i32(dbuf + 8))
+Memory.free(sbuf)
+Memory.free(dbuf)
+
+print("=== Strlen ===")
+tstr: str = "Hello"
+print(Memory.strlen(tstr))
+
+print("=== Cleanup ===")
+Memory.free(mem)
+print("All memory freed")
+
+print("=== DONE ===")

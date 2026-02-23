@@ -1,0 +1,67 @@
+##############################
+# Comprehensive Basic Test 07
+# Structs: fields, construction, access, nested
+##############################
+
+# === Simple Struct ===
+struct Point:
+    x: i32
+    y: i32
+
+# === Struct with mixed types ===
+struct Player:
+    name: str
+    health: i32
+    speed: f64
+    alive: bool
+
+# === Struct with defaults ===
+struct Config:
+    width: i32
+    height: i32
+    title: str
+
+print("=== Point Struct ===")
+p: Point = Point(x=10, y=20)
+print(p.x)
+print(p.y)
+
+print("=== Player Struct ===")
+hero: Player = Player(name="Hero", health=100, speed=5.5, alive=true)
+print(hero.name)
+print(hero.health)
+print(hero.speed)
+print(hero.alive)
+
+print("=== Config Struct ===")
+cfg: Config = Config(width=1920, height=1080, title="My Game")
+print(cfg.width)
+print(cfg.height)
+print(cfg.title)
+
+print("=== Field Modification ===")
+p.x = 50
+p.y = 75
+print(@"Modified: {p.x}, {p.y}")
+
+hero.health = hero.health - 30
+print(@"Health after damage: {hero.health}")
+
+hero.alive = false
+print(@"Alive: {hero.alive}")
+
+print("=== Multiple Structs ===")
+p1: Point = Point(x=1, y=2)
+p2: Point = Point(x=3, y=4)
+p3: Point = Point(x=5, y=6)
+
+print(p1.x + p2.x + p3.x)
+print(p1.y + p2.y + p3.y)
+
+print("=== Struct Field Arithmetic ===")
+dx: i32 = p2.x - p1.x
+dy: i32 = p2.y - p1.y
+dsq: i32 = dx * dx + dy * dy
+print(@"Distance squared (1,2)-(3,4): {dsq}")
+
+print("=== DONE ===")

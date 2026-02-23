@@ -1,0 +1,84 @@
+##############################
+# Comprehensive Advanced Test 04
+# Type Casting, Hex/Bin/Oct, Nullable Variables
+##############################
+
+print("=== Hex Literals ===")
+h1: i32 = 0xFF
+h2: i32 = 0xDEAD
+h3: i32 = 0x1A2B
+print(h1)
+print(h2)
+print(h3)
+
+print("=== Binary Literals ===")
+b1: i32 = 0b1010
+b2: i32 = 0b11111111
+b3: i32 = 0b10000000
+print(b1)
+print(b2)
+print(b3)
+
+print("=== Octal Literals ===")
+o1: i32 = 0o777
+o2: i32 = 0o755
+o3: i32 = 0o100
+print(o1)
+print(o2)
+print(o3)
+
+print("=== Mixed Literals in Expressions ===")
+mask: i32 = 0xFF & 0x0F
+print(@"0xFF & 0x0F = {mask}")
+shifted: i32 = 0b1 << 8
+print(@"0b1 << 8 = {shifted}")
+
+print("=== Type Casting ===")
+# i32 to i64
+small: i32 = 42
+big: i64 = small as i64
+print(big)
+
+# i64 to i32
+large: i64 = 100
+narrow: i32 = large as i32
+print(narrow)
+
+# i32 to f64
+int_val: i32 = 7
+float_val: f64 = int_val as f64
+print(float_val)
+
+# f64 to i32
+pi: f64 = 3.99
+truncated: i32 = pi as i32
+print(truncated)
+
+print("=== Cast in Expressions ===")
+a: i32 = 10
+b: i64 = 20
+a_wide: i64 = a as i64
+result: i64 = a_wide + b
+print(result)
+
+print("=== Pointer Write/Read ===")
+ptr2: i64 = Memory.malloc_zeroed(8)
+Memory.write_i64(ptr2, 12345678)
+val2: i64 = Memory.read_i64(ptr2)
+print(val2)
+Memory.free(ptr2)
+
+print("=== Bitwise on Hex ===")
+flags: i32 = 0b0000
+flags = flags | 0b0001
+flags = flags | 0b0100
+print(flags)
+
+has_flag1: bool = (flags & 0b0001) != 0
+has_flag2: bool = (flags & 0b0010) != 0
+has_flag3: bool = (flags & 0b0100) != 0
+print(has_flag1)
+print(has_flag2)
+print(has_flag3)
+
+print("=== DONE ===")

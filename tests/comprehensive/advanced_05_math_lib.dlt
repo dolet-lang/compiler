@@ -1,0 +1,35 @@
+##############################
+# Math Library Module (imported by advanced_05_imports.dlt)
+##############################
+
+fun math_abs(n: i32) -> i32:
+    if n < 0:
+        return 0 - n
+    return n
+
+fun math_max(a: i32, b: i32) -> i32:
+    if a > b:
+        return a
+    return b
+
+fun math_min(a: i32, b: i32) -> i32:
+    if a < b:
+        return a
+    return b
+
+fun math_clamp(val: i32, low: i32, high: i32) -> i32:
+    if val < low:
+        return low
+    if val > high:
+        return high
+    return val
+
+struct MathRange:
+    low: i32
+    high: i32
+
+fun range_contains(r: MathRange, val: i32) -> bool:
+    return val >= r.low and val <= r.high
+
+fun range_span(r: MathRange) -> i32:
+    return r.high - r.low

@@ -166,10 +166,13 @@ fun gen_int_lit(node: i64, expected: str) -> str:
         vs: str = Str.concat(Convert.i64_to_str(val), ".0")
         emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.constant("), vs), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
         return tmp
-    # Always emit as i32 — implicit_cast handles widening/narrowing
+    # Emit as i64 only when value overflows i32 range; otherwise i32 + implicit_cast
     tmp2: str = new_tmp()
     vs2: str = Convert.i64_to_str(val)
-    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp2, " = llvm.mlir.constant("), vs2), " : i32"), ") : i32"))
+    lit_type: str = "i32"
+    if val > 2147483647 or val < (0 - 2147483648):
+        lit_type = "i64"
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp2, " = llvm.mlir.constant("), vs2), Str.concat(" : ", lit_type)), Str.concat(") : ", lit_type)))
     return tmp2
 
 fun gen_float_lit(node: i64, expected: str) -> str:

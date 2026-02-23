@@ -1,0 +1,82 @@
+##############################
+# Comprehensive Basic Test 04
+# Loops: for, while, break, continue, reverse, step, nested
+##############################
+
+print("=== For Loop Basic ===")
+for i in 0 to 4:
+    print(i)
+
+print("=== For Loop with Step ===")
+for i in 0 to 20 step 5:
+    print(i)
+
+print("=== Reverse For Loop ===")
+for i in 5 to 0:
+    print(i)
+
+print("=== Reverse with Negative Step ===")
+for i in 100 to 0 step -25:
+    print(i)
+
+print("=== While Loop ===")
+count: i32 = 0
+while count < 5:
+    print(count)
+    count++
+
+print("=== Break ===")
+for i in 0 to 100:
+    if i == 3:
+        break
+    print(i)
+
+print("=== Continue ===")
+for i in 0 to 9:
+    if i % 2 == 0:
+        continue
+    print(i)
+
+print("=== Nested For Loops ===")
+for i in 0 to 2:
+    for j in 0 to 2:
+        val: i32 = i * 10 + j
+        print(val)
+
+print("=== While with Complex Condition ===")
+a: i32 = 0
+b: i32 = 100
+while a < b:
+    a = a + 10
+    b = b - 10
+print(a)
+print(b)
+
+print("=== Loop with Accumulator ===")
+total: i32 = 0
+for i in 1 to 10:
+    total = total + i
+print(total)
+
+print("=== Countdown ===")
+n: i32 = 5
+while n > 0:
+    print(n)
+    n = n - 1
+print("Liftoff!")
+
+print("=== Nested Break ===")
+for i in 0 to 5:
+    if i == 3:
+        break
+    for j in 0 to 5:
+        if j == 2:
+            break
+        val2: i32 = i * 10 + j
+        print(val2)
+
+print("=== Large Step ===")
+for i in 0 to 1000 step 250:
+    print(i)
+
+print("=== DONE ===")

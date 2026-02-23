@@ -1,0 +1,106 @@
+##############################
+# Comprehensive Basic Test 01
+# Data Types, Variables, Constants, Type Inference
+##############################
+
+# === Integer Types ===
+a_i8: i8 = 127
+a_i16: i16 = 32767
+a_i32: i32 = 2147483647
+a_i64: i64 = 9999999999
+
+print("=== Integer Types ===")
+print(a_i8)
+print(a_i16)
+print(a_i32)
+print(a_i64)
+
+# === Unsigned Types ===
+b_u8: u8 = 255
+b_u16: u16 = 65535
+b_u32: u32 = 100000
+b_u64: u64 = 999999999
+
+print("=== Unsigned Types ===")
+print(b_u8)
+print(b_u16)
+print(b_u32)
+print(b_u64)
+
+# === Float Types ===
+f1: f32 = 3.14
+f2: f64 = 2.718281828
+
+print("=== Float Types ===")
+print(f1)
+print(f2)
+
+# === Boolean ===
+flag_true: bool = true
+flag_false: bool = false
+
+print("=== Boolean ===")
+print(flag_true)
+print(flag_false)
+
+# === String ===
+greeting: str = "Hello, Dolet!"
+empty_str: str = ""
+
+print("=== String ===")
+print(greeting)
+print(Memory.strlen(empty_str))
+
+# === Char ===
+ch: i8 = 65
+
+print("=== Char ===")
+print(ch)
+
+# === Hex/Binary/Octal Literals ===
+hex_val: i32 = 0xFF
+bin_val: i32 = 0b11001100
+oct_val: i32 = 0o755
+
+print("=== Hex/Binary/Octal ===")
+print(hex_val)
+print(bin_val)
+print(oct_val)
+
+# === Variable Reassignment ===
+x: i32 = 10
+print("=== Reassignment ===")
+print(x)
+x = 20
+print(x)
+x = x + 5
+print(x)
+
+# === Type Inference (with explicit types) ===
+inferred_int: i32 = 42
+inferred_str: str = "inferred"
+inferred_float: f64 = 1.5
+
+print("=== Inference ===")
+print(inferred_int)
+print(inferred_str)
+print(inferred_float)
+
+# === Arithmetic on Different Types ===
+sum_i32: i32 = 100 + 200
+diff_i64: i64 = 1000000 - 500000
+prod_f64: f64 = 3.14 * 2.0
+div_f64: f64 = 10.0 / 3.0
+
+print("=== Arithmetic ===")
+print(sum_i32)
+print(diff_i64)
+print(prod_f64)
+print(div_f64)
+
+# === Negative Numbers ===
+neg: i32 = 0 - 42
+print("=== Negative ===")
+print(neg)
+
+print("=== DONE ===")

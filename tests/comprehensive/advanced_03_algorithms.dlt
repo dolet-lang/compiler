@@ -1,0 +1,175 @@
+##############################
+# Comprehensive Advanced Test 03
+# Complex Algorithms: sorting, searching, math
+##############################
+
+# === Bubble Sort (in-memory array) ===
+fun bubble_sort(arr: i64, size: i32):
+    for i in 0 to size - 2:
+        for j in 0 to size - 2 - i:
+            a: i32 = Memory.read_i32(arr + (j as i64) * 4)
+            b: i32 = Memory.read_i32(arr + ((j + 1) as i64) * 4)
+            if a > b:
+                Memory.write_i32(arr + (j as i64) * 4, b)
+                Memory.write_i32(arr + ((j + 1) as i64) * 4, a)
+
+fun print_array(arr: i64, size: i32):
+    for i in 0 to size - 1:
+        val: i32 = Memory.read_i32(arr + (i as i64) * 4)
+        print(val)
+
+# === Linear Search ===
+fun linear_search(arr: i64, size: i32, target: i32) -> i32:
+    for i in 0 to size - 1:
+        val: i32 = Memory.read_i32(arr + (i as i64) * 4)
+        if val == target:
+            return i
+    return 0 - 1
+
+# === Binary Search (assumes sorted array) ===
+fun binary_search(arr: i64, size: i32, target: i32) -> i32:
+    lo: i32 = 0
+    hi: i32 = size - 1
+    while lo <= hi:
+        mid: i32 = (lo + hi) / 2
+        val: i32 = Memory.read_i32(arr + (mid as i64) * 4)
+        if val == target:
+            return mid
+        elif val < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return 0 - 1
+
+# === GCD (Euclidean algorithm) ===
+fun gcd(a: i32, b: i32) -> i32:
+    x: i32 = a
+    y: i32 = b
+    while y != 0:
+        temp: i32 = y
+        y = x % y
+        x = temp
+    return x
+
+# === LCM ===
+fun lcm(a: i32, b: i32) -> i32:
+    return (a * b) / gcd(a, b)
+
+# === Power (iterative) ===
+fun int_pow(base: i32, exp: i32) -> i32:
+    result: i32 = 1
+    for i in 0 to exp - 1:
+        result = result * base
+    return result
+
+# === Sum of digits ===
+fun sum_digits(n: i32) -> i32:
+    total: i32 = 0
+    num: i32 = n
+    while num > 0:
+        total = total + (num % 10)
+        num = num / 10
+    return total
+
+# === Is prime ===
+fun is_prime(n: i32) -> bool:
+    if n < 2:
+        return false
+    if n == 2:
+        return true
+    if n % 2 == 0:
+        return false
+    i: i32 = 3
+    while i * i <= n:
+        if n % i == 0:
+            return false
+        i = i + 2
+    return true
+
+# === Collatz sequence length ===
+fun collatz_length(n: i32) -> i32:
+    steps: i32 = 0
+    val: i32 = n
+    while val != 1:
+        if val % 2 == 0:
+            val = val / 2
+        else:
+            val = val * 3 + 1
+        steps++
+    return steps
+
+# === Run Tests ===
+print("=== Bubble Sort ===")
+arr: i64 = Memory.malloc_zeroed(40)
+Memory.write_i32(arr, 64)
+Memory.write_i32(arr + 4, 25)
+Memory.write_i32(arr + 8, 12)
+Memory.write_i32(arr + 12, 22)
+Memory.write_i32(arr + 16, 11)
+Memory.write_i32(arr + 20, 90)
+Memory.write_i32(arr + 24, 1)
+Memory.write_i32(arr + 28, 55)
+Memory.write_i32(arr + 32, 33)
+Memory.write_i32(arr + 36, 7)
+
+print("Before sort:")
+print_array(arr, 10)
+
+bubble_sort(arr, 10)
+print("After sort:")
+print_array(arr, 10)
+
+print("=== Linear Search ===")
+idx: i32 = linear_search(arr, 10, 55)
+print(@"Found 55 at index: {idx}")
+idx = linear_search(arr, 10, 999)
+print(@"Found 999 at index: {idx}")
+
+print("=== Binary Search ===")
+idx = binary_search(arr, 10, 33)
+print(@"Binary search 33 at index: {idx}")
+idx = binary_search(arr, 10, 1)
+print(@"Binary search 1 at index: {idx}")
+idx = binary_search(arr, 10, 90)
+print(@"Binary search 90 at index: {idx}")
+
+Memory.free(arr)
+
+print("=== GCD / LCM ===")
+g1: i32 = gcd(12, 8)
+g2: i32 = gcd(100, 75)
+l1: i32 = lcm(4, 6)
+l2: i32 = lcm(7, 13)
+print(@"GCD(12, 8) = {g1}")
+print(@"GCD(100, 75) = {g2}")
+print(@"LCM(4, 6) = {l1}")
+print(@"LCM(7, 13) = {l2}")
+
+print("=== Power ===")
+pw1: i32 = int_pow(2, 10)
+pw2: i32 = int_pow(3, 5)
+pw3: i32 = int_pow(5, 3)
+print(@"2^10 = {pw1}")
+print(@"3^5 = {pw2}")
+print(@"5^3 = {pw3}")
+
+print("=== Sum of Digits ===")
+sd1: i32 = sum_digits(12345)
+sd2: i32 = sum_digits(9999)
+print(@"sum_digits(12345) = {sd1}")
+print(@"sum_digits(9999) = {sd2}")
+
+print("=== Primes ===")
+for n in 2 to 30:
+    if is_prime(n):
+        print(n)
+
+print("=== Collatz ===")
+cl1: i32 = collatz_length(1)
+cl2: i32 = collatz_length(6)
+cl3: i32 = collatz_length(27)
+print(@"collatz(1) = {cl1}")
+print(@"collatz(6) = {cl2}")
+print(@"collatz(27) = {cl3}")
+
+print("=== DONE ===")

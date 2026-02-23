@@ -1,0 +1,128 @@
+##############################
+# Comprehensive Basic Test 03
+# Control Flow: if/elif/else, match, nested conditions
+##############################
+
+print("=== Simple If ===")
+x: i32 = 15
+
+if x > 10:
+    print("x > 10")
+
+if x < 5:
+    print("ERROR")
+else:
+    print("x >= 5")
+
+print("=== If/Elif/Else Chain ===")
+score: i32 = 85
+
+if score >= 90:
+    print("A")
+elif score >= 80:
+    print("B")
+elif score >= 70:
+    print("C")
+elif score >= 60:
+    print("D")
+else:
+    print("F")
+
+# Test each branch
+s2: i32 = 95
+if s2 >= 90:
+    print("A")
+elif s2 >= 80:
+    print("B")
+else:
+    print("other")
+
+s3: i32 = 55
+if s3 >= 90:
+    print("A")
+elif s3 >= 80:
+    print("B")
+else:
+    print("F")
+
+print("=== Nested If ===")
+a: i32 = 10
+b: i32 = 20
+
+if a > 5:
+    if b > 15:
+        print("a>5 and b>15")
+    else:
+        print("a>5 but b<=15")
+else:
+    print("a<=5")
+
+# Deep nesting
+level: i32 = 3
+if level >= 1:
+    print("level >= 1")
+    if level >= 2:
+        print("level >= 2")
+        if level >= 3:
+            print("level >= 3")
+
+print("=== Match Statement ===")
+day: i32 = 3
+
+match day:
+    case 1:
+        print("Monday")
+    case 2:
+        print("Tuesday")
+    case 3:
+        print("Wednesday")
+    case 4:
+        print("Thursday")
+    case 5:
+        print("Friday")
+    else:
+        print("Weekend")
+
+# Match with different value
+color: i32 = 2
+match color:
+    case 0:
+        print("Red")
+    case 1:
+        print("Green")
+    case 2:
+        print("Blue")
+    else:
+        print("Unknown")
+
+print("=== Complex Conditions ===")
+age: i32 = 25
+has_license: bool = true
+
+if age >= 18 and has_license:
+    print("Can drive")
+
+if age < 16 or not has_license:
+    print("ERROR")
+else:
+    print("Eligible")
+
+# Chained comparisons via logical operators
+temp: i32 = 22
+if temp > 15 and temp < 30:
+    print("Pleasant weather")
+
+print("=== Ternary-like Pattern ===")
+val: i32 = 42
+result: str = "even"
+if val % 2 != 0:
+    result = "odd"
+print(result)
+
+val = 7
+result = "even"
+if val % 2 != 0:
+    result = "odd"
+print(result)
+
+print("=== DONE ===")

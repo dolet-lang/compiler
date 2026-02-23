@@ -1,0 +1,76 @@
+##############################
+# Comprehensive Basic Test 08
+# Enums: basic, with values, match on enum
+##############################
+
+# === Basic Enum ===
+enum Direction:
+    Up
+    Down
+    Left
+    Right
+
+# === Enum (sequential values) ===
+enum HttpStatus:
+    OK
+    NotFound
+    ServerError
+
+# === Enum as int ===
+print("=== Basic Enum Values ===")
+d: i32 = Direction.Up
+print(d)
+d = Direction.Down
+print(d)
+d = Direction.Left
+print(d)
+d = Direction.Right
+print(d)
+
+print("=== Custom Value Enum ===")
+status: i32 = HttpStatus.OK
+print(status)
+status = HttpStatus.NotFound
+print(status)
+status = HttpStatus.ServerError
+print(status)
+
+print("=== Match on Enum ===")
+dir: i32 = Direction.Right
+match dir:
+    case 0:
+        print("Going Up")
+    case 1:
+        print("Going Down")
+    case 2:
+        print("Going Left")
+    case 3:
+        print("Going Right")
+    else:
+        print("Unknown direction")
+
+print("=== Enum in Conditions ===")
+code: i32 = HttpStatus.NotFound
+if code == HttpStatus.OK:
+    print("Success")
+elif code == HttpStatus.NotFound:
+    print("Page not found")
+elif code == HttpStatus.ServerError:
+    print("Server error")
+
+print("=== Enum in Function ===")
+fun status_message(code: i32) -> str:
+    if code == HttpStatus.OK:
+        return "OK"
+    if code == HttpStatus.NotFound:
+        return "Not Found"
+    if code == HttpStatus.ServerError:
+        return "Internal Server Error"
+    return "Unknown"
+
+print(status_message(HttpStatus.OK))
+print(status_message(HttpStatus.NotFound))
+print(status_message(HttpStatus.ServerError))
+print(status_message(999))
+
+print("=== DONE ===")

@@ -1,0 +1,228 @@
+##############################
+# Comprehensive Advanced Test 09
+# Full Mini-App: Inventory Management System
+##############################
+
+# === Enums ===
+enum ItemType:
+    Weapon
+    Armor
+    Potion
+    Material
+
+# === Item: name_ptr(8) + type(4) + qty(4) + price(4) + pad(4) = 24 bytes ===
+fun item_off(idx: i32) -> i64:
+    i64v: i64 = idx as i64
+    return i64v * 24
+
+fun item_store(arr: i64, idx: i32, name: str, itype: i32, qty: i32, price: i32):
+    off: i64 = item_off(idx)
+    Memory.write_i64(arr + off, name as i64)
+    Memory.write_i32(arr + off + 8, itype)
+    Memory.write_i32(arr + off + 12, qty)
+    Memory.write_i32(arr + off + 16, price)
+
+fun item_name(arr: i64, idx: i32) -> str:
+    off: i64 = item_off(idx)
+    return Memory.read_i64(arr + off) as str
+
+fun item_type(arr: i64, idx: i32) -> i32:
+    off: i64 = item_off(idx)
+    return Memory.read_i32(arr + off + 8)
+
+fun item_qty(arr: i64, idx: i32) -> i32:
+    off: i64 = item_off(idx)
+    return Memory.read_i32(arr + off + 12)
+
+fun item_price(arr: i64, idx: i32) -> i32:
+    off: i64 = item_off(idx)
+    return Memory.read_i32(arr + off + 16)
+
+fun item_set_qty(arr: i64, idx: i32, qty: i32):
+    off: i64 = item_off(idx)
+    Memory.write_i32(arr + off + 12, qty)
+
+fun type_name(t: i32) -> str:
+    match t:
+        case 0:
+            return "Weapon"
+        case 1:
+            return "Armor"
+        case 2:
+            return "Potion"
+        case 3:
+            return "Material"
+        else:
+            return "Unknown"
+
+# === Inventory functions ===
+fun print_item(inv: i64, idx: i32):
+    n: str = item_name(inv, idx)
+    it: i32 = item_type(inv, idx)
+    tn: str = type_name(it)
+    q: i32 = item_qty(inv, idx)
+    p: i32 = item_price(inv, idx)
+    qs: str = Convert.i32_to_str(q)
+    ps: str = Convert.i32_to_str(p)
+    line: str = Str.concat(Str.concat(Str.concat(Str.concat("  ", tn), Str.concat("\t", n)), Str.concat("\t", qs)), Str.concat("\t", Str.concat(ps, "g")))
+    print(line)
+
+fun print_inventory(inv: i64, count: i32):
+    print("+---------+------------+-----+-------+")
+    print("| Type    | Name       | Qty | Price |")
+    print("+---------+------------+-----+-------+")
+    for i in 0 to count - 1:
+        print_item(inv, i)
+    print("+---------+------------+-----+-------+")
+
+fun total_value(inv: i64, count: i32) -> i32:
+    total: i32 = 0
+    for i in 0 to count - 1:
+        total = total + item_qty(inv, i) * item_price(inv, i)
+    return total
+
+fun total_items(inv: i64, count: i32) -> i32:
+    total: i32 = 0
+    for i in 0 to count - 1:
+        total = total + item_qty(inv, i)
+    return total
+
+fun count_by_type(inv: i64, count: i32, target_type: i32) -> i32:
+    total: i32 = 0
+    for i in 0 to count - 1:
+        if item_type(inv, i) == target_type:
+            total++
+    return total
+
+fun find_most_expensive(inv: i64, count: i32) -> str:
+    best_name: str = ""
+    best_price: i32 = 0
+    for i in 0 to count - 1:
+        p: i32 = item_price(inv, i)
+        if p > best_price:
+            best_price = p
+            best_name = item_name(inv, i)
+    return best_name
+
+fun find_cheapest(inv: i64, count: i32) -> str:
+    cheap_name: str = ""
+    cheap_price: i32 = 999999
+    for i in 0 to count - 1:
+        p: i32 = item_price(inv, i)
+        if p < cheap_price:
+            cheap_price = p
+            cheap_name = item_name(inv, i)
+    return cheap_name
+
+# === Buy simulation ===
+fun buy_item(inv: i64, idx: i32, amount: i32, gold: i64) -> i32:
+    cost: i32 = item_price(inv, idx) * amount
+    current_gold: i32 = Memory.read_i32(gold)
+    if current_gold >= cost:
+        Memory.write_i32(gold, current_gold - cost)
+        old_qty: i32 = item_qty(inv, idx)
+        item_set_qty(inv, idx, old_qty + amount)
+        return 1
+    return 0
+
+# === Sort by price (bubble sort) ===
+fun sort_by_price(inv: i64, count: i32):
+    for i in 0 to count - 2:
+        for j in 0 to count - 2 - i:
+            p1: i32 = item_price(inv, j)
+            p2: i32 = item_price(inv, j + 1)
+            if p1 > p2:
+                off1: i64 = item_off(j)
+                off2: i64 = item_off(j + 1)
+                temp: i64 = Memory.malloc_zeroed(24)
+                Memory.copy(temp, inv + off1, 24)
+                Memory.copy(inv + off1, inv + off2, 24)
+                Memory.copy(inv + off2, temp, 24)
+                Memory.free(temp)
+
+# ========================================
+# MAIN PROGRAM
+# ========================================
+print("================================================")
+print("       INVENTORY MANAGEMENT SYSTEM")
+print("================================================")
+print("")
+
+# Create inventory
+num_items: i32 = 8
+inv: i64 = Memory.malloc_zeroed(192)
+
+# Add items (ItemType: Weapon=0, Armor=1, Potion=2, Material=3)
+item_store(inv, 0, "Iron Sword", 0, 1, 150)
+item_store(inv, 1, "Steel Shield", 1, 1, 200)
+item_store(inv, 2, "Health Potion", 2, 5, 25)
+item_store(inv, 3, "Mana Potion", 2, 3, 30)
+item_store(inv, 4, "Iron Ore", 3, 10, 5)
+item_store(inv, 5, "Dragon Scale", 3, 2, 500)
+item_store(inv, 6, "Magic Staff", 0, 1, 350)
+item_store(inv, 7, "Leather Vest", 1, 1, 80)
+
+print("--- Current Inventory ---")
+print_inventory(inv, num_items)
+
+print("")
+print("--- Statistics ---")
+tv: i32 = total_value(inv, num_items)
+ti: i32 = total_items(inv, num_items)
+w_count: i32 = count_by_type(inv, num_items, 0)
+a_count: i32 = count_by_type(inv, num_items, 1)
+p_count: i32 = count_by_type(inv, num_items, 2)
+m_count: i32 = count_by_type(inv, num_items, 3)
+print(@"  Total items: {ti}")
+print(@"  Total value: {tv}g")
+print(@"  Weapons: {w_count}")
+print(@"  Armor: {a_count}")
+print(@"  Potions: {p_count}")
+print(@"  Materials: {m_count}")
+
+most_exp: str = find_most_expensive(inv, num_items)
+cheapest: str = find_cheapest(inv, num_items)
+print(@"  Most expensive: {most_exp}")
+print(@"  Cheapest: {cheapest}")
+
+# Buy simulation
+print("")
+print("--- Buy Simulation ---")
+gold_ptr: i64 = Memory.malloc_zeroed(8)
+Memory.write_i32(gold_ptr, 1000)
+g0: i32 = Memory.read_i32(gold_ptr)
+print(@"  Starting gold: {g0}g")
+
+# Buy 3 more Health Potions
+buy_result: i32 = buy_item(inv, 2, 3, gold_ptr)
+g1: i32 = Memory.read_i32(gold_ptr)
+if buy_result == 1:
+    print(@"  Bought 3 Health Potions! Gold: {g1}g")
+else:
+    print("  Cannot afford Health Potions!")
+
+# Try to buy something expensive
+buy_result = buy_item(inv, 5, 5, gold_ptr)
+g2: i32 = Memory.read_i32(gold_ptr)
+if buy_result == 1:
+    print(@"  Bought 5 Dragon Scales! Gold: {g2}g")
+else:
+    print(@"  Cannot afford 5 Dragon Scales! Gold: {g2}g")
+
+print("")
+print("--- After Purchases ---")
+print_inventory(inv, num_items)
+
+# Sort by price
+print("")
+print("--- Sorted by Price (ascending) ---")
+sort_by_price(inv, num_items)
+print_inventory(inv, num_items)
+
+# Cleanup
+Memory.free(gold_ptr)
+Memory.free(inv)
+
+print("")
+print("================================================")
+print("=== DONE ===")

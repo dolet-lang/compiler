@@ -1,0 +1,119 @@
+##############################
+# Comprehensive Advanced Test 08
+# String-Heavy: Building, parsing, manipulating strings
+##############################
+
+# === String Builder Pattern ===
+fun repeat_str(s: str, count: i32) -> str:
+    result: str = ""
+    for i in 0 to count - 1:
+        result = result + s
+    return result
+
+fun join_numbers(start: i32, end_val: i32, sep: str) -> str:
+    result: str = ""
+    for i in start to end_val:
+        if i > start:
+            result = result + sep
+        result = result + Convert.i32_to_str(i)
+    return result
+
+# === String Analysis ===
+fun count_char(s: str, target: i32) -> i32:
+    count: i32 = 0
+    slen: i64 = Memory.strlen(s)
+    i: i64 = 0
+    while i < slen:
+        c: i8 = Memory.read_i8((s as i64) + i)
+        cv: i32 = c as i32
+        if cv == target:
+            count++
+        i = i + 1
+    return count
+
+fun reverse_string(s: str) -> str:
+    slen: i64 = Memory.strlen(s)
+    buf: i64 = Memory.malloc_zeroed(slen + 1)
+    i: i64 = 0
+    while i < slen:
+        c: i8 = Memory.read_i8((s as i64) + i)
+        Memory.write_i8(buf + slen - 1 - i, c)
+        i = i + 1
+    result: str = buf as str
+    return result
+
+fun is_palindrome(s: str) -> bool:
+    slen: i64 = Memory.strlen(s)
+    left: i64 = 0
+    right: i64 = slen - 1
+    while left < right:
+        cl: i8 = Memory.read_i8((s as i64) + left)
+        cr: i8 = Memory.read_i8((s as i64) + right)
+        if cl != cr:
+            return false
+        left = left + 1
+        right = right - 1
+    return true
+
+# === Run Tests ===
+print("=== Repeat String ===")
+print(repeat_str("ab", 5))
+print(repeat_str("*", 10))
+print(repeat_str("=-", 8))
+
+print("=== Join Numbers ===")
+print(join_numbers(1, 5, ", "))
+print(join_numbers(0, 3, " -> "))
+print(join_numbers(10, 15, "-"))
+
+print("=== Count Char ===")
+test: str = "hello world"
+cc1: i32 = count_char(test, 108)
+cc2: i32 = count_char(test, 111)
+cc3: i32 = count_char(test, 122)
+print(@"l in hello world: {cc1}")
+print(@"o in hello world: {cc2}")
+print(@"z in hello world: {cc3}")
+
+print("=== Reverse String ===")
+print(reverse_string("hello"))
+print(reverse_string("12345"))
+print(reverse_string("a"))
+
+print("=== Palindrome ===")
+pl1: bool = is_palindrome("racecar")
+pl2: bool = is_palindrome("madam")
+pl3: bool = is_palindrome("hello")
+pl4: bool = is_palindrome("abba")
+pl5: bool = is_palindrome("a")
+print(@"racecar: {pl1}")
+print(@"madam: {pl2}")
+print(@"hello: {pl3}")
+print(@"abba: {pl4}")
+print(@"a: {pl5}")
+
+print("=== Complex String Building ===")
+# Build a multiplication table row
+fun mult_row(n: i32) -> str:
+    row: str = ""
+    for i in 1 to 5:
+        if i > 1:
+            row = row + "\t"
+        row = row + Convert.i32_to_str(n * i)
+    return row
+
+for r in 1 to 5:
+    print(mult_row(r))
+
+print("=== Interpolation Stress Test ===")
+x: i32 = 100
+y: i32 = 200
+z: i32 = 300
+total: i32 = x + y + z
+print(@"x={x} y={y} z={z} total={total}")
+
+name: str = "Dolet"
+ver: str = "1.0"
+print(@"{name} v{ver} - Self-hosted compiler")
+
+print("=== DONE ===")
