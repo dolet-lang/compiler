@@ -33,6 +33,10 @@ fun parse_fun_def(is_async: i64) -> i64:
             nullable = 1
             advance()
 
+        # Optional variadic: name...
+        if cur_kind() == TK_ELLIPSIS:
+            advance()
+
         # Optional type: name: type
         ptype: str = ""
         if cur_kind() == TK_COLON:
@@ -294,9 +298,12 @@ fun parse_impl_block() -> i64:
         if cur_kind() == TK_NEWLINE:
             skip_newlines()
         elif cur_kind() == TK_FUN or cur_kind() == TK_STATIC:
+            mis: i64 = 0
             if cur_kind() == TK_STATIC:
+                mis = 1
                 advance()
             m: i64 = parse_fun_def(0)
+            Memory.write_i64(m + 72, mis)
             nl_add(methods, m)
             if cur_kind() == TK_NEWLINE:
                 skip_newlines()

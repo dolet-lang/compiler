@@ -10,6 +10,11 @@
 # Generate Pure Runtime Declarations
 # ==========================================
 fun gen_runtime_decls():
+    # String comparison (standard C library — cross-platform)
+    emit_ind("// Standard C library string compare")
+    emit_ind("llvm.func @strcmp(!llvm.ptr, !llvm.ptr) -> i32")
+    emit_blank()
+
     # Hash functions
     emit_ind("// Pure Dolet Runtime")
 
@@ -498,29 +503,8 @@ fun generate(ast: i64) -> str:
         emit_ind("llvm.func @main() -> i32 {")
         indent_inc()
 
-        # Initialize global variables
-        if g_global_var_count > 0:
-            emit_ind("// Initialize global variables")
-            gi: i32 = 0
-            while gi < g_global_var_count:
-                off: i64 = (gi as i64) * 8
-                gname: str = Memory.read_i64(g_global_var_names + off) as str
-                gnode: i64 = Memory.read_i64(g_global_var_nodes + off)
-                val_node: i64 = Memory.read_i64(gnode + 24)
-                if val_node != 0:
-                    mn: str = get_mlir_name(gname)
-                    vt: str = get_var_type(gname)
-                    mt: str = mlir_type(vt)
-                    actual_t: str = infer_expr_type(val_node)
-                    val: str = gen_expr(val_node, vt)
-                    if str_eq(actual_t, vt) == 0 and str_eq(actual_t, "unknown") == 0:
-                        val = implicit_cast(val, actual_t, vt)
-                    ga: str = emit_addr_of(mn)
-                    emit_store(val, ga, mt)
-                gi = gi + 1
-            emit_blank()
-
-        # Generate top-level statements
+        # Generate all top-level statements in source order
+        # (var decls with init values are generated inline, preserving execution order)
         gen_main_body(ast)
 
         # Return 0

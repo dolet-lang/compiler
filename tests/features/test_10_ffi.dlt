@@ -10,3 +10,4 @@ extern lib "user32.dll":
 # Call Windows API
 MessageBoxA(0, "Hello from Dolet!", "Dolet FFI Test", 0)
 print("FFI test passed!")
+

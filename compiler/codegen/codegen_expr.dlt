@@ -265,6 +265,13 @@ fun gen_binary_op(node: i64, expected: str) -> str:
     lt: str = infer_expr_type(left_node)
     rt: str = infer_expr_type(right_node)
 
+    # String concatenation: str + str => Str_concat
+    if str_eq(op_str, "+") == 1:
+        if is_string_type(lt) == 1 or is_string_type(rt) == 1:
+            lv: str = gen_expr(left_node, "string")
+            rv: str = gen_expr(right_node, "string")
+            return emit_call("Str_concat", Str.concat(Str.concat(lv, ", "), rv), "!llvm.ptr, !llvm.ptr", "!llvm.ptr")
+
     result_type: str = "i32"
     if str_eq(lt, "i64") == 1 or str_eq(rt, "i64") == 1:
         result_type = "i64"
@@ -543,7 +550,11 @@ fun gen_enum_access(node: i64) -> str:
 # ==========================================
 fun gen_is_null(node: i64) -> str:
     expr_node: i64 = Memory.read_i64(node + 8)
-    val: str = gen_expr(expr_node, "ptr")
+    et: str = infer_expr_type(expr_node)
+    val: str = gen_expr(expr_node, et)
+    # Cast to ptr if not already a pointer type
+    if is_string_type(et) == 0 and is_struct_type(et) == 0 and str_eq(et, "ptr") == 0 and str_eq(et, "null") == 0:
+        val = implicit_cast(val, et, "ptr")
     null_val: str = emit_zero_ptr()
     result: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.icmp \"eq\" "), val), Str.concat(", ", null_val)), " : !llvm.ptr"))
@@ -551,7 +562,11 @@ fun gen_is_null(node: i64) -> str:
 
 fun gen_is_not_null(node: i64) -> str:
     expr_node: i64 = Memory.read_i64(node + 8)
-    val: str = gen_expr(expr_node, "ptr")
+    et: str = infer_expr_type(expr_node)
+    val: str = gen_expr(expr_node, et)
+    # Cast to ptr if not already a pointer type
+    if is_string_type(et) == 0 and is_struct_type(et) == 0 and str_eq(et, "ptr") == 0 and str_eq(et, "null") == 0:
+        val = implicit_cast(val, et, "ptr")
     null_val: str = emit_zero_ptr()
     result: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.icmp \"ne\" "), val), Str.concat(", ", null_val)), " : !llvm.ptr"))

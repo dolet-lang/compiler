@@ -35,10 +35,25 @@ fun parse_primary() -> i64:
     k: i32 = cur_kind()
 
     # Integer literal
-    if k == TK_INT or k == TK_INT64 or k == TK_HEX or k == TK_BINARY or k == TK_OCTAL:
+    if k == TK_INT or k == TK_INT64:
         v: str = cur_val()
         advance()
         return mk_int_lit(str_to_i64(v))
+
+    if k == TK_HEX:
+        v: str = cur_val()
+        advance()
+        return mk_int_lit(hex_to_i64(v))
+
+    if k == TK_BINARY:
+        v: str = cur_val()
+        advance()
+        return mk_int_lit(bin_to_i64(v))
+
+    if k == TK_OCTAL:
+        v: str = cur_val()
+        advance()
+        return mk_int_lit(oct_to_i64(v))
 
     # Float literal
     if k == TK_FLOAT:
@@ -495,28 +510,51 @@ fun parse_type_name() -> str:
     if str_eq(ts, "") == 0:
         advance()
         # Handle parametric types: ptr[T], list[T], map[K,V], array[T]
-        if cur_kind() == TK_LBRACKET:
+        # Support both [] and <> syntax
+        if cur_kind() == TK_LBRACKET or cur_kind() == TK_LESS:
+            close_kind: i32 = TK_RBRACKET
+            if cur_kind() == TK_LESS:
+                close_kind = TK_GREATER
             advance()
             inner: str = parse_type_name()
-            # Handle map[K,V]
+            # Handle map[K,V] or map<K,V>
             if cur_kind() == TK_COMMA:
                 advance()
                 inner2: str = parse_type_name()
                 inner = Str.concat(Str.concat(inner, ","), inner2)
-            eat(TK_RBRACKET)
+            eat(close_kind)
             return Str.concat(Str.concat(Str.concat(ts, "["), inner), "]")
         return ts
     # Custom type (struct name, etc.)
     if k == TK_IDENT:
         tn: str = cur_val()
         advance()
-        # Handle generic types: TypeName[T]
-        if cur_kind() == TK_LBRACKET:
+        # Handle generic types: TypeName[T] or TypeName<T>
+        if cur_kind() == TK_LBRACKET or cur_kind() == TK_LESS:
+            close_kind2: i32 = TK_RBRACKET
+            if cur_kind() == TK_LESS:
+                close_kind2 = TK_GREATER
             advance()
             inner3: str = parse_type_name()
-            eat(TK_RBRACKET)
+            eat(close_kind2)
             return Str.concat(Str.concat(Str.concat(tn, "["), inner3), "]")
         return tn
+    # Function pointer type: fun(i32, i32) -> i32
+    if k == TK_FUN:
+        advance()
+        eat(TK_LPAREN)
+        fpt_str: str = "fun("
+        if cur_kind() != TK_RPAREN:
+            fpt_str = Str.concat(fpt_str, parse_type_name())
+            while cur_kind() == TK_COMMA:
+                advance()
+                fpt_str = Str.concat(fpt_str, Str.concat(",", parse_type_name()))
+        eat(TK_RPAREN)
+        fpt_str = Str.concat(fpt_str, ")")
+        if cur_kind() == TK_ARROW:
+            advance()
+            fpt_str = Str.concat(fpt_str, Str.concat("->", parse_type_name()))
+        return fpt_str
     panic(@"Expected type name, got kind={k}")
     return ""
 

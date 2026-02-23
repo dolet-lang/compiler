@@ -113,3 +113,4 @@ if "%KEEP_LLVM%"=="0" (
 )
 
 echo [SUCCESS] %OUT%
+exit /b 0

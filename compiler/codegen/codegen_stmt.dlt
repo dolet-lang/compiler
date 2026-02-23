@@ -609,9 +609,18 @@ fun gen_var_decl(node: i64):
     name: str = Memory.read_i64(node + 16) as str
     val_node: i64 = Memory.read_i64(node + 24)
 
-    # Skip global vars (already declared in module header)
-    # But only skip if we're not inside a function — local vars should shadow globals
+    # Global vars: init value is stored to the global address (inline, preserving order)
     if is_global_var(name) == 1 and g_in_function == 0:
+        if val_node != 0:
+            mn: str = get_mlir_name(name)
+            vt: str = get_var_type(name)
+            mt2: str = mlir_type(vt)
+            actual_t: str = infer_expr_type(val_node)
+            gval: str = gen_expr(val_node, vt)
+            if str_eq(actual_t, vt) == 0 and str_eq(actual_t, "unknown") == 0:
+                gval = implicit_cast(gval, actual_t, vt)
+            ga: str = emit_addr_of(mn)
+            emit_store(gval, ga, mt2)
         return
 
     # Fix: parser stores "type" for bool/int/float/string keywords — use inferred type

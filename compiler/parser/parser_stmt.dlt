@@ -112,21 +112,50 @@ fun parse_for_stmt() -> i64:
         end_expr: i64 = parse_expression()
 
         step_expr: i64 = mk_int_lit(1)
+        has_explicit_step: i32 = 0
         if cur_kind() == TK_STEP:
             advance()
             step_expr = parse_expression()
+            has_explicit_step = 1
 
         if cur_kind() == TK_COLON:
             advance()
         skip_newlines()
         body: i64 = parse_indented_block(fi)
 
-        # Desugar: for i in start to end step s =>
-        #   init = var_decl("int", var_name, start)
-        #   cond = comparison("<=", var_ref(var_name), end)
-        #   update = assign(var_name, binary_op("+", var_ref(var_name), step))
+        # Determine comparison operator based on step direction
+        # If explicit negative step => use >=
+        # If no explicit step, check if start > end for auto-reverse
+        comp_op: str = "<="
+        step_val: i64 = 0
+        is_neg_step: i32 = 0
+
+        # Check if step is a negative literal (NODE_UNARY_OP with "-")
+        if has_explicit_step == 1:
+            st: i32 = nd_type(step_expr)
+            if st == 23:
+                is_neg_step = 1
+            elif st == 1:
+                sv: i64 = Memory.read_i64(step_expr + 8)
+                if sv < 0:
+                    is_neg_step = 1
+
+        if is_neg_step == 1:
+            comp_op = ">="
+        else:
+            # Auto-reverse: check if start > end (both int literals)
+            s_type: i32 = nd_type(start_expr)
+            e_type: i32 = nd_type(end_expr)
+            if s_type == 1 and e_type == 1:
+                s_val: i64 = Memory.read_i64(start_expr + 8)
+                e_val: i64 = Memory.read_i64(end_expr + 8)
+                if s_val > e_val:
+                    comp_op = ">="
+                    if has_explicit_step == 0:
+                        step_expr = mk_int_lit(0 - 1)
+
         f_init: i64 = mk_var_decl("int", var_name, start_expr, 0, 0, 1)
-        f_cond: i64 = mk_comparison("<=", mk_var_ref(var_name), end_expr)
+        f_cond: i64 = mk_comparison(comp_op, mk_var_ref(var_name), end_expr)
         f_update: i64 = mk_assign(var_name, mk_binary_op("+", mk_var_ref(var_name), step_expr))
         return mk_for(f_init, f_cond, f_update, body, 1)
 
@@ -299,8 +328,27 @@ fun parse_var_decl_typed(type_str: str) -> i64:
 
 fun parse_var_decl_ident() -> i64:
     # IDENT : type = expr  OR  IDENT = expr  OR  IDENT(...) call
+    # IDENT ?: type = expr  (nullable)
     name: str = cur_val()
     eat(TK_IDENT)
+
+    # Nullable: name?: type = expr
+    if cur_kind() == TK_QUESTION:
+        advance()
+        if cur_kind() == TK_COLON:
+            advance()
+            ntype: str = parse_type_name()
+            nval: i64 = 0
+            if cur_kind() == TK_ASSIGN:
+                advance()
+                nval = parse_expression()
+            return mk_var_decl(ntype, name, nval, 1, 0, 0)
+        # name? without type — infer as ptr
+        nval2: i64 = 0
+        if cur_kind() == TK_ASSIGN:
+            advance()
+            nval2 = parse_expression()
+        return mk_var_decl("ptr", name, nval2, 1, 0, 0)
 
     # name : type = expr
     if cur_kind() == TK_COLON:

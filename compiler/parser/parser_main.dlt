@@ -202,6 +202,13 @@ fun parse_statement() -> i64:
             return mk_self_field(sfname)
         return mk_self()
 
+    # Annotation: @stack, @inline, etc. — skip and parse next statement
+    if k == TK_AT:
+        advance()
+        if cur_kind() == TK_IDENT or cur_kind() == TK_STACK:
+            advance()
+        return parse_statement()
+
     # Identifier: var decl, assignment, function call, method call
     if k == TK_IDENT:
         # Check if it's a variable declaration: Name : type

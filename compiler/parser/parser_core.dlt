@@ -161,6 +161,44 @@ fun str_to_i64(s: str) -> i64:
         return 0 - result
     return result
 
+fun hex_to_i64(s: str) -> i64:
+    result: i64 = 0
+    idx: i64 = 0
+    slen: i64 = Memory.strlen(s)
+    while idx < slen:
+        c: i8 = Memory.read_i8((s as i64) + idx)
+        result = result * 16
+        if c >= 48 and c <= 57:
+            result = result + ((c as i64) - 48)
+        elif c >= 65 and c <= 70:
+            result = result + ((c as i64) - 55)
+        elif c >= 97 and c <= 102:
+            result = result + ((c as i64) - 87)
+        idx = idx + 1
+    return result
+
+fun bin_to_i64(s: str) -> i64:
+    result: i64 = 0
+    idx: i64 = 0
+    slen: i64 = Memory.strlen(s)
+    while idx < slen:
+        c: i8 = Memory.read_i8((s as i64) + idx)
+        result = result * 2
+        if c == 49:
+            result = result + 1
+        idx = idx + 1
+    return result
+
+fun oct_to_i64(s: str) -> i64:
+    result: i64 = 0
+    idx: i64 = 0
+    slen: i64 = Memory.strlen(s)
+    while idx < slen:
+        c: i8 = Memory.read_i8((s as i64) + idx)
+        result = result * 8 + ((c as i64) - 48)
+        idx = idx + 1
+    return result
+
 fun str_eq(a: str, b: str) -> i32:
     la: i64 = Memory.strlen(a)
     lb: i64 = Memory.strlen(b)

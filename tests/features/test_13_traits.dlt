@@ -17,3 +17,5 @@ impl Animal:
 
 a: Animal = Animal(name="Cat", sound="Meow")
 print(a.to_str())
+
+
