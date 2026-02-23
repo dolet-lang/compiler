@@ -42,3 +42,5 @@ EXPORTS
     GetWindowLongPtrA
     MsgWaitForMultipleObjects
     WaitMessage
+    MessageBoxA
+    MessageBoxW

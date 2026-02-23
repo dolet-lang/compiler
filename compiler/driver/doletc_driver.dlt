@@ -236,6 +236,61 @@ fun delete_file(path: str):
     Process.run(cmd)
 
 # ==========================================
+# Extract extern lib names from source code
+# Scans for 'extern lib "<name>"' patterns
+# Returns linker flags string like "-defaultlib:user32 -defaultlib:gdi32"
+# ==========================================
+fun extract_extern_libs(src: str) -> str:
+    slen: i64 = Memory.strlen(src)
+    result: str = ""
+    i: i64 = 0
+    # Scan for pattern: extern lib " (ASCII: 101,120,116,101,114,110,32,108,105,98,32,34)
+    while i < slen - 14:
+        c0: i8 = Memory.read_i8((src as i64) + i)
+        if c0 == 101:
+            c1: i8 = Memory.read_i8((src as i64) + i + 1)
+            c2: i8 = Memory.read_i8((src as i64) + i + 2)
+            c3: i8 = Memory.read_i8((src as i64) + i + 3)
+            c4: i8 = Memory.read_i8((src as i64) + i + 4)
+            c5: i8 = Memory.read_i8((src as i64) + i + 5)
+            c6: i8 = Memory.read_i8((src as i64) + i + 6)
+            c7: i8 = Memory.read_i8((src as i64) + i + 7)
+            c8: i8 = Memory.read_i8((src as i64) + i + 8)
+            c9: i8 = Memory.read_i8((src as i64) + i + 9)
+            c10: i8 = Memory.read_i8((src as i64) + i + 10)
+            c11: i8 = Memory.read_i8((src as i64) + i + 11)
+            # 'e'=101 'x'=120 't'=116 'e'=101 'r'=114 'n'=110 ' '=32 'l'=108 'i'=105 'b'=98 ' '=32 '"'=34
+            if c1 == 120 and c2 == 116 and c3 == 101 and c4 == 114 and c5 == 110 and c6 == 32 and c7 == 108 and c8 == 105 and c9 == 98 and c10 == 32 and c11 == 34:
+                # Found "extern lib \"", extract lib name from position after the quote
+                name_start: i64 = i + 12
+                name_end: i64 = name_start
+                while name_end < slen:
+                    qc: i8 = Memory.read_i8((src as i64) + name_end)
+                    if qc == 34:
+                        break
+                    name_end = name_end + 1
+                if name_end > name_start:
+                    lib_name: str = Str.substring(src, name_start, name_end)
+                    # Strip .dll extension if present ('.'=46 'd'=100 'l'=108 'l'=108)
+                    ln_len: i64 = Memory.strlen(lib_name)
+                    if ln_len > 4:
+                        d1: i8 = Memory.read_i8((lib_name as i64) + ln_len - 4)
+                        d2: i8 = Memory.read_i8((lib_name as i64) + ln_len - 3)
+                        d3: i8 = Memory.read_i8((lib_name as i64) + ln_len - 2)
+                        d4: i8 = Memory.read_i8((lib_name as i64) + ln_len - 1)
+                        if d1 == 46 and d2 == 100 and d3 == 108 and d4 == 108:
+                            lib_name = Str.substring(lib_name, 0, ln_len - 4)
+                    # Skip kernel32 (already included)
+                    if str_eq(lib_name, "kernel32") == 0:
+                        result = Str.concat(result, Str.concat(" -defaultlib:", lib_name))
+                i = name_end + 1
+            else:
+                i = i + 1
+        else:
+            i = i + 1
+    return result
+
+# ==========================================
 # Main Compiler Driver
 # ==========================================
 fun main() -> i32:
@@ -370,7 +425,9 @@ fun main() -> i32:
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-out:\"", output_exe), "\" "))
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-libpath:\"", sys_libs), "\" "))
-    cmd3 = Str.concat(cmd3, "-defaultlib:kernel32 -subsystem:console -entry:main")
+    # Extract extern lib names from source for linking
+    extern_lib_flags: str = extract_extern_libs(source)
+    cmd3 = Str.concat(cmd3, Str.concat("-defaultlib:kernel32 -subsystem:console -entry:main", extern_lib_flags))
     rc3: i32 = Process.run(cmd3)
     if rc3 != 0:
         IOOps.io_println("Error: Linking failed")
