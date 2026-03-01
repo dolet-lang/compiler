@@ -1,0 +1,552 @@
+##############################
+# MLIR Codegen Main
+# generate(), statement dispatch, runtime, main function
+# Depends on: all other codegen files
+##############################
+
+# gen_statement and gen_var_decl moved to codegen_stmt.dlt (forward-ref fix)
+
+# ==========================================
+# Generate Pure Runtime Declarations
+# ==========================================
+fun gen_runtime_decls():
+    # String comparison (inline implementation — no libc needed)
+    emit_ind("// Inline strcmp implementation")
+    emit_ind("llvm.func @strcmp(%a: !llvm.ptr, %b: !llvm.ptr) -> i32 {")
+    emit_ind("  %zero = llvm.mlir.constant(0 : i32) : i32")
+    emit_ind("  %one = llvm.mlir.constant(1 : i64) : i64")
+    emit_ind("  %z8 = llvm.mlir.constant(0 : i8) : i8")
+    emit_ind("  llvm.br ^loop(%a, %b : !llvm.ptr, !llvm.ptr)")
+    emit_ind("^loop(%p1: !llvm.ptr, %p2: !llvm.ptr):")
+    emit_ind("  %c1 = llvm.load %p1 : !llvm.ptr -> i8")
+    emit_ind("  %c2 = llvm.load %p2 : !llvm.ptr -> i8")
+    emit_ind("  %ne = llvm.icmp \"ne\" %c1, %c2 : i8")
+    emit_ind("  llvm.cond_br %ne, ^diff(%c1, %c2 : i8, i8), ^same(%c1, %p1, %p2 : i8, !llvm.ptr, !llvm.ptr)")
+    emit_ind("^same(%sc: i8, %sp1: !llvm.ptr, %sp2: !llvm.ptr):")
+    emit_ind("  %isz = llvm.icmp \"eq\" %sc, %z8 : i8")
+    emit_ind("  llvm.cond_br %isz, ^ret(%zero : i32), ^next(%sp1, %sp2 : !llvm.ptr, !llvm.ptr)")
+    emit_ind("^next(%np1: !llvm.ptr, %np2: !llvm.ptr):")
+    emit_ind("  %np1n = llvm.getelementptr %np1[%one] : (!llvm.ptr, i64) -> !llvm.ptr, i8")
+    emit_ind("  %np2n = llvm.getelementptr %np2[%one] : (!llvm.ptr, i64) -> !llvm.ptr, i8")
+    emit_ind("  llvm.br ^loop(%np1n, %np2n : !llvm.ptr, !llvm.ptr)")
+    emit_ind("^diff(%d1: i8, %d2: i8):")
+    emit_ind("  %e1 = llvm.zext %d1 : i8 to i32")
+    emit_ind("  %e2 = llvm.zext %d2 : i8 to i32")
+    emit_ind("  %res = llvm.sub %e1, %e2 : i32")
+    emit_ind("  llvm.br ^ret(%res : i32)")
+    emit_ind("^ret(%rv: i32):")
+    emit_ind("  llvm.return %rv : i32")
+    emit_ind("}")
+    emit_blank()
+
+    # Hash functions
+    emit_ind("// Pure Dolet Runtime")
+
+    # dsl_hash_i32
+    emit_ind("llvm.func @dsl_hash_i32(%arg0: i32) -> i64 {")
+    emit_ind("  %0 = llvm.sext %arg0 : i32 to i64")
+    emit_ind("  %c = llvm.mlir.constant(2654435761 : i64) : i64")
+    emit_ind("  %1 = llvm.mul %0, %c : i64")
+    emit_ind("  llvm.return %1 : i64")
+    emit_ind("}")
+    emit_blank()
+
+    # dsl_hash_i64
+    emit_ind("llvm.func @dsl_hash_i64(%arg0: i64) -> i64 {")
+    emit_ind("  %c = llvm.mlir.constant(11400714819323198485 : i64) : i64")
+    emit_ind("  %1 = llvm.mul %arg0, %c : i64")
+    emit_ind("  llvm.return %1 : i64")
+    emit_ind("}")
+    emit_blank()
+
+    # dsl_hash_string (FNV-1a)
+    emit_ind("llvm.func @dsl_hash_string(%arg0: !llvm.ptr) -> i64 {")
+    emit_ind("  %offset_basis = llvm.mlir.constant(14695981039346656037 : i64) : i64")
+    emit_ind("  %prime = llvm.mlir.constant(1099511628211 : i64) : i64")
+    emit_ind("  %null = llvm.mlir.zero : !llvm.ptr")
+    emit_ind("  %is_null = llvm.icmp \"eq\" %arg0, %null : !llvm.ptr")
+    emit_ind("  llvm.cond_br %is_null, ^null, ^body(%offset_basis, %arg0 : i64, !llvm.ptr)")
+    emit_ind("^null:")
+    emit_ind("  %z = llvm.mlir.constant(0 : i64) : i64")
+    emit_ind("  llvm.return %z : i64")
+    emit_ind("^body(%hash: i64, %ptr: !llvm.ptr):")
+    emit_ind("  %char = llvm.load %ptr : !llvm.ptr -> i8")
+    emit_ind("  %end = llvm.mlir.constant(0 : i8) : i8")
+    emit_ind("  %is_end = llvm.icmp \"eq\" %char, %end : i8")
+    emit_ind("  llvm.cond_br %is_end, ^return(%hash : i64), ^process(%hash, %ptr, %char : i64, !llvm.ptr, i8)")
+    emit_ind("^process(%h: i64, %p: !llvm.ptr, %c: i8):")
+    emit_ind("  %c_i64 = llvm.sext %c : i8 to i64")
+    emit_ind("  %h_xor = llvm.xor %h, %c_i64 : i64")
+    emit_ind("  %h_new = llvm.mul %h_xor, %prime : i64")
+    emit_ind("  %one = llvm.mlir.constant(1 : i64) : i64")
+    emit_ind("  %next = llvm.getelementptr %p[%one] : (!llvm.ptr, i64) -> !llvm.ptr, i8")
+    emit_ind("  llvm.br ^body(%h_new, %next : i64, !llvm.ptr)")
+    emit_ind("^return(%final: i64):")
+    emit_ind("  llvm.return %final : i64")
+    emit_ind("}")
+    emit_blank()
+
+# ==========================================
+# Generate String Constants
+# ==========================================
+fun gen_string_constants():
+    i: i32 = 0
+    while i < g_str_count:
+        off8: i64 = (i as i64) * 8
+        off4: i64 = (i as i64) * 4
+        label: str = Memory.read_i64(g_str_labels + off8) as str
+        text: str = Memory.read_i64(g_str_texts + off8) as str
+        slen: i32 = Memory.read_i32(g_str_lens + off4)
+
+        escaped: str = escape_mlir_string(text)
+        # llvm.mlir.global internal constant @strN("text\00") {addr_space = 0 : i32} : !llvm.array<N x i8>
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal constant ", label), "(\""), escaped), Str.concat(Str.concat("\\00\") {addr_space = 0 : i32} : !llvm.array<", Convert.i64_to_str(slen as i64)), " x i8>")))
+        i = i + 1
+    emit_blank()
+
+# ==========================================
+# Collect Phase: scan AST and register types
+# ==========================================
+fun collect_declarations(ast: i64):
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+
+        # Enum declarations
+        if nt == NODE_ENUM_DECL:
+            ename: str = Memory.read_i64(node + 8) as str
+            variants: i64 = Memory.read_i64(node + 16)
+            # Build value list as node_list of str_lit nodes for value names
+            vlist: i64 = mk_node_list(32)
+            if variants != 0:
+                vc: i32 = nl_count(variants)
+                j: i32 = 0
+                while j < vc:
+                    vnode: i64 = nl_get(variants, j)
+                    # Variant node has name at offset 8
+                    nl_add(vlist, vnode)
+                    j = j + 1
+            register_enum(ename, vlist)
+
+        # Struct declarations
+        if nt == NODE_STRUCT_DECL:
+            sname: str = Memory.read_i64(node + 8) as str
+            fields: i64 = Memory.read_i64(node + 16)
+            base_class: str = Memory.read_i64(node + 32) as str
+            # Merge parent fields if struct extends another
+            if str_eq(base_class, "") == 0:
+                parent_fields: i64 = get_struct_fields(base_class)
+                if parent_fields != 0:
+                    pfc: i32 = nl_count(parent_fields)
+                    # Create merged field list: parent fields first, then child fields
+                    merged: i64 = mk_node_list(64)
+                    pi: i32 = 0
+                    while pi < pfc:
+                        nl_add(merged, nl_get(parent_fields, pi))
+                        pi = pi + 1
+                    # Add child-specific fields
+                    if fields != 0:
+                        cfc: i32 = nl_count(fields)
+                        ci: i32 = 0
+                        while ci < cfc:
+                            nl_add(merged, nl_get(fields, ci))
+                            ci = ci + 1
+                    fields = merged
+            if fields != 0:
+                register_struct(sname, fields)
+            # Register inline method signatures with param types (methods at +40)
+            smethods: i64 = Memory.read_i64(node + 40)
+            if smethods != 0:
+                smc: i32 = nl_count(smethods)
+                sj: i32 = 0
+                while sj < smc:
+                    smnode: i64 = nl_get(smethods, sj)
+                    smname: str = Memory.read_i64(smnode + 8) as str
+                    smret: str = Memory.read_i64(smnode + 24) as str
+                    smangled: str = Str.concat(Str.concat(sname, "_"), smname)
+                    register_fun_sig(smangled, smret)
+                    register_impl_method(sname, smname, smnode)
+                    sj = sj + 1
+
+        # Function definitions — register signatures (with overload support)
+        if nt == NODE_FUN_DEF:
+            fname: str = Memory.read_i64(node + 8) as str
+            ret_type: str = Memory.read_i64(node + 24) as str
+            fparams: i64 = Memory.read_i64(node + 16)
+            fpt_str: str = build_param_types_str(fparams)
+            mangled_fn: str = register_overload(fname, fpt_str)
+            register_fun_sig(mangled_fn, ret_type)
+
+        # Impl blocks — register method signatures
+        if nt == NODE_IMPL_BLOCK:
+            isname: str = Memory.read_i64(node + 8) as str
+            methods: i64 = Memory.read_i64(node + 16)
+            if methods != 0:
+                mc: i32 = nl_count(methods)
+                j2: i32 = 0
+                while j2 < mc:
+                    mnode: i64 = nl_get(methods, j2)
+                    mname: str = Memory.read_i64(mnode + 8) as str
+                    mret: str = Memory.read_i64(mnode + 24) as str
+                    mangled: str = Str.concat(Str.concat(isname, "_"), mname)
+                    register_fun_sig(mangled, mret)
+                    register_impl_method(isname, mname, mnode)
+                    j2 = j2 + 1
+
+        # Extend blocks
+        if nt == NODE_EXTEND_BLOCK:
+            etname: str = Memory.read_i64(node + 8) as str
+            emethods: i64 = Memory.read_i64(node + 16)
+            if emethods != 0:
+                mc2: i32 = nl_count(emethods)
+                j3: i32 = 0
+                while j3 < mc2:
+                    enode: i64 = nl_get(emethods, j3)
+                    emname: str = Memory.read_i64(enode + 8) as str
+                    emret: str = Memory.read_i64(enode + 24) as str
+                    emangled: str = Str.concat(Str.concat(etname, "_"), emname)
+                    register_fun_sig(emangled, emret)
+                    j3 = j3 + 1
+
+        # Extern blocks — only register signatures here, emit declarations later
+        if nt == NODE_EXTERN_BLOCK:
+            register_extern_sigs(node)
+
+        # Variable declarations (check if used from functions -> global)
+        if nt == NODE_VAR_DECL:
+            vname2: str = Memory.read_i64(node + 16) as str
+            register_global_var(vname2, node)
+
+        i = i + 1
+
+# ==========================================
+# Collect String Literals from AST
+# ==========================================
+fun collect_strings_list(nlist: i64):
+    if nlist == 0:
+        return
+    lc: i32 = nl_count(nlist)
+    li: i32 = 0
+    while li < lc:
+        collect_strings(nl_get(nlist, li))
+        li = li + 1
+
+fun collect_strings(node: i64):
+    if node == 0:
+        return
+    nt: i32 = nd_type(node)
+
+    if nt == NODE_STR_LIT:
+        text: str = Memory.read_i64(node + 8) as str
+        gen_string_const(text)
+        return
+
+    if nt == NODE_FSTRING:
+        collect_strings_list(Memory.read_i64(node + 8))
+        return
+
+    # Recurse into all known node structures
+    if nt == NODE_VAR_DECL:
+        collect_strings(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_ASSIGN or nt == NODE_FIELD_ASSIGN:
+        collect_strings(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
+        collect_strings(Memory.read_i64(node + 16))
+        collect_strings(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_UNARY_OP:
+        collect_strings(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_CAST:
+        collect_strings(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_PAREN:
+        collect_strings(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_RETURN:
+        collect_strings(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_FUN_CALL or nt == NODE_BUILTIN_CALL:
+        collect_strings_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_STATIC_METHOD or nt == NODE_NS_STATIC_METHOD or nt == NODE_NS_FUN_CALL:
+        collect_strings_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_INST_METHOD:
+        collect_strings_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_FUN_DEF:
+        collect_strings_list(Memory.read_i64(node + 32))
+        return
+    if nt == NODE_IF:
+        collect_strings(Memory.read_i64(node + 8))
+        collect_strings_list(Memory.read_i64(node + 16))
+        collect_strings_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_WHILE:
+        collect_strings(Memory.read_i64(node + 8))
+        collect_strings_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_FOR:
+        collect_strings(Memory.read_i64(node + 16))
+        collect_strings(Memory.read_i64(node + 24))
+        collect_strings_list(Memory.read_i64(node + 32))
+        return
+    if nt == NODE_BLOCK:
+        collect_strings_list(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_ARRAY_LIT or nt == NODE_LIST_LIT:
+        collect_strings_list(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_TERNARY:
+        collect_strings(Memory.read_i64(node + 8))
+        collect_strings(Memory.read_i64(node + 16))
+        collect_strings(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_IMPL_BLOCK or nt == NODE_EXTEND_BLOCK:
+        collect_strings_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_STRUCT_DECL:
+        collect_strings_list(Memory.read_i64(node + 40))
+        return
+    if nt == NODE_METHOD_DEF:
+        collect_strings_list(Memory.read_i64(node + 32))
+        return
+    if nt == NODE_MATCH:
+        collect_strings(Memory.read_i64(node + 8))
+        collect_strings_list(Memory.read_i64(node + 16))
+        collect_strings_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_CASE:
+        collect_strings_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_STRUCT_INST:
+        # field_vals node_list at +16, each field_val has value expr at +16
+        fvl: i64 = Memory.read_i64(node + 16)
+        if fvl != 0:
+            fvc: i32 = nl_count(fvl)
+            fi: i32 = 0
+            while fi < fvc:
+                fv: i64 = nl_get(fvl, fi)
+                collect_strings(Memory.read_i64(fv + 16))
+                fi = fi + 1
+        return
+    if nt == NODE_STRUCT_FIELD:
+        # default value at +24
+        collect_strings(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_FIELD_VAL:
+        # Keyword arg in struct construction: name at +8, value at +16
+        collect_strings(Memory.read_i64(node + 16))
+        return
+
+fun collect_all_strings(ast: i64):
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        collect_strings(nl_get(ast, i))
+        i = i + 1
+
+# ==========================================
+# Generate Global Variable Declarations
+# ==========================================
+fun gen_global_var_decls():
+    if g_global_var_count == 0:
+        return
+    emit_ind("// Global variable declarations")
+    i: i32 = 0
+    while i < g_global_var_count:
+        off: i64 = (i as i64) * 8
+        gname: str = Memory.read_i64(g_global_var_names + off) as str
+        gnode: i64 = Memory.read_i64(g_global_var_nodes + off)
+
+        vtype: str = Memory.read_i64(gnode + 8) as str
+
+        # If type is empty (const without annotation), infer from value expression
+        if str_eq(vtype, "") == 1:
+            val_node_infer: i64 = Memory.read_i64(gnode + 24)
+            if val_node_infer != 0:
+                vtype = infer_expr_type(val_node_infer)
+            if str_eq(vtype, "") == 1 or str_eq(vtype, "unknown") == 1:
+                vtype = "i64"
+
+        mt: str = mlir_type(vtype)
+
+        # Create unique mlir name
+        mname: str = gname
+        add_variable(gname, mname, vtype, 0)
+
+        # Emit global declaration
+        emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", mname), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
+        if is_string_type(vtype) == 1:
+            emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
+            emit_ind("  llvm.return %0 : !llvm.ptr")
+        elif is_int_type(vtype) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(0 : ", mt), Str.concat(") : ", mt)))
+            emit_ind(Str.concat(Str.concat("  llvm.return %0 : ", mt), ""))
+        elif is_float_type(vtype) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(0.0 : ", mt), Str.concat(") : ", mt)))
+            emit_ind(Str.concat(Str.concat("  llvm.return %0 : ", mt), ""))
+        else:
+            emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        emit_ind("}")
+        i = i + 1
+    emit_blank()
+
+# ==========================================
+# Generate Functions
+# ==========================================
+fun gen_functions(ast: i64):
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+
+        IOOps.io_println(Str.concat(Str.concat("[gen_fn] node ", Convert.i64_to_str(i as i64)), Str.concat(" type=", Convert.i64_to_str(nt as i64))))
+        if nt == NODE_EXTERN_BLOCK:
+            gen_extern_block(node)
+            IOOps.io_println("[gen_fn] extern done")
+        elif nt == NODE_STRUCT_DECL:
+            sdbg: str = Memory.read_i64(node + 8) as str
+            IOOps.io_println(Str.concat("[gen_fn] struct: ", sdbg))
+            gen_struct_inline_methods(node)
+            IOOps.io_println("[gen_fn] struct methods done")
+        elif nt == NODE_FUN_DEF:
+            gen_fun_def(node)
+        elif nt == NODE_IMPL_BLOCK:
+            gen_impl_block(node)
+        elif nt == NODE_EXTEND_BLOCK:
+            gen_extend_block(node)
+        i = i + 1
+
+# ==========================================
+# Generate Main Body (top-level statements)
+# ==========================================
+fun gen_main_body(ast: i64):
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+
+        # Skip declarations (already generated)
+        if nt == NODE_FUN_DEF:
+            i = i + 1
+        elif nt == NODE_STRUCT_DECL:
+            i = i + 1
+        elif nt == NODE_ENUM_DECL:
+            i = i + 1
+        elif nt == NODE_IMPL_BLOCK:
+            i = i + 1
+        elif nt == NODE_EXTEND_BLOCK:
+            i = i + 1
+        elif nt == NODE_EXTERN_BLOCK:
+            i = i + 1
+        elif nt == NODE_TRAIT_DECL:
+            i = i + 1
+        elif nt == NODE_TYPE_ALIAS:
+            i = i + 1
+        elif nt == NODE_IMPORT:
+            i = i + 1
+        else:
+            # Top-level statement — generate in main
+            gen_statement(node)
+            i = i + 1
+
+# ==========================================
+# Check if AST has user-defined main
+# ==========================================
+fun has_user_main(ast: i64) -> i32:
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+        if nt == NODE_FUN_DEF:
+            fname: str = Memory.read_i64(node + 8) as str
+            if str_eq(fname, "main") == 1:
+                return 1
+        i = i + 1
+    return 0
+
+# ==========================================
+# Main Generate Function
+# ==========================================
+fun generate(ast: i64) -> str:
+    init_all_registries()
+    IOOps.io_println("[gen] init done")
+
+    # Phase 1: Collect declarations
+    collect_declarations(ast)
+    IOOps.io_println("[gen] collect_declarations done")
+
+    # Phase 2: Collect string literals
+    collect_all_strings(ast)
+    IOOps.io_println("[gen] collect_strings done")
+
+    # Phase 3: Emit module
+    emit("// MLIR generated by Dolet Self-Hosting Compiler")
+    emit("// Target: MLIR -> LLVM IR -> Machine Code")
+    emit("")
+    emit("module {")
+    indent_inc()
+
+    # String constants
+    IOOps.io_println("[gen] emitting string constants")
+    gen_string_constants()
+
+    # Windows helpers
+    emit_ind("// Microsoft linker requires _fltused for floating-point code")
+    emit_ind("llvm.mlir.global external @_fltused(1 : i32) {addr_space = 0 : i32} : i32")
+    emit_blank()
+    emit_ind("// Stack probe function for Windows")
+    emit_ind("llvm.func @__chkstk() {")
+    emit_ind("  llvm.return")
+    emit_ind("}")
+    emit_blank()
+
+    # Runtime declarations
+    gen_runtime_decls()
+
+    # Global variable declarations
+    gen_global_var_decls()
+
+    # User-defined functions
+    IOOps.io_println("[gen] emitting functions")
+    gen_functions(ast)
+
+    # Main function (if user didn't define one)
+    if has_user_main(ast) == 0:
+        g_tmp_counter = 0
+        emit_ind("llvm.func @main() -> i32 {")
+        indent_inc()
+
+        # Generate all top-level statements in source order
+        # (var decls with init values are generated inline, preserving execution order)
+        gen_main_body(ast)
+
+        # Return 0
+        c0: str = emit_const_i32(0)
+        emit_ind(Str.concat(Str.concat("llvm.return ", c0), " : i32"))
+
+        indent_dec()
+        emit_ind("}")
+
+    indent_dec()
+    emit("}")
+
+    # Join all output lines
+    result: str = ""
+    i: i32 = 0
+    while i < g_out_count:
+        if i > 0:
+            result = Str.concat(result, "\n")
+        result = Str.concat(result, get_output_line(i))
+        i = i + 1
+    return result

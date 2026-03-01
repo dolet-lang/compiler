@@ -1,0 +1,577 @@
+##############################
+# Dolet Compiler CLI Driver
+# Reads .dlt file, tokenizes, parses, generates MLIR, writes .mlir file
+# Uses Windows API directly (kernel32 auto-included)
+##############################
+"""
+   ██████╗  ██████╗ ██╗     ███████╗████████╗
+   ██╔══██╗██╔═══██╗██║     ██╔════╝╚══██╔══╝
+   ██║  ██║██║   ██║██║     █████╗     ██║   
+   ██║  ██║██║   ██║██║     ██╔══╝     ██║   
+   ██████╔╝╚██████╔╝███████╗███████╗   ██║   
+   ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝  
+"""
+# ==========================================
+# Command Line Parsing (manual, using GetCommandLineA)
+# ==========================================
+fun cli_get_arg(index: i32) -> str:
+    line: str = GetCommandLineA()
+    slen: i64 = Memory.strlen(line)
+    if slen == 0:
+        return ""
+
+    cur_arg: i32 = 0
+    i: i64 = 0
+    in_quotes: i32 = 0
+    arg_start: i64 = 0
+
+    # Skip leading whitespace
+    while i < slen:
+        c: i8 = Memory.read_i8((line as i64) + i)
+        if c != 32:
+            break
+        i = i + 1
+
+    arg_start = i
+    while i <= slen:
+        c2: i8 = 0
+        if i < slen:
+            c2 = Memory.read_i8((line as i64) + i)
+
+        if c2 == 34:
+            in_quotes = 1 - in_quotes
+            i = i + 1
+            continue
+
+        if (c2 == 32 and in_quotes == 0) or i == slen:
+            if cur_arg == index:
+                # Extract this argument
+                result: str = str_from_range(line, arg_start, i)
+                # Strip quotes if present
+                rlen: i64 = Memory.strlen(result)
+                if rlen >= 2:
+                    fc: i8 = Memory.read_i8(result as i64)
+                    lc: i8 = Memory.read_i8((result as i64) + rlen - 1)
+                    if fc == 34 and lc == 34:
+                        return str_from_range(result, 1, rlen - 1)
+                return result
+            cur_arg = cur_arg + 1
+            i = i + 1
+            # Skip whitespace between args
+            while i < slen:
+                c3: i8 = Memory.read_i8((line as i64) + i)
+                if c3 != 32:
+                    break
+                i = i + 1
+            arg_start = i
+            continue
+        i = i + 1
+    return ""
+
+fun cli_arg_count() -> i32:
+    line: str = GetCommandLineA()
+    slen: i64 = Memory.strlen(line)
+    if slen == 0:
+        return 0
+
+    count: i32 = 0
+    i: i64 = 0
+    in_quotes: i32 = 0
+    in_arg: i32 = 0
+
+    while i < slen:
+        c: i8 = Memory.read_i8((line as i64) + i)
+        if c == 34:
+            in_quotes = 1 - in_quotes
+            if in_arg == 0:
+                in_arg = 1
+                count = count + 1
+        elif c == 32 and in_quotes == 0:
+            in_arg = 0
+        else:
+            if in_arg == 0:
+                in_arg = 1
+                count = count + 1
+        i = i + 1
+    return count
+
+# ==========================================
+# File I/O (using kernel32 directly)
+# ==========================================
+fun read_file_to_string(path: str) -> str:
+    # GENERIC_READ = 0x80000000 (as signed i32 = -2147483648)
+    # FILE_SHARE_READ = 1, OPEN_EXISTING = 3, FILE_ATTRIBUTE_NORMAL = 128
+    access: i32 = 0 - 2147483648
+    handle: i64 = CreateFileA(path, access, 1, 0, 3, 128, 0)
+    if handle == -1:
+        return ""
+
+    # Get file size
+    fsize: i32 = GetFileSize(handle, 0)
+    if fsize <= 0:
+        CloseHandle(handle)
+        return ""
+
+    # Allocate buffer (+1 for null terminator)
+    buf: i64 = Memory.malloc_zeroed((fsize as i64) + 1)
+
+    # Read file
+    bytes_read_p: i64 = Memory.malloc_zeroed(4)
+    ReadFile(handle, buf, fsize, bytes_read_p, 0)
+    actual: i32 = Memory.read_i32(bytes_read_p)
+
+    # Null-terminate
+    Memory.write_i8(buf + (actual as i64), 0)
+
+    CloseHandle(handle)
+    return buf as str
+
+fun write_string_to_file(path: str, content: str) -> i32:
+    # GENERIC_WRITE = 0x40000000, CREATE_ALWAYS = 2
+    handle: i64 = CreateFileA(path, 1073741824, 0, 0, 2, 128, 0)
+    if handle == -1:
+        return 0
+
+    slen: i64 = Memory.strlen(content)
+    bytes_written_p: i64 = Memory.malloc_zeroed(4)
+    WriteFile(handle, content as i64, slen as i32, bytes_written_p, 0)
+
+    CloseHandle(handle)
+    return 1
+
+# ==========================================
+# Path Helpers
+# ==========================================
+fun replace_extension(path: str, new_ext: str) -> str:
+    slen: i64 = Memory.strlen(path)
+    # Find last '.'
+    dot_pos: i64 = -1
+    i: i64 = slen - 1
+    while i >= 0:
+        c: i8 = Memory.read_i8((path as i64) + i)
+        if c == 46:
+            dot_pos = i
+            break
+        if c == 92 or c == 47:
+            break
+        i = i - 1
+
+    base: str = path
+    if dot_pos >= 0:
+        base = str_from_range(path, 0, dot_pos)
+    return Str.concat(base, new_ext)
+
+# ==========================================
+# Runtime Auto-Import
+# ==========================================
+fun get_exe_dir() -> str:
+    buf: i64 = Memory.malloc_zeroed(512)
+    GetModuleFileNameA(0, buf, 512)
+    # Find last backslash
+    slen: i64 = Memory.strlen(buf as str)
+    pos: i64 = slen - 1
+    while pos >= 0:
+        c: i8 = Memory.read_i8(buf + pos)
+        if c == 92:
+            Memory.write_i8(buf + pos, 0)
+            return buf as str
+        pos = pos - 1
+    return buf as str
+
+fun load_runtime(exe_dir: str) -> str:
+    # Runtime is at: <exe_dir>/../stdlib/runtime/  (bin/doletc.exe → stdlib/runtime/)
+    rt_base: str = Str.concat(exe_dir, "\\..\\stdlib\\runtime\\")
+
+    runtime_src: str = ""
+    # Read runtime files in dependency order
+    r1: str = read_file_to_string(Str.concat(rt_base, "kernel32_bindings.dlt"))
+    if Memory.strlen(r1) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r1))
+
+    r2: str = read_file_to_string(Str.concat(rt_base, "memory.dlt"))
+    if Memory.strlen(r2) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r2))
+
+    # math.dlt skipped — complex standalone functions, not needed for basic runtime
+
+    r4: str = read_file_to_string(Str.concat(rt_base, "convert.dlt"))
+    if Memory.strlen(r4) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r4))
+
+    r5: str = read_file_to_string(Str.concat(rt_base, "strOps.dlt"))
+    if Memory.strlen(r5) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r5))
+
+    r6: str = read_file_to_string(Str.concat(rt_base, "ioOps.dlt"))
+    if Memory.strlen(r6) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r6))
+
+    # Auto-import std/io.dlt (print overloads) — overload support via name mangling
+    std_base: str = Str.concat(exe_dir, "\\..\\stdlib\\std\\")
+    r7: str = read_file_to_string(Str.concat(std_base, "io.dlt"))
+    if Memory.strlen(r7) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r7))
+
+    return runtime_src
+
+# ==========================================
+# Module Import Resolution
+# ==========================================
+fun get_file_dir(path: str) -> str:
+    slen: i64 = Memory.strlen(path)
+    pos: i64 = slen - 1
+    while pos >= 0:
+        c: i8 = Memory.read_i8((path as i64) + pos)
+        if c == 92 or c == 47:
+            return str_from_range(path, 0, pos)
+        pos = pos - 1
+    return "."
+
+fun file_exists(path: str) -> i32:
+    access: i32 = 0 - 2147483648
+    handle: i64 = CreateFileA(path, access, 1, 0, 3, 128, 0)
+    if handle == -1:
+        return 0
+    CloseHandle(handle)
+    return 1
+
+fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
+    # Replace dots with path separator for nested modules
+    # e.g. "std.collections.list" -> "std\collections\list"
+    mod_path: str = ""
+    mlen: i64 = Memory.strlen(mod_name)
+    mi: i64 = 0
+    while mi < mlen:
+        mc: i8 = Memory.read_i8((mod_name as i64) + mi)
+        if mc == 46:
+            mod_path = Str.concat(mod_path, "\\")
+        else:
+            # Append single char
+            cbuf: i64 = Memory.malloc_zeroed(2)
+            Memory.write_i8(cbuf, mc)
+            mod_path = Str.concat(mod_path, cbuf as str)
+        mi = mi + 1
+
+    # 1. Try stdlib/std/<mod_path>.dlt
+    p1: str = Str.concat(Str.concat(std_base, mod_path), ".dlt")
+    if file_exists(p1) == 1:
+        return p1
+
+    # 2. Try stdlib/std/<mod_path>/lib.dlt
+    p2: str = Str.concat(Str.concat(std_base, mod_path), "\\lib.dlt")
+    if file_exists(p2) == 1:
+        return p2
+
+    # 3. Try <src_dir>/<mod_path>.dlt
+    p3: str = Str.concat(Str.concat(Str.concat(src_dir, "\\"), mod_path), ".dlt")
+    if file_exists(p3) == 1:
+        return p3
+
+    # 4. Try <src_dir>/<mod_path>/lib.dlt
+    p4: str = Str.concat(Str.concat(Str.concat(src_dir, "\\"), mod_path), "\\lib.dlt")
+    if file_exists(p4) == 1:
+        return p4
+
+    return ""
+
+fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
+    # Scan user_src for lines starting with "import " (ASCII: 105,109,112,111,114,116,32)
+    # Extract module name, resolve, read file, accumulate
+    imported: str = ""
+    slen: i64 = Memory.strlen(user_src)
+    i: i64 = 0
+    line_start: i64 = 0
+
+    while i <= slen:
+        c: i8 = 0
+        if i < slen:
+            c = Memory.read_i8((user_src as i64) + i)
+        # End of line or end of string
+        if c == 10 or c == 13 or i == slen:
+            # Check if line starts with "import "
+            line_len: i64 = i - line_start
+            if line_len > 7:
+                i0: i8 = Memory.read_i8((user_src as i64) + line_start)
+                i1: i8 = Memory.read_i8((user_src as i64) + line_start + 1)
+                i2: i8 = Memory.read_i8((user_src as i64) + line_start + 2)
+                i3: i8 = Memory.read_i8((user_src as i64) + line_start + 3)
+                i4: i8 = Memory.read_i8((user_src as i64) + line_start + 4)
+                i5: i8 = Memory.read_i8((user_src as i64) + line_start + 5)
+                i6: i8 = Memory.read_i8((user_src as i64) + line_start + 6)
+                if i0 == 105 and i1 == 109 and i2 == 112 and i3 == 111 and i4 == 114 and i5 == 116 and i6 == 32:
+                    # Extract module name (after "import ", until space/newline/end)
+                    name_start: i64 = line_start + 7
+                    # Skip leading whitespace
+                    while name_start < i:
+                        wc: i8 = Memory.read_i8((user_src as i64) + name_start)
+                        if wc != 32:
+                            break
+                        name_start = name_start + 1
+                    # Find end of module name (stop at space, newline, or end)
+                    name_end: i64 = name_start
+                    while name_end < i:
+                        nc: i8 = Memory.read_i8((user_src as i64) + name_end)
+                        if nc == 32 or nc == 10 or nc == 13:
+                            break
+                        name_end = name_end + 1
+                    if name_end > name_start:
+                        mod_name: str = str_from_range(user_src, name_start, name_end)
+                        resolved: str = try_resolve_module(mod_name, std_base, src_dir)
+                        if Memory.strlen(resolved) > 0:
+                            mod_src: str = read_file_to_string(resolved)
+                            if Memory.strlen(mod_src) > 0:
+                                IOOps.io_println(Str.concat(Str.concat("[import] ", mod_name), Str.concat(" -> ", resolved)))
+                                imported = Str.concat(imported, Str.concat("\n", mod_src))
+            # Move past newline chars
+            if c == 13 and (i + 1) < slen:
+                nr: i8 = Memory.read_i8((user_src as i64) + i + 1)
+                if nr == 10:
+                    i = i + 1
+            line_start = i + 1
+        i = i + 1
+    return imported
+
+# ==========================================
+# Path Helper: extract base name (without extension)
+# ==========================================
+fun path_base_name(path: str) -> str:
+    slen: i64 = Memory.strlen(path)
+    dot_pos: i64 = -1
+    i: i64 = slen - 1
+    while i >= 0:
+        c: i8 = Memory.read_i8((path as i64) + i)
+        if c == 46:
+            dot_pos = i
+            break
+        if c == 92 or c == 47:
+            break
+        i = i - 1
+    if dot_pos >= 0:
+        return str_from_range(path, 0, dot_pos)
+    return path
+
+# ==========================================
+# File Delete Helper
+# ==========================================
+fun delete_file(path: str):
+    # Open for DELETE access and immediately close (DeleteFileA not in bindings)
+    # Use Process.run("cmd /c del ...") instead
+    cmd: str = Str.concat(Str.concat("cmd /c del \"", path), "\" >nul 2>nul")
+    Process.run(cmd)
+
+# ==========================================
+# Extract extern lib names from source code
+# Scans for 'extern lib "<name>"' patterns
+# Returns linker flags string like "-defaultlib:user32 -defaultlib:gdi32"
+# ==========================================
+fun extract_extern_libs(src: str) -> str:
+    slen: i64 = Memory.strlen(src)
+    result: str = ""
+    i: i64 = 0
+    # Scan for pattern: extern lib " (ASCII: 101,120,116,101,114,110,32,108,105,98,32,34)
+    while i < slen - 14:
+        c0: i8 = Memory.read_i8((src as i64) + i)
+        if c0 == 101:
+            c1: i8 = Memory.read_i8((src as i64) + i + 1)
+            c2: i8 = Memory.read_i8((src as i64) + i + 2)
+            c3: i8 = Memory.read_i8((src as i64) + i + 3)
+            c4: i8 = Memory.read_i8((src as i64) + i + 4)
+            c5: i8 = Memory.read_i8((src as i64) + i + 5)
+            c6: i8 = Memory.read_i8((src as i64) + i + 6)
+            c7: i8 = Memory.read_i8((src as i64) + i + 7)
+            c8: i8 = Memory.read_i8((src as i64) + i + 8)
+            c9: i8 = Memory.read_i8((src as i64) + i + 9)
+            c10: i8 = Memory.read_i8((src as i64) + i + 10)
+            c11: i8 = Memory.read_i8((src as i64) + i + 11)
+            # 'e'=101 'x'=120 't'=116 'e'=101 'r'=114 'n'=110 ' '=32 'l'=108 'i'=105 'b'=98 ' '=32 '"'=34
+            if c1 == 120 and c2 == 116 and c3 == 101 and c4 == 114 and c5 == 110 and c6 == 32 and c7 == 108 and c8 == 105 and c9 == 98 and c10 == 32 and c11 == 34:
+                # Found "extern lib \"", extract lib name from position after the quote
+                name_start: i64 = i + 12
+                name_end: i64 = name_start
+                while name_end < slen:
+                    qc: i8 = Memory.read_i8((src as i64) + name_end)
+                    if qc == 34:
+                        break
+                    name_end = name_end + 1
+                if name_end > name_start:
+                    lib_name: str = Str.substring(src, name_start, name_end)
+                    # Strip .dll extension if present ('.'=46 'd'=100 'l'=108 'l'=108)
+                    ln_len: i64 = Memory.strlen(lib_name)
+                    if ln_len > 4:
+                        d1: i8 = Memory.read_i8((lib_name as i64) + ln_len - 4)
+                        d2: i8 = Memory.read_i8((lib_name as i64) + ln_len - 3)
+                        d3: i8 = Memory.read_i8((lib_name as i64) + ln_len - 2)
+                        d4: i8 = Memory.read_i8((lib_name as i64) + ln_len - 1)
+                        if d1 == 46 and d2 == 100 and d3 == 108 and d4 == 108:
+                            lib_name = Str.substring(lib_name, 0, ln_len - 4)
+                    # Skip kernel32 (already included)
+                    if str_eq(lib_name, "kernel32") == 0:
+                        result = Str.concat(result, Str.concat(" -defaultlib:", lib_name))
+                i = name_end + 1
+            else:
+                i = i + 1
+        else:
+            i = i + 1
+    return result
+
+# ==========================================
+# Main Compiler Driver
+# ==========================================
+fun main() -> i32:
+    # Initialize all constants (workaround for global init bug)
+    init_pipeline()
+
+    argc: i32 = cli_arg_count()
+    if argc < 2:
+        IOOps.io_println("Dolet Compiler v0.3")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output.exe] [--keep-mlir] [--keep-llvm] [--no-runtime]")
+        IOOps.io_println("")
+        IOOps.io_println("Options:")
+        IOOps.io_println("  -o <path>       Output executable path")
+        IOOps.io_println("  --keep-mlir     Keep intermediate .mlir file")
+        IOOps.io_println("  --keep-llvm     Keep intermediate .ll file")
+        IOOps.io_println("  --no-runtime    Don't auto-import runtime libraries")
+        return 1
+
+    # Parse arguments
+    no_runtime: i32 = 0
+    keep_mlir: i32 = 0
+    keep_llvm: i32 = 0
+    input_path: str = ""
+    output_exe: str = ""
+
+    ai: i32 = 1
+    while ai < argc:
+        arg: str = cli_get_arg(ai)
+        if str_eq(arg, "--no-runtime") == 1:
+            no_runtime = 1
+        elif str_eq(arg, "--keep-mlir") == 1:
+            keep_mlir = 1
+        elif str_eq(arg, "--keep-llvm") == 1:
+            keep_llvm = 1
+        elif str_eq(arg, "-o") == 1:
+            ai = ai + 1
+            if ai < argc:
+                output_exe = cli_get_arg(ai)
+        else:
+            if Memory.strlen(input_path) == 0:
+                input_path = arg
+        ai = ai + 1
+
+    if Memory.strlen(input_path) == 0:
+        IOOps.io_println("Error: No input file specified")
+        return 1
+
+    # Derive paths
+    base_path: str = path_base_name(input_path)
+    mlir_path: str = Str.concat(base_path, ".mlir")
+    ll_path: str = Str.concat(base_path, ".ll")
+    obj_path: str = Str.concat(base_path, ".obj")
+    if Memory.strlen(output_exe) == 0:
+        output_exe = Str.concat(base_path, ".exe")
+
+    # Determine if we need full pipeline (-o given or output is .exe)
+    has_output: i32 = 0
+    # Check if output_exe was explicitly set or default .exe
+    oelen: i64 = Memory.strlen(output_exe)
+    if oelen > 4:
+        has_output = 1
+
+    IOOps.io_println(Str.concat("Compiling: ", input_path))
+
+    # Read source file
+    user_src: str = read_file_to_string(input_path)
+    user_len: i64 = Memory.strlen(user_src)
+    if user_len == 0:
+        IOOps.io_println("Error: Cannot read file or file is empty")
+        return 1
+
+    # Auto-import runtime (unless --no-runtime)
+    source: str = user_src
+    exe_dir: str = get_exe_dir()
+    if no_runtime == 0:
+        rt: str = load_runtime(exe_dir)
+        rt_len: i64 = Memory.strlen(rt)
+        if rt_len > 0:
+            source = Str.concat(rt, Str.concat("\n", user_src))
+            IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(rt_len), " chars")))
+
+    # Resolve and load user imports
+    std_base: str = Str.concat(exe_dir, "\\..\\stdlib\\std\\")
+    src_dir: str = get_file_dir(input_path)
+    imp_src: str = resolve_and_load_imports(user_src, std_base, src_dir)
+    imp_len: i64 = Memory.strlen(imp_src)
+    if imp_len > 0:
+        source = Str.concat(Str.concat(source, "\n"), imp_src)
+
+    src_len: i64 = Memory.strlen(source)
+    IOOps.io_println(Str.concat("Source: ", Str.concat(Convert.i64_to_str(src_len), " chars (total)")))
+
+    # Phase 1: Tokenize
+    IOOps.io_println("[1/4] Tokenizing...")
+    tokenize(source)
+    IOOps.io_println(Str.concat("  Tokens: ", Convert.i64_to_str(out_count as i64)))
+
+    # Phase 2: Parse
+    IOOps.io_println("[2/4] Parsing...")
+    init_parser(out_kinds, out_values, out_indents, out_count)
+    ast: i64 = parse()
+    stmt_count: i32 = nl_count(ast)
+    IOOps.io_println(Str.concat("  AST nodes: ", Convert.i64_to_str(stmt_count as i64)))
+
+    # Phase 3: Generate MLIR
+    IOOps.io_println("[3/4] Generating MLIR...")
+    mlir: str = generate(ast)
+    mlir_len: i64 = Memory.strlen(mlir)
+    IOOps.io_println(Str.concat("  MLIR: ", Str.concat(Convert.i64_to_str(mlir_len), " chars")))
+
+    # Write .mlir file
+    ok: i32 = write_string_to_file(mlir_path, mlir)
+    if ok != 1:
+        IOOps.io_println("Error: Failed to write .mlir file")
+        return 1
+
+    # Phase 4: Full pipeline (MLIR → LLVM IR → Object → Executable)
+    IOOps.io_println("[4/4] Building executable...")
+    tools_dir: str = Str.concat(exe_dir, "\\..\\tools\\")
+    sys_libs: str = Str.concat(exe_dir, "\\..\\stdlib\\sys\\windows")
+
+    # Step 1: mlir-translate (MLIR → LLVM IR)
+    cmd1: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), "mlir-translate.exe\" --mlir-to-llvmir \""), mlir_path), Str.concat("\" -o \"", Str.concat(ll_path, "\"")))
+    rc1: i32 = Process.run(cmd1)
+    if rc1 != 0:
+        IOOps.io_println("Error: MLIR translation failed")
+        return 1
+    IOOps.io_println("  MLIR -> LLVM IR OK")
+
+    # Step 2: clang (LLVM IR → Object)
+    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), "clang.exe\" -c \""), ll_path), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
+    rc2: i32 = Process.run(cmd2)
+    if rc2 != 0:
+        IOOps.io_println("Error: Compilation to object failed")
+        return 1
+    IOOps.io_println("  LLVM IR -> Object OK")
+
+    # Step 3: lld-link (Object → Executable)
+    cmd3: str = Str.concat(Str.concat("\"", tools_dir), "lld-link.exe\" ")
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-out:\"", output_exe), "\" "))
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-libpath:\"", sys_libs), "\" "))
+    # Extract extern lib names from source for linking
+    extern_lib_flags: str = extract_extern_libs(source)
+    cmd3 = Str.concat(cmd3, Str.concat("-defaultlib:kernel32 -subsystem:console -entry:main", extern_lib_flags))
+    rc3: i32 = Process.run(cmd3)
+    if rc3 != 0:
+        IOOps.io_println("Error: Linking failed")
+        return 1
+    IOOps.io_println("  Object -> Executable OK")
+
+    # Cleanup intermediate files
+    delete_file(obj_path)
+    if keep_mlir == 0:
+        delete_file(mlir_path)
+    if keep_llvm == 0:
+        delete_file(ll_path)
+
+    IOOps.io_println(Str.concat("[SUCCESS] ", output_exe))
+    return 0

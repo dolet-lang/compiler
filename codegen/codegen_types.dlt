@@ -1,0 +1,403 @@
+##############################
+# MLIR Codegen Types
+# Type inference, implicit casting, struct layout, field index
+# Depends on: codegen_core.dlt
+##############################
+
+# ==========================================
+# Type Classification Helpers
+# ==========================================
+fun is_int_type(t: str) -> i32:
+    if str_eq(t, "i8") == 1:
+        return 1
+    if str_eq(t, "i16") == 1:
+        return 1
+    if str_eq(t, "i32") == 1:
+        return 1
+    if str_eq(t, "i64") == 1:
+        return 1
+    if str_eq(t, "i128") == 1:
+        return 1
+    if str_eq(t, "int") == 1:
+        return 1
+    if str_eq(t, "u8") == 1:
+        return 1
+    if str_eq(t, "u16") == 1:
+        return 1
+    if str_eq(t, "u32") == 1:
+        return 1
+    if str_eq(t, "u64") == 1:
+        return 1
+    if str_eq(t, "u128") == 1:
+        return 1
+    return 0
+
+fun is_float_type(t: str) -> i32:
+    if str_eq(t, "f32") == 1:
+        return 1
+    if str_eq(t, "f64") == 1:
+        return 1
+    if str_eq(t, "float") == 1:
+        return 1
+    if str_eq(t, "double") == 1:
+        return 1
+    return 0
+
+fun is_string_type(t: str) -> i32:
+    if str_eq(t, "string") == 1:
+        return 1
+    if str_eq(t, "str") == 1:
+        return 1
+    return 0
+
+fun is_ptr_type(t: str) -> i32:
+    if str_eq(t, "ptr") == 1:
+        return 1
+    if str_eq(t, "!llvm.ptr") == 1:
+        return 1
+    if is_string_type(t) == 1:
+        return 1
+    if is_struct_type(t) == 1:
+        return 1
+    # Check for ptr[T] types (e.g. ptr[i8], ptr[i32])
+    tlen: i64 = Memory.strlen(t)
+    if tlen >= 5:
+        if Memory.read_i8(t as i64) == 112:
+            if Memory.read_i8((t as i64) + 1) == 116:
+                if Memory.read_i8((t as i64) + 2) == 114:
+                    if Memory.read_i8((t as i64) + 3) == 91:
+                        return 1
+    return 0
+
+# ==========================================
+# Integer Type Width (for widening/narrowing)
+# ==========================================
+fun int_type_width(t: str) -> i32:
+    if str_eq(t, "i8") == 1 or str_eq(t, "u8") == 1:
+        return 8
+    if str_eq(t, "i16") == 1 or str_eq(t, "u16") == 1:
+        return 16
+    if str_eq(t, "i32") == 1 or str_eq(t, "u32") == 1 or str_eq(t, "int") == 1:
+        return 32
+    if str_eq(t, "i64") == 1 or str_eq(t, "u64") == 1:
+        return 64
+    if str_eq(t, "i128") == 1 or str_eq(t, "u128") == 1:
+        return 128
+    return 0
+
+fun wider_int_type(a: str, b: str) -> str:
+    wa: i32 = int_type_width(a)
+    wb: i32 = int_type_width(b)
+    if wa >= wb:
+        return a
+    return b
+
+# ==========================================
+# Implicit Cast
+# ==========================================
+fun implicit_cast(value: str, from_type: str, to_type: str) -> str:
+    from_m: str = mlir_type(from_type)
+    to_m: str = mlir_type(to_type)
+
+    # No cast needed
+    if str_eq(from_m, to_m) == 1:
+        return value
+    if str_eq(from_type, "unknown") == 1:
+        return value
+
+    # Bool (i1) to integer
+    if str_eq(from_m, "i1") == 1 and is_int_type(to_type) == 1:
+        tmp: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.zext "), value), Str.concat(" : i1 to ", to_m)), ""))
+        return tmp
+
+    # Integer to bool (i1)
+    if is_int_type(from_type) == 1 and str_eq(to_m, "i1") == 1:
+        tmp2: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp2, " = llvm.trunc "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+        return tmp2
+
+    # Integer widening / narrowing
+    fw: i32 = int_type_width(from_type)
+    tw: i32 = int_type_width(to_type)
+    if fw > 0 and tw > 0:
+        if tw > fw:
+            # Widen (sign extend)
+            tmp3: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp3, " = llvm.sext "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+            return tmp3
+        elif tw < fw:
+            # Narrow (truncate)
+            tmp4: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp4, " = llvm.trunc "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+            return tmp4
+
+    # Float widening/narrowing
+    if str_eq(from_m, "f32") == 1 and str_eq(to_m, "f64") == 1:
+        tmp5: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(tmp5, " = llvm.fpext "), value), " : f32 to f64"))
+        return tmp5
+    if str_eq(from_m, "f64") == 1 and str_eq(to_m, "f32") == 1:
+        tmp6: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(tmp6, " = llvm.fptrunc "), value), " : f64 to f32"))
+        return tmp6
+
+    # Int to float
+    if fw > 0 and is_float_type(to_type) == 1:
+        tmp7: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp7, " = llvm.sitofp "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+        return tmp7
+
+    # Float to int
+    if is_float_type(from_type) == 1 and tw > 0:
+        tmp8: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp8, " = llvm.fptosi "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+        return tmp8
+
+    # Pointer to i64
+    if str_eq(from_m, "!llvm.ptr") == 1 and str_eq(to_m, "i64") == 1:
+        tmp9: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(tmp9, " = llvm.ptrtoint "), value), " : !llvm.ptr to i64"))
+        return tmp9
+
+    # i64 to pointer
+    if str_eq(from_m, "i64") == 1 and str_eq(to_m, "!llvm.ptr") == 1:
+        tmp10: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(tmp10, " = llvm.inttoptr "), value), " : i64 to !llvm.ptr"))
+        return tmp10
+
+    return value
+
+# ==========================================
+# Type Inference from AST Node
+# ==========================================
+fun infer_expr_type(node: i64) -> str:
+    if node == 0:
+        return "unknown"
+    ntype: i32 = nd_type(node)
+
+    if ntype == NODE_INT_LIT:
+        # Check magnitude for i32 vs i64
+        val: i64 = Memory.read_i64(node + 8)
+        if val > 2147483647 or val < -2147483648:
+            return "i64"
+        return "i32"
+    if ntype == NODE_FLOAT_LIT:
+        return "f64"
+    if ntype == NODE_STR_LIT:
+        return "string"
+    if ntype == NODE_BOOL_LIT:
+        return "bool"
+    if ntype == NODE_CHAR_LIT:
+        return "char"
+    if ntype == NODE_NULL_LIT:
+        return "null"
+    if ntype == NODE_FSTRING or ntype == NODE_INTERP_STR:
+        return "string"
+    if ntype == NODE_STR_CONCAT:
+        return "string"
+
+    if ntype == NODE_VAR_REF:
+        vname: str = Memory.read_i64(node + 8) as str
+        return get_var_type(vname)
+
+    if ntype == NODE_BINARY_OP:
+        lt: str = infer_expr_type(Memory.read_i64(node + 16))
+        rt: str = infer_expr_type(Memory.read_i64(node + 24))
+        if str_eq(lt, "i64") == 1 or str_eq(rt, "i64") == 1:
+            return "i64"
+        if is_float_type(lt) == 1 or is_float_type(rt) == 1:
+            if is_float_type(lt) == 1 and is_float_type(rt) == 1:
+                if str_eq(lt, "f64") == 1 or str_eq(rt, "f64") == 1:
+                    return "f64"
+                return "f32"
+            if is_float_type(lt) == 1:
+                return lt
+            return rt
+        if is_int_type(lt) == 1 and is_int_type(rt) == 1:
+            return wider_int_type(lt, rt)
+        if str_eq(lt, "unknown") == 0:
+            return lt
+        return rt
+
+    if ntype == NODE_COMPARISON or ntype == NODE_LOGICAL_OP:
+        return "bool"
+
+    if ntype == NODE_UNARY_OP:
+        return infer_expr_type(Memory.read_i64(node + 16))
+
+    if ntype == NODE_CAST:
+        return Memory.read_i64(node + 16) as str
+
+    if ntype == NODE_PAREN:
+        return infer_expr_type(Memory.read_i64(node + 8))
+
+    if ntype == NODE_TERNARY:
+        return infer_expr_type(Memory.read_i64(node + 16))
+
+    if ntype == NODE_FUN_CALL:
+        fname: str = Memory.read_i64(node + 8) as str
+        return get_fun_ret_type(fname)
+
+    if ntype == NODE_STATIC_METHOD:
+        sname: str = Memory.read_i64(node + 8) as str
+        mname: str = Memory.read_i64(node + 16) as str
+        full: str = Str.concat(Str.concat(sname, "_"), mname)
+        rt2: str = get_fun_ret_type(full)
+        if str_eq(rt2, "unknown") == 1:
+            full = Str.concat(Str.concat(sname, "."), mname)
+            rt2 = get_fun_ret_type(full)
+        return rt2
+
+    if ntype == NODE_FIELD_ACCESS:
+        fa_obj: str = Memory.read_i64(node + 8) as str
+        fa_field: str = Memory.read_i64(node + 16) as str
+        if is_enum_type(fa_obj) == 1:
+            return "i32"
+        fa_obj_type: str = get_var_type(fa_obj)
+        if str_eq(fa_obj_type, "") == 0 and str_eq(fa_obj_type, "unknown") == 0:
+            fa_ft: str = get_field_type(fa_obj_type, fa_field)
+            if str_eq(fa_ft, "") == 0 and str_eq(fa_ft, "unknown") == 0:
+                return fa_ft
+        return "unknown"
+
+    if ntype == NODE_SELF_FIELD:
+        sf_field: str = Memory.read_i64(node + 8) as str
+        sf_struct: str = g_cur_method_struct
+        if str_eq(sf_struct, "") == 0:
+            sf_ft: str = get_field_type(sf_struct, sf_field)
+            if str_eq(sf_ft, "") == 0 and str_eq(sf_ft, "unknown") == 0:
+                return sf_ft
+        return "unknown"
+
+    if ntype == NODE_INST_METHOD:
+        im_obj: str = Memory.read_i64(node + 8) as str
+        im_mname: str = Memory.read_i64(node + 16) as str
+        im_obj_type: str = ""
+        if str_eq(im_obj, "self") == 1:
+            im_obj_type = g_cur_method_struct
+        else:
+            im_obj_type = get_var_type(im_obj)
+        if str_eq(im_obj_type, "") == 0 and str_eq(im_obj_type, "unknown") == 0:
+            im_mangled: str = Str.concat(Str.concat(im_obj_type, "_"), im_mname)
+            im_rt: str = get_fun_ret_type(im_mangled)
+            if str_eq(im_rt, "unknown") == 0 and str_eq(im_rt, "") == 0:
+                return im_rt
+        return "unknown"
+
+    if ntype == NODE_ARRAY_LIT or ntype == NODE_LIST_LIT:
+        return "list"
+
+    if ntype == NODE_MAP_LIT:
+        return "ptr"
+
+    if ntype == NODE_ENUM_ACCESS:
+        return "i32"
+
+    if ntype == NODE_STATIC_FIELD:
+        sf_class: str = Memory.read_i64(node + 8) as str
+        if is_enum_type(sf_class) == 1:
+            return "i32"
+        return "unknown"
+
+    return "unknown"
+
+# ==========================================
+# Struct Field Index / Size
+# ==========================================
+fun get_field_index(struct_name: str, field_name: str) -> i32:
+    fields: i64 = get_struct_fields(struct_name)
+    if fields == 0:
+        return -1
+    fc: i32 = nl_count(fields)
+    i: i32 = 0
+    while i < fc:
+        fnode: i64 = nl_get(fields, i)
+        fname: str = Memory.read_i64(fnode + 8) as str
+        if str_eq(fname, field_name) == 1:
+            return i
+        i = i + 1
+    return -1
+
+fun get_field_type(struct_name: str, field_name: str) -> str:
+    fields: i64 = get_struct_fields(struct_name)
+    if fields == 0:
+        return "unknown"
+    fc: i32 = nl_count(fields)
+    i: i32 = 0
+    while i < fc:
+        fnode: i64 = nl_get(fields, i)
+        fname: str = Memory.read_i64(fnode + 8) as str
+        if str_eq(fname, field_name) == 1:
+            # field type is at offset 16
+            return Memory.read_i64(fnode + 16) as str
+        i = i + 1
+    return "unknown"
+
+fun get_type_size(t: str) -> i32:
+    w: i32 = int_type_width(t)
+    if w > 0:
+        return w / 8
+    if is_float_type(t) == 1:
+        if str_eq(t, "f32") == 1 or str_eq(t, "float") == 1:
+            return 4
+        return 8
+    if str_eq(t, "bool") == 1 or str_eq(t, "i1") == 1:
+        return 1
+    if str_eq(t, "char") == 1:
+        return 1
+    # Pointers, strings, structs: 8 bytes (64-bit)
+    return 8
+
+fun align_to(offset: i32, alignment: i32) -> i32:
+    rem: i32 = offset % alignment
+    if rem == 0:
+        return offset
+    return offset + (alignment - rem)
+
+fun get_type_alignment(t: str) -> i32:
+    sz: i32 = get_type_size(t)
+    if sz > 8:
+        return 8
+    if sz < 1:
+        return 1
+    return sz
+
+fun calculate_struct_size(struct_name: str) -> i32:
+    fields: i64 = get_struct_fields(struct_name)
+    if fields == 0:
+        return 0
+    fc: i32 = nl_count(fields)
+    total: i32 = 0
+    max_align: i32 = 1
+    i: i32 = 0
+    while i < fc:
+        fnode: i64 = nl_get(fields, i)
+        ftype: str = Memory.read_i64(fnode + 16) as str
+        fsz: i32 = get_type_size(ftype)
+        falign: i32 = get_type_alignment(ftype)
+        if falign > max_align:
+            max_align = falign
+        total = align_to(total, falign)
+        total = total + fsz
+        i = i + 1
+    # Pad to struct alignment
+    total = align_to(total, max_align)
+    return total
+
+fun get_struct_mlir_type(struct_name: str) -> str:
+    fields: i64 = get_struct_fields(struct_name)
+    if fields == 0:
+        return "!llvm.struct<()>"
+    fc: i32 = nl_count(fields)
+    result: str = "!llvm.struct<("
+    i: i32 = 0
+    while i < fc:
+        fnode: i64 = nl_get(fields, i)
+        ftype: str = Memory.read_i64(fnode + 16) as str
+        if i > 0:
+            result = Str.concat(result, ", ")
+        result = Str.concat(result, mlir_type(ftype))
+        i = i + 1
+    result = Str.concat(result, ")>")
+    return result

@@ -1,0 +1,315 @@
+##############################
+# MLIR Codegen Declarations
+# fun_def, method_def, struct, enum, extern
+# gen_var_decl moved to codegen_stmt.dlt (forward-ref fix)
+# Depends on: codegen_core.dlt, codegen_types.dlt, codegen_expr.dlt
+##############################
+
+# ==========================================
+# Function Definition
+# ==========================================
+fun gen_fun_def(node: i64):
+    fname: str = Memory.read_i64(node + 8) as str
+    params: i64 = Memory.read_i64(node + 16)
+    ret_type: str = Memory.read_i64(node + 24) as str
+    body: i64 = Memory.read_i64(node + 32)
+
+    # Resolve overloaded (mangled) function name
+    fpt_str: str = build_param_types_str(params)
+    mlir_fname: str = resolve_overload(fname, fpt_str)
+
+    # Reset tmp counter for each function
+    g_tmp_counter = 0
+
+    # Build parameter list
+    param_str: str = ""
+    pc: i32 = 0
+    if params != 0:
+        pc = nl_count(params)
+    i: i32 = 0
+    while i < pc:
+        pnode: i64 = nl_get(params, i)
+        pname: str = Memory.read_i64(pnode + 8) as str
+        ptype: str = Memory.read_i64(pnode + 16) as str
+        pmt: str = mlir_type(ptype)
+        if i > 0:
+            param_str = Str.concat(param_str, ", ")
+        param_str = Str.concat(param_str, Str.concat(Str.concat("%arg", Convert.i64_to_str(i as i64)), Str.concat(": ", pmt)))
+        i = i + 1
+
+    # Return type
+    ret_mt: str = ""
+    has_return: i32 = 0
+    if str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
+        ret_mt = mlir_type(ret_type)
+        has_return = 1
+
+    # Emit function header (using mangled name)
+    if has_return == 1:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, " {"))))
+    else:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), ") {"))
+    indent_inc()
+
+    # Set up function context
+    old_in_fn: i32 = g_in_function
+    old_ret_type: str = g_cur_fn_ret_type
+    old_fn_name: str = g_cur_fn_name
+    g_in_function = 1
+    g_cur_fn_ret_type = ret_type
+    g_cur_fn_name = fname
+
+    push_var_scope()
+
+    # Register parameters as variables
+    i = 0
+    while i < pc:
+        pnode2: i64 = nl_get(params, i)
+        pname2: str = Memory.read_i64(pnode2 + 8) as str
+        ptype2: str = Memory.read_i64(pnode2 + 16) as str
+        arg_name: str = Str.concat("arg", Convert.i64_to_str(i as i64))
+        add_variable(pname2, arg_name, ptype2, 1)
+        i = i + 1
+
+    # Generate body
+    if body != 0:
+        gen_block(body)
+
+    # Add implicit return if no return at end
+    if has_return == 0:
+        if body == 0 or block_always_returns(body) == 0:
+            emit_ind("llvm.return")
+    else:
+        if body == 0 or block_always_returns(body) == 0:
+            # Add default return
+            if str_eq(ret_mt, "!llvm.ptr") == 1:
+                def_ret: str = emit_zero_ptr()
+                emit_ind(Str.concat(Str.concat("llvm.return ", def_ret), " : !llvm.ptr"))
+            elif is_int_type(ret_type) == 1:
+                def_ret2: str = new_tmp()
+                emit_ind(Str.concat(Str.concat(Str.concat(def_ret2, " = llvm.mlir.constant(0 : "), ret_mt), Str.concat(") : ", ret_mt)))
+                emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret2), " : "), ret_mt))
+            elif is_float_type(ret_type) == 1:
+                def_ret3: str = new_tmp()
+                emit_ind(Str.concat(Str.concat(Str.concat(def_ret3, " = llvm.mlir.constant(0.0 : "), ret_mt), Str.concat(") : ", ret_mt)))
+                emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret3), " : "), ret_mt))
+
+    pop_var_scope()
+
+    # Restore context
+    g_in_function = old_in_fn
+    g_cur_fn_ret_type = old_ret_type
+    g_cur_fn_name = old_fn_name
+
+    indent_dec()
+    emit_ind("}")
+    emit_blank()
+
+# ==========================================
+# Method Definition (inside impl block)
+# ==========================================
+fun gen_method_def(struct_name: str, node: i64):
+    mname: str = Memory.read_i64(node + 8) as str
+    params: i64 = Memory.read_i64(node + 16)
+    ret_type: str = Memory.read_i64(node + 24) as str
+    body: i64 = Memory.read_i64(node + 32)
+    is_static: i64 = Memory.read_i64(node + 72)
+
+    # Mangled name: StructName_methodName
+    mangled: str = Str.concat(Str.concat(struct_name, "_"), mname)
+
+    g_tmp_counter = 0
+
+    # Build param list
+    param_str: str = ""
+    if is_static == 0:
+        param_str = "%self: !llvm.ptr"
+    pc: i32 = 0
+    if params != 0:
+        pc = nl_count(params)
+    i: i32 = 0
+    while i < pc:
+        pnode: i64 = nl_get(params, i)
+        pname: str = Memory.read_i64(pnode + 8) as str
+        ptype: str = Memory.read_i64(pnode + 16) as str
+        pmt: str = mlir_type(ptype)
+        if i > 0 or is_static == 0:
+            param_str = Str.concat(param_str, Str.concat(", ", Str.concat(Str.concat("%arg", Convert.i64_to_str(i as i64)), Str.concat(": ", pmt))))
+        else:
+            param_str = Str.concat(Str.concat("%arg", Convert.i64_to_str(i as i64)), Str.concat(": ", pmt))
+        i = i + 1
+
+    ret_mt: str = ""
+    has_return: i32 = 0
+    if str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
+        ret_mt = mlir_type(ret_type)
+        has_return = 1
+
+    if has_return == 1:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, " {"))))
+    else:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), ") {"))
+    indent_inc()
+
+    old_in_fn: i32 = g_in_function
+    old_ret_type: str = g_cur_fn_ret_type
+    old_fn_name: str = g_cur_fn_name
+    old_method_struct: str = g_cur_method_struct
+    g_in_function = 1
+    g_cur_fn_ret_type = ret_type
+    g_cur_fn_name = mangled
+    g_cur_method_struct = struct_name
+
+    push_var_scope()
+
+    # Register self only for instance methods
+    if is_static == 0:
+        add_variable("self", "self", struct_name, 1)
+
+    # Register params
+    i = 0
+    while i < pc:
+        pnode2: i64 = nl_get(params, i)
+        pname2: str = Memory.read_i64(pnode2 + 8) as str
+        ptype2: str = Memory.read_i64(pnode2 + 16) as str
+        arg_name: str = Str.concat("arg", Convert.i64_to_str(i as i64))
+        add_variable(pname2, arg_name, ptype2, 1)
+        i = i + 1
+
+    if body != 0:
+        gen_block(body)
+
+    if has_return == 0:
+        if body == 0 or block_always_returns(body) == 0:
+            emit_ind("llvm.return")
+
+    pop_var_scope()
+
+    g_in_function = old_in_fn
+    g_cur_fn_ret_type = old_ret_type
+    g_cur_fn_name = old_fn_name
+    g_cur_method_struct = old_method_struct
+
+    indent_dec()
+    emit_ind("}")
+    emit_blank()
+
+# ==========================================
+# Extern Block
+# ==========================================
+fun register_extern_sigs(node: i64):
+    funcs: i64 = Memory.read_i64(node + 16)
+    if funcs == 0:
+        return
+    fc: i32 = nl_count(funcs)
+    ri: i32 = 0
+    while ri < fc:
+        fn_node: i64 = nl_get(funcs, ri)
+        fname: str = Memory.read_i64(fn_node + 8) as str
+        params: i64 = Memory.read_i64(fn_node + 16)
+        ret_type: str = Memory.read_i64(fn_node + 24) as str
+        # Build comma-separated param types
+        pts: str = ""
+        if params != 0:
+            pc: i32 = nl_count(params)
+            pi: i32 = 0
+            while pi < pc:
+                pnode: i64 = nl_get(params, pi)
+                ptype: str = Memory.read_i64(pnode + 16) as str
+                if pi > 0:
+                    pts = Str.concat(pts, ",")
+                pts = Str.concat(pts, ptype)
+                pi = pi + 1
+        register_fun_sig_with_params(fname, ret_type, pts)
+        ri = ri + 1
+
+fun gen_extern_block(node: i64):
+    lib: str = Memory.read_i64(node + 8) as str
+    funcs: i64 = Memory.read_i64(node + 16)
+    if funcs == 0:
+        return
+
+    fc: i32 = nl_count(funcs)
+    i: i32 = 0
+    while i < fc:
+        fn_node: i64 = nl_get(funcs, i)
+        fname: str = Memory.read_i64(fn_node + 8) as str
+        params: i64 = Memory.read_i64(fn_node + 16)
+        ret_type: str = Memory.read_i64(fn_node + 24) as str
+
+        # Build param types
+        param_str: str = ""
+        pc: i32 = 0
+        if params != 0:
+            pc = nl_count(params)
+        j: i32 = 0
+        while j < pc:
+            pnode: i64 = nl_get(params, j)
+            ptype: str = Memory.read_i64(pnode + 16) as str
+            pmt: str = mlir_type(ptype)
+            if j > 0:
+                param_str = Str.concat(param_str, ", ")
+            param_str = Str.concat(param_str, pmt)
+            j = j + 1
+
+        ret_mt: str = ""
+        if str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
+            ret_mt = mlir_type(ret_type)
+
+        # Emit extern function declaration
+        if str_eq(ret_mt, "") == 1:
+            emit_ind(Str.concat(Str.concat(Str.concat("llvm.func @", fname), "("), Str.concat(param_str, ")")))
+        else:
+            emit_ind(Str.concat(Str.concat(Str.concat("llvm.func @", fname), "("), Str.concat(param_str, Str.concat(") -> ", ret_mt))))
+
+        i = i + 1
+
+# ==========================================
+# Struct Inline Methods (methods defined inside struct body)
+# ==========================================
+fun gen_struct_inline_methods(node: i64):
+    sname: str = Memory.read_i64(node + 8) as str
+    smethods: i64 = Memory.read_i64(node + 40)
+    if smethods == 0:
+        return
+    mc: i32 = nl_count(smethods)
+    i: i32 = 0
+    while i < mc:
+        mnode: i64 = nl_get(smethods, i)
+        mdbg: str = Memory.read_i64(mnode + 8) as str
+        IOOps.io_println(Str.concat(Str.concat(Str.concat("  [method] ", sname), "."), mdbg))
+        gen_method_def(sname, mnode)
+        i = i + 1
+
+# ==========================================
+# Impl Block
+# ==========================================
+fun gen_impl_block(node: i64):
+    sname: str = Memory.read_i64(node + 8) as str
+    methods: i64 = Memory.read_i64(node + 16)
+    if methods == 0:
+        return
+
+    mc: i32 = nl_count(methods)
+    i: i32 = 0
+    while i < mc:
+        mnode: i64 = nl_get(methods, i)
+        gen_method_def(sname, mnode)
+        i = i + 1
+
+# ==========================================
+# Extend Block
+# ==========================================
+fun gen_extend_block(node: i64):
+    tname: str = Memory.read_i64(node + 8) as str
+    methods: i64 = Memory.read_i64(node + 16)
+    if methods == 0:
+        return
+
+    mc: i32 = nl_count(methods)
+    i: i32 = 0
+    while i < mc:
+        mnode: i64 = nl_get(methods, i)
+        # Extend methods use the type name as struct name
+        gen_method_def(tname, mnode)
+        i = i + 1

@@ -1,0 +1,490 @@
+##############################
+# Parser Core
+# State, navigation, error handling, token constants, string helpers
+##############################
+
+# ==========================================
+# Token Type Constants
+# (duplicated from tokenizer for directory independence)
+# ==========================================
+TK_EOF: i32 = 0
+TK_NEWLINE: i32 = 1
+TK_IDENT: i32 = 2
+TK_INT: i32 = 3
+TK_INT64: i32 = 4
+TK_FLOAT: i32 = 5
+TK_STRING: i32 = 6
+TK_CHAR: i32 = 7
+TK_FSTRING: i32 = 8
+TK_BOOL: i32 = 9
+TK_NULL: i32 = 10
+TK_HEX: i32 = 11
+TK_BINARY: i32 = 12
+TK_OCTAL: i32 = 13
+TK_TYPE: i32 = 14
+TK_PLUS: i32 = 20
+TK_MINUS: i32 = 21
+TK_MULTIPLY: i32 = 22
+TK_DIVIDE: i32 = 23
+TK_MODULO: i32 = 24
+TK_ASSIGN: i32 = 25
+TK_EQUAL: i32 = 26
+TK_NOT_EQUAL: i32 = 27
+TK_LESS: i32 = 28
+TK_GREATER: i32 = 29
+TK_LESS_EQUAL: i32 = 30
+TK_GREATER_EQUAL: i32 = 31
+TK_AND: i32 = 32
+TK_OR: i32 = 33
+TK_NOT: i32 = 34
+TK_BIT_AND: i32 = 35
+TK_BIT_OR: i32 = 36
+TK_BIT_XOR: i32 = 37
+TK_BIT_NOT: i32 = 38
+TK_SHIFT_LEFT: i32 = 39
+TK_SHIFT_RIGHT: i32 = 40
+TK_PLUS_PLUS: i32 = 41
+TK_MINUS_MINUS: i32 = 42
+TK_PLUS_ASSIGN: i32 = 43
+TK_MINUS_ASSIGN: i32 = 44
+TK_MULT_ASSIGN: i32 = 45
+TK_DIV_ASSIGN: i32 = 46
+TK_ARROW: i32 = 47
+TK_LPAREN: i32 = 50
+TK_RPAREN: i32 = 51
+TK_LBRACKET: i32 = 52
+TK_RBRACKET: i32 = 53
+TK_LEFT_BRACE: i32 = 54
+TK_RIGHT_BRACE: i32 = 55
+TK_COLON: i32 = 56
+TK_COMMA: i32 = 57
+TK_DOT: i32 = 58
+TK_SEMICOLON: i32 = 59
+TK_QUESTION: i32 = 60
+TK_RANGE: i32 = 61
+TK_ELLIPSIS: i32 = 62
+TK_AT: i32 = 63
+TK_IF: i32 = 70
+TK_ELSE: i32 = 71
+TK_ELIF: i32 = 72
+TK_WHILE: i32 = 73
+TK_FOR: i32 = 74
+TK_BREAK: i32 = 75
+TK_CONTINUE: i32 = 76
+TK_FUN: i32 = 77
+TK_RETURN: i32 = 78
+TK_STRUCT: i32 = 79
+TK_ENUM: i32 = 80
+TK_TRAIT: i32 = 81
+TK_IMPL: i32 = 82
+TK_EXTENDS: i32 = 83
+TK_SELF: i32 = 84
+TK_SUPER: i32 = 85
+TK_IMPORT: i32 = 86
+TK_FROM: i32 = 87
+TK_EXTERN: i32 = 88
+TK_USE: i32 = 89
+TK_MATCH: i32 = 90
+TK_CASE: i32 = 91
+TK_IN: i32 = 92
+TK_TO: i32 = 93
+TK_STEP: i32 = 94
+TK_AS: i32 = 95
+TK_IS: i32 = 96
+TK_CONST: i32 = 97
+TK_STATIC: i32 = 98
+TK_MUT: i32 = 99
+TK_PUBLIC: i32 = 100
+TK_PRIVATE: i32 = 101
+TK_PROTECT: i32 = 102
+TK_ABSTRACT: i32 = 103
+TK_ASYNC: i32 = 104
+TK_AWAIT: i32 = 105
+TK_PASS: i32 = 106
+TK_EXTEND: i32 = 107
+TK_TYPE_ALIAS: i32 = 108
+TK_STACK: i32 = 109
+TK_CODE_BLOCK: i32 = 110
+TK_BUILTIN_CALL: i32 = 111
+TK_LIST: i32 = 112
+TK_MAP: i32 = 113
+TK_ARRAY: i32 = 114
+TK_I8: i32 = 120
+TK_I16: i32 = 121
+TK_I32: i32 = 122
+TK_I64: i32 = 123
+TK_I128: i32 = 124
+TK_PTR: i32 = 125
+TK_U8: i32 = 126
+TK_U16: i32 = 127
+TK_U32: i32 = 128
+TK_U64: i32 = 129
+TK_U128: i32 = 130
+TK_F32: i32 = 131
+TK_F64: i32 = 132
+TK_STR_TYPE: i32 = 133
+TK_CHAR_TYPE: i32 = 134
+
+# ==========================================
+# Parser State
+# ==========================================
+p_kinds: i64 = 0
+p_values: i64 = 0
+p_indents: i64 = 0
+p_count: i32 = 0
+p_pos: i32 = 0
+
+# ==========================================
+# Error Handling
+# ==========================================
+fun panic(msg: str):
+    print(@"[PARSE ERROR] {msg}")
+    ExitProcess(1)
+
+# ==========================================
+# String Helpers
+# ==========================================
+fun str_to_i64(s: str) -> i64:
+    result: i64 = 0
+    neg: i64 = 0
+    idx: i64 = 0
+    c: i8 = Memory.read_i8((s as i64) + idx)
+    if c == 45:
+        neg = 1
+        idx = idx + 1
+    c = Memory.read_i8((s as i64) + idx)
+    while c >= 48 and c <= 57:
+        result = result * 10 + ((c as i64) - 48)
+        idx = idx + 1
+        c = Memory.read_i8((s as i64) + idx)
+    if neg == 1:
+        return 0 - result
+    return result
+
+fun hex_to_i64(s: str) -> i64:
+    result: i64 = 0
+    idx: i64 = 0
+    slen: i64 = Memory.strlen(s)
+    while idx < slen:
+        c: i8 = Memory.read_i8((s as i64) + idx)
+        result = result * 16
+        if c >= 48 and c <= 57:
+            result = result + ((c as i64) - 48)
+        elif c >= 65 and c <= 70:
+            result = result + ((c as i64) - 55)
+        elif c >= 97 and c <= 102:
+            result = result + ((c as i64) - 87)
+        idx = idx + 1
+    return result
+
+fun bin_to_i64(s: str) -> i64:
+    result: i64 = 0
+    idx: i64 = 0
+    slen: i64 = Memory.strlen(s)
+    while idx < slen:
+        c: i8 = Memory.read_i8((s as i64) + idx)
+        result = result * 2
+        if c == 49:
+            result = result + 1
+        idx = idx + 1
+    return result
+
+fun oct_to_i64(s: str) -> i64:
+    result: i64 = 0
+    idx: i64 = 0
+    slen: i64 = Memory.strlen(s)
+    while idx < slen:
+        c: i8 = Memory.read_i8((s as i64) + idx)
+        result = result * 8 + ((c as i64) - 48)
+        idx = idx + 1
+    return result
+
+fun str_eq(a: str, b: str) -> i32:
+    la: i64 = Memory.strlen(a)
+    lb: i64 = Memory.strlen(b)
+    if la != lb:
+        return 0
+    i: i64 = 0
+    while i < la:
+        ca: i8 = Memory.read_i8((a as i64) + i)
+        cb: i8 = Memory.read_i8((b as i64) + i)
+        if ca != cb:
+            return 0
+        i = i + 1
+    return 1
+
+fun str_from_range(src: str, start: i64, end: i64) -> str:
+    length: i64 = end - start
+    buf: i64 = Memory.malloc_zeroed(length + 1)
+    i: i64 = 0
+    while i < length:
+        c: i8 = Memory.read_i8((src as i64) + start + i)
+        Memory.write_i8(buf + i, c)
+        i = i + 1
+    Memory.write_i8(buf + length, 0 as i8)
+    return buf as str
+
+# ==========================================
+# Parser Init
+# ==========================================
+fun init_parser(kinds: i64, values: i64, indents: i64, count: i32):
+    p_kinds = kinds
+    p_values = values
+    p_indents = indents
+    p_count = count
+    p_pos = 0
+
+# ==========================================
+# Token Navigation
+# ==========================================
+fun cur_kind() -> i32:
+    if p_pos < p_count:
+        return Memory.read_i32(p_kinds + ((p_pos as i64) * 4))
+    return TK_EOF
+
+fun cur_val() -> str:
+    if p_pos < p_count:
+        v: i64 = Memory.read_i64(p_values + ((p_pos as i64) * 8))
+        return v as str
+    return ""
+
+fun cur_indent() -> i32:
+    if p_pos < p_count:
+        return Memory.read_i32(p_indents + ((p_pos as i64) * 4))
+    return 0
+
+fun peek_kind(offset: i32) -> i32:
+    idx: i32 = p_pos + offset
+    if idx < p_count:
+        return Memory.read_i32(p_kinds + ((idx as i64) * 4))
+    return TK_EOF
+
+fun peek_val(offset: i32) -> str:
+    idx: i32 = p_pos + offset
+    if idx < p_count:
+        v: i64 = Memory.read_i64(p_values + ((idx as i64) * 8))
+        return v as str
+    return ""
+
+fun peek_indent(offset: i32) -> i32:
+    idx: i32 = p_pos + offset
+    if idx < p_count:
+        return Memory.read_i32(p_indents + ((idx as i64) * 4))
+    return 0
+
+fun advance():
+    if p_pos < p_count:
+        p_pos = p_pos + 1
+
+fun eat(expected: i32):
+    if cur_kind() == expected:
+        p_pos = p_pos + 1
+    else:
+        panic(@"Expected token kind {expected}, got {cur_kind()} (value='{cur_val()}')")
+
+fun skip_newlines() -> i32:
+    while cur_kind() == TK_NEWLINE:
+        p_pos = p_pos + 1
+    return cur_indent()
+
+# ==========================================
+# Token Kind Checks
+# ==========================================
+fun is_type_token(k: i32) -> i32:
+    if k == TK_I8:
+        return 1
+    if k == TK_I16:
+        return 1
+    if k == TK_I32:
+        return 1
+    if k == TK_I64:
+        return 1
+    if k == TK_I128:
+        return 1
+    if k == TK_PTR:
+        return 1
+    if k == TK_U8:
+        return 1
+    if k == TK_U16:
+        return 1
+    if k == TK_U32:
+        return 1
+    if k == TK_U64:
+        return 1
+    if k == TK_U128:
+        return 1
+    if k == TK_F32:
+        return 1
+    if k == TK_F64:
+        return 1
+    if k == TK_STR_TYPE:
+        return 1
+    if k == TK_CHAR_TYPE:
+        return 1
+    return 0
+
+fun is_comparison_op(k: i32) -> i32:
+    if k == TK_EQUAL:
+        return 1
+    if k == TK_NOT_EQUAL:
+        return 1
+    if k == TK_LESS:
+        return 1
+    if k == TK_GREATER:
+        return 1
+    if k == TK_LESS_EQUAL:
+        return 1
+    if k == TK_GREATER_EQUAL:
+        return 1
+    return 0
+
+fun is_additive_op(k: i32) -> i32:
+    if k == TK_PLUS:
+        return 1
+    if k == TK_MINUS:
+        return 1
+    return 0
+
+fun is_multiplicative_op(k: i32) -> i32:
+    if k == TK_MULTIPLY:
+        return 1
+    if k == TK_DIVIDE:
+        return 1
+    if k == TK_MODULO:
+        return 1
+    return 0
+
+fun is_assignment_op(k: i32) -> i32:
+    if k == TK_ASSIGN:
+        return 1
+    if k == TK_PLUS_ASSIGN:
+        return 1
+    if k == TK_MINUS_ASSIGN:
+        return 1
+    if k == TK_MULT_ASSIGN:
+        return 1
+    if k == TK_DIV_ASSIGN:
+        return 1
+    return 0
+
+fun is_literal_token(k: i32) -> i32:
+    if k == TK_INT:
+        return 1
+    if k == TK_INT64:
+        return 1
+    if k == TK_FLOAT:
+        return 1
+    if k == TK_STRING:
+        return 1
+    if k == TK_CHAR:
+        return 1
+    if k == TK_FSTRING:
+        return 1
+    if k == TK_BOOL:
+        return 1
+    if k == TK_NULL:
+        return 1
+    if k == TK_HEX:
+        return 1
+    return 0
+
+fun token_to_type_str(k: i32) -> str:
+    if k == TK_I8:
+        return "i8"
+    if k == TK_I16:
+        return "i16"
+    if k == TK_I32:
+        return "i32"
+    if k == TK_I64:
+        return "i64"
+    if k == TK_I128:
+        return "i128"
+    if k == TK_PTR:
+        return "ptr"
+    if k == TK_U8:
+        return "u8"
+    if k == TK_U16:
+        return "u16"
+    if k == TK_U32:
+        return "u32"
+    if k == TK_U64:
+        return "u64"
+    if k == TK_U128:
+        return "u128"
+    if k == TK_F32:
+        return "f32"
+    if k == TK_F64:
+        return "f64"
+    if k == TK_STR_TYPE:
+        return "str"
+    if k == TK_CHAR_TYPE:
+        return "char"
+    if k == TK_LIST:
+        return "list"
+    if k == TK_MAP:
+        return "map"
+    if k == TK_ARRAY:
+        return "array"
+    if k == TK_BOOL:
+        return "bool"
+    if k == TK_TYPE:
+        return "type"
+    return ""
+
+fun op_to_str(k: i32) -> str:
+    if k == TK_PLUS:
+        return "+"
+    if k == TK_MINUS:
+        return "-"
+    if k == TK_MULTIPLY:
+        return "*"
+    if k == TK_DIVIDE:
+        return "/"
+    if k == TK_MODULO:
+        return "%"
+    if k == TK_EQUAL:
+        return "=="
+    if k == TK_NOT_EQUAL:
+        return "!="
+    if k == TK_LESS:
+        return "<"
+    if k == TK_GREATER:
+        return ">"
+    if k == TK_LESS_EQUAL:
+        return "<="
+    if k == TK_GREATER_EQUAL:
+        return ">="
+    if k == TK_AND:
+        return "and"
+    if k == TK_OR:
+        return "or"
+    if k == TK_NOT:
+        return "not"
+    if k == TK_BIT_AND:
+        return "&"
+    if k == TK_BIT_OR:
+        return "|"
+    if k == TK_BIT_XOR:
+        return "^"
+    if k == TK_SHIFT_LEFT:
+        return "<<"
+    if k == TK_SHIFT_RIGHT:
+        return ">>"
+    if k == TK_PLUS_ASSIGN:
+        return "+="
+    if k == TK_MINUS_ASSIGN:
+        return "-="
+    if k == TK_MULT_ASSIGN:
+        return "*="
+    if k == TK_DIV_ASSIGN:
+        return "/="
+    return "?"
+
+# ==========================================
+# Indented Block Parsing Helper
+# ==========================================
+# Parses an indented block of statements (body of if/while/for/fun)
+# Returns a node_list of statement nodes
+# The caller should provide a parse_stmt function pointer but since
+# Dolet doesn't support function pointers yet, we'll handle this differently.
+# The block parsing will be done inline in each statement parser.

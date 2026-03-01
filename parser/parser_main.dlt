@@ -1,0 +1,267 @@
+##############################
+# Parser Main Entry Point
+# parse(), parse_statement(), parse_indented_block()
+# Depends on: all other parser files
+##############################
+
+# ==========================================
+# Indented Block Parser
+# ==========================================
+fun parse_indented_block(base_indent: i32) -> i64:
+    body: i64 = mk_node_list(32)
+    while cur_kind() != TK_EOF:
+        ci: i32 = cur_indent()
+        if ci <= base_indent:
+            break
+        if cur_kind() == TK_NEWLINE:
+            skip_newlines()
+        elif cur_kind() == TK_EOF:
+            break
+        else:
+            ci2: i32 = cur_indent()
+            if ci2 <= base_indent:
+                break
+            stmt: i64 = parse_statement()
+            if stmt != 0:
+                nl_add(body, stmt)
+            if cur_kind() == TK_NEWLINE:
+                skip_newlines()
+    return body
+
+# ==========================================
+# Statement Dispatcher
+# ==========================================
+fun parse_statement() -> i64:
+    k: i32 = cur_kind()
+
+    # Skip newlines
+    if k == TK_NEWLINE:
+        skip_newlines()
+        return 0
+
+    # Const declaration
+    if k == TK_CONST:
+        return parse_const_decl()
+
+    # Static declaration (treat as const for now)
+    if k == TK_STATIC:
+        advance()
+        if cur_kind() == TK_FUN:
+            return parse_fun_def(0)
+        # static var decl
+        name: str = cur_val()
+        eat(TK_IDENT)
+        if cur_kind() == TK_COLON:
+            advance()
+            vt: str = parse_type_name()
+            eat(TK_ASSIGN)
+            val: i64 = parse_expression()
+            return mk_var_decl(vt, name, val, 0, 0, 0)
+        eat(TK_ASSIGN)
+        val2: i64 = parse_expression()
+        return mk_var_decl("", name, val2, 1, 0, 0)
+
+    # Mut declaration
+    if k == TK_MUT:
+        advance()
+        name2: str = cur_val()
+        eat(TK_IDENT)
+        if cur_kind() == TK_COLON:
+            advance()
+            mt: str = parse_type_name()
+            eat(TK_ASSIGN)
+            mval: i64 = parse_expression()
+            return mk_var_decl(mt, name2, mval, 0, 0, 0)
+        eat(TK_ASSIGN)
+        mval2: i64 = parse_expression()
+        return mk_var_decl("", name2, mval2, 1, 0, 0)
+
+    # Enum
+    if k == TK_ENUM:
+        return parse_enum_decl()
+
+    # Trait
+    if k == TK_TRAIT:
+        return parse_trait_decl()
+
+    # Abstract struct
+    if k == TK_ABSTRACT:
+        advance()
+        if cur_kind() == TK_STRUCT:
+            return parse_struct_decl(1)
+        panic("Expected 'struct' after 'abstract'")
+
+    # Struct
+    if k == TK_STRUCT:
+        return parse_struct_decl(0)
+
+    # Impl
+    if k == TK_IMPL:
+        return parse_impl_block()
+
+    # Extend
+    if k == TK_EXTEND:
+        return parse_extend_block()
+
+    # Type alias
+    if k == TK_TYPE_ALIAS:
+        return parse_type_alias_stmt()
+
+    # Type token as variable declaration start
+    if is_type_token(k) == 1:
+        ts: str = token_to_type_str(k)
+        advance()
+        return parse_var_decl_typed(ts)
+
+    # Function definition
+    if k == TK_FUN:
+        return parse_fun_def(0)
+
+    # Async function
+    if k == TK_ASYNC:
+        advance()
+        if cur_kind() == TK_FUN:
+            return parse_fun_def(1)
+        panic("Expected 'fun' after 'async'")
+
+    # Return
+    if k == TK_RETURN:
+        return parse_return_stmt()
+
+    # If
+    if k == TK_IF:
+        return parse_if_stmt()
+
+    # While
+    if k == TK_WHILE:
+        return parse_while_stmt()
+
+    # For
+    if k == TK_FOR:
+        return parse_for_stmt()
+
+    # Match
+    if k == TK_MATCH:
+        return parse_match_stmt()
+
+    # Break
+    if k == TK_BREAK:
+        return parse_break_stmt()
+
+    # Continue
+    if k == TK_CONTINUE:
+        return parse_continue_stmt()
+
+    # Pass
+    if k == TK_PASS:
+        return parse_pass_stmt()
+
+    # Import
+    if k == TK_IMPORT:
+        return parse_import_stmt()
+
+    # Extern
+    if k == TK_EXTERN:
+        return parse_extern_block()
+
+    # Super method call
+    if k == TK_SUPER:
+        return parse_expression()
+
+    # Self as statement (self.method() or self.field = ... or self.field += ...)
+    if k == TK_SELF:
+        advance()
+        if cur_kind() == TK_DOT:
+            advance()
+            sfname: str = cur_val()
+            eat(TK_IDENT)
+            # self.method()
+            if cur_kind() == TK_LPAREN:
+                sma: i64 = parse_arg_list()
+                return mk_inst_method("self", sfname, sma)
+            # self.field = expr
+            if cur_kind() == TK_ASSIGN:
+                advance()
+                sfval: i64 = parse_expression()
+                return mk_field_assign("self", sfname, sfval)
+            # self.field += expr or self.field -= expr
+            if cur_kind() == TK_PLUS_ASSIGN or cur_kind() == TK_MINUS_ASSIGN or cur_kind() == TK_MULT_ASSIGN or cur_kind() == TK_DIV_ASSIGN:
+                sop: i32 = cur_kind()
+                advance()
+                scval: i64 = parse_expression()
+                sbop: str = "+"
+                if sop == TK_MINUS_ASSIGN:
+                    sbop = "-"
+                elif sop == TK_MULT_ASSIGN:
+                    sbop = "*"
+                elif sop == TK_DIV_ASSIGN:
+                    sbop = "/"
+                scombined: i64 = mk_binary_op(sbop, mk_self_field(sfname), scval)
+                return mk_field_assign("self", sfname, scombined)
+            # Just self.field as expression statement
+            return mk_self_field(sfname)
+        return mk_self()
+
+    # Annotation: @stack, @inline, etc. — skip and parse next statement
+    if k == TK_AT:
+        advance()
+        if cur_kind() == TK_IDENT or cur_kind() == TK_STACK:
+            advance()
+        return parse_statement()
+
+    # Identifier: var decl, assignment, function call, method call
+    if k == TK_IDENT:
+        # Check if it's a variable declaration: Name : type
+        # or assignment, function call, etc.
+        return parse_var_decl_ident()
+
+    # List/Array/Map declarations
+    if k == TK_LIST:
+        advance()
+        lname: str = cur_val()
+        eat(TK_IDENT)
+        ltype: str = ""
+        if cur_kind() == TK_COLON:
+            advance()
+            ltype = parse_type_name()
+        eat(TK_ASSIGN)
+        lval: i64 = parse_expression()
+        return mk_list_decl(lname, 0, ltype, 0)
+
+    if k == TK_ARRAY:
+        advance()
+        aname: str = cur_val()
+        eat(TK_IDENT)
+        atype: str = ""
+        if cur_kind() == TK_COLON:
+            advance()
+            atype = parse_type_name()
+        eat(TK_ASSIGN)
+        aval: i64 = parse_expression()
+        return mk_array_decl(aname, 0, atype, 0)
+
+    if k == TK_MAP:
+        advance()
+        mname: str = cur_val()
+        eat(TK_IDENT)
+        eat(TK_ASSIGN)
+        mval: i64 = parse_expression()
+        return mk_map_decl(mname, 0, "", "", 0)
+
+    panic(@"Unknown statement: kind={k} val='{cur_val()}'")
+    return 0
+
+# ==========================================
+# Main Parse Loop
+# ==========================================
+fun parse() -> i64:
+    stmts: i64 = mk_node_list(256)
+    while cur_kind() != TK_EOF:
+        skip_newlines()
+        if cur_kind() == TK_EOF:
+            break
+        stmt: i64 = parse_statement()
+        if stmt != 0:
+            nl_add(stmts, stmt)
+        skip_newlines()
+    return stmts

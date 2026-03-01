@@ -1,5 +1,5 @@
 # Build artifacts
-build/pipeline_build.dlt
+!build/pipeline_build.dlt
 build/*.exe
 build/*.mlir
 build/*.ll
@@ -11,9 +11,9 @@ build/*.obj
 *.ll
 *.obj
 *.exe
-!dltc.bat
+dltc.bat
 !bin/doletc.exe
-!tools/*.exe
+tools/*.exe
 
 # Python
 __pycache__/
@@ -33,3 +33,10 @@ packages/**/.git/
 # OS
 Thumbs.db
 .DS_Store
+
+
+#others
+COMPILER_FIXES.md
+DOLET_LANGUAGE_FEATURES.md
+FUTURE_FEATURES.md
+

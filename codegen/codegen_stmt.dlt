@@ -1,0 +1,730 @@
+##############################
+# MLIR Codegen Statements
+# if/while/for/match/return/break/continue/assignment
+# Depends on: codegen_core.dlt, codegen_types.dlt, codegen_expr.dlt
+##############################
+
+# ==========================================
+# Assignment
+# ==========================================
+fun gen_assignment(node: i64):
+    name: str = Memory.read_i64(node + 8) as str
+    val_node: i64 = Memory.read_i64(node + 16)
+
+    mn: str = get_mlir_name(name)
+    if str_eq(mn, "") == 1:
+        # Variable doesn't exist — create it (implicit declaration)
+        vt: str = infer_expr_type(val_node)
+        if str_eq(vt, "unknown") == 1:
+            vt = "i32"
+        mt: str = mlir_type(vt)
+        alloc: str = emit_alloca(mt)
+        # Store the mlir_name without the % prefix
+        alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
+        add_variable(name, alloc_name, vt, 0)
+        mn = alloc_name
+
+    vt2: str = get_var_type(name)
+    mt2: str = mlir_type(vt2)
+
+    actual_type: str = infer_expr_type(val_node)
+    value_result: str = gen_expr(val_node, vt2)
+
+    # Implicit cast if needed (e.g., i32 literal → i64 variable)
+    if str_eq(actual_type, vt2) == 0 and str_eq(actual_type, "unknown") == 0:
+        value_result = implicit_cast(value_result, actual_type, vt2)
+
+    # Store to global or local
+    # Check if a local variable shadows this global (same fix as gen_var_load)
+    is_local_shadow: i32 = 0
+    if is_global_var(name) == 1 and g_in_function == 1:
+        vi: i32 = g_var_count - 1
+        while vi >= 0:
+            voff: i64 = (vi as i64) * 8
+            vn: str = Memory.read_i64(g_var_names + voff) as str
+            if str_eq(vn, name) == 1:
+                vpoff: i64 = (vi as i64) * 4
+                vp: i32 = Memory.read_i32(g_var_is_param + vpoff)
+                if vp == 0:
+                    is_local_shadow = 1
+                vi = -1
+            vi = vi - 1
+
+    if is_global_var(name) == 1 and is_local_shadow == 0:
+        ga: str = emit_addr_of(mn)
+        emit_store(value_result, ga, mt2)
+    else:
+        emit_store(value_result, Str.concat("%", mn), mt2)
+
+# ==========================================
+# Field Assignment (obj.field = value)
+# ==========================================
+fun gen_field_assignment(node: i64):
+    obj_name: str = Memory.read_i64(node + 8) as str
+    field_name: str = Memory.read_i64(node + 16) as str
+    val_node: i64 = Memory.read_i64(node + 24)
+
+    # Self field assignment: self.field = value
+    if str_eq(obj_name, "self") == 1:
+        sname: str = g_cur_method_struct
+        ftype: str = get_field_type(sname, field_name)
+        fidx: i32 = get_field_index(sname, field_name)
+        mt: str = mlir_type(ftype)
+        struct_mlir: str = get_struct_mlir_type(sname)
+        fp: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(fp, " = llvm.getelementptr %self[0, "), Str.concat(Str.concat(Convert.i64_to_str(fidx as i64), "] : (!llvm.ptr) -> !llvm.ptr, "), struct_mlir)))
+        val: str = gen_expr(val_node, ftype)
+        emit_store(val, fp, mt)
+        return
+
+    # Get struct type of object
+    obj_type: str = get_var_type(obj_name)
+
+    # ptr[T].value = x → store through typed pointer
+    if str_eq(field_name, "value") == 1:
+        if is_ptr_type(obj_type) == 1:
+            elem_t: str = ptr_elem_type(obj_type)
+            elem_mt: str = mlir_type(elem_t)
+            ptr_val: str = gen_var_load(obj_name, obj_type)
+            val2: str = gen_expr(val_node, elem_t)
+            emit_store(val2, ptr_val, elem_mt)
+            return
+
+    ftype2: str = get_field_type(obj_type, field_name)
+    fidx2: i32 = get_field_index(obj_type, field_name)
+    mt2: str = mlir_type(ftype2)
+
+    # Load object pointer
+    obj_ptr: str = gen_var_load(obj_name, obj_type)
+
+    # GEP to field
+    struct_mlir2: str = get_struct_mlir_type(obj_type)
+    fp2: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(fp2, " = llvm.getelementptr "), obj_ptr), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx2 as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir2))))
+
+    # Generate and store value
+    val3: str = gen_expr(val_node, ftype2)
+    emit_store(val3, fp2, mt2)
+
+# ==========================================
+# Static Field Assignment (Struct.field = value)
+# ==========================================
+fun gen_static_field_assignment(node: i64):
+    sname: str = Memory.read_i64(node + 8) as str
+    fname: str = Memory.read_i64(node + 16) as str
+    val_node: i64 = Memory.read_i64(node + 24)
+
+    full: str = Str.concat(Str.concat(sname, "__"), fname)
+    ga: str = emit_addr_of(full)
+    # Infer type (TODO: look up from static fields registry)
+    val: str = gen_expr(val_node, "i64")
+    emit_store(val, ga, "i64")
+
+# ==========================================
+# Block Always Returns? (for branch optimization)
+# ==========================================
+fun block_always_returns(stmts: i64) -> i32:
+    if stmts == 0:
+        return 0
+    sc: i32 = nl_count(stmts)
+    if sc == 0:
+        return 0
+    last: i64 = nl_get(stmts, sc - 1)
+    lt: i32 = nd_type(last)
+    if lt == NODE_RETURN or lt == NODE_BREAK or lt == NODE_CONTINUE:
+        return 1
+    if lt == NODE_IF:
+        # Both branches must return
+        then_body: i64 = Memory.read_i64(last + 16)
+        else_body: i64 = Memory.read_i64(last + 24)
+        if else_body == 0:
+            return 0
+        if block_always_returns(then_body) == 1 and block_always_returns(else_body) == 1:
+            return 1
+    return 0
+
+# ==========================================
+# If Statement
+# ==========================================
+fun gen_if_stmt(node: i64):
+    cond_node: i64 = Memory.read_i64(node + 8)
+    then_body: i64 = Memory.read_i64(node + 16)
+    else_body: i64 = Memory.read_i64(node + 24)
+
+    then_label: str = new_label()
+    end_label: str = new_label()
+    else_label: str = ""
+    if else_body != 0:
+        else_label = new_label()
+
+    # Generate condition
+    ct: str = infer_expr_type(cond_node)
+    cond_val: str = gen_expr(cond_node, ct)
+
+    # Convert to bool if not already
+    if str_eq(ct, "bool") == 0 and str_eq(ct, "i1") == 0:
+        mt: str = mlir_type(ct)
+        zero: str = new_tmp()
+        bool_r: str = new_tmp()
+        if is_float_type(ct) == 1:
+            emit_ind(Str.concat(Str.concat(Str.concat(zero, " = llvm.mlir.constant(0.0 : "), mt), Str.concat(") : ", mt)))
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(bool_r, " = llvm.fcmp \"une\" "), cond_val), Str.concat(", ", zero)), Str.concat(" : ", mt)))
+        elif str_eq(mt, "!llvm.ptr") == 1:
+            emit_ind(Str.concat(zero, " = llvm.mlir.zero : !llvm.ptr"))
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(bool_r, " = llvm.icmp \"ne\" "), cond_val), Str.concat(", ", zero)), " : !llvm.ptr"))
+        else:
+            emit_ind(Str.concat(Str.concat(Str.concat(zero, " = llvm.mlir.constant(0 : "), mt), Str.concat(") : ", mt)))
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(bool_r, " = llvm.icmp \"ne\" "), cond_val), Str.concat(", ", zero)), Str.concat(" : ", mt)))
+        cond_val = bool_r
+
+    # Conditional branch
+    if else_body != 0:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cond_val), ", "), then_label), Str.concat(", ", else_label)))
+    else:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cond_val), ", "), then_label), Str.concat(", ", end_label)))
+
+    # Then block
+    emit(Str.concat("  ", Str.concat(then_label, ":")))
+    gen_block(then_body)
+    then_ret: i32 = block_always_returns(then_body)
+    if then_ret == 0:
+        emit_ind(Str.concat("llvm.br ", end_label))
+
+    # Else block
+    else_ret: i32 = 0
+    if else_body != 0:
+        emit(Str.concat("  ", Str.concat(else_label, ":")))
+        gen_block(else_body)
+        else_ret = block_always_returns(else_body)
+        if else_ret == 0:
+            emit_ind(Str.concat("llvm.br ", end_label))
+
+    # End block (if at least one branch doesn't return)
+    if then_ret == 0 or else_ret == 0:
+        emit(Str.concat("  ", Str.concat(end_label, ":")))
+
+# ==========================================
+# While Loop
+# ==========================================
+fun gen_while_loop(node: i64):
+    cond_node: i64 = Memory.read_i64(node + 8)
+    body: i64 = Memory.read_i64(node + 16)
+
+    cond_label: str = new_label()
+    body_label: str = new_label()
+    end_label: str = new_label()
+
+    # Save break/continue labels
+    old_break: str = g_break_label
+    old_cont: str = g_continue_label
+    g_break_label = end_label
+    g_continue_label = cond_label
+
+    # Jump to condition
+    emit_ind(Str.concat("llvm.br ", cond_label))
+
+    # Condition block
+    emit(Str.concat("  ", Str.concat(cond_label, ":")))
+    ct: str = infer_expr_type(cond_node)
+    cond_val: str = gen_expr(cond_node, ct)
+    # Convert to bool
+    if str_eq(ct, "bool") == 0 and str_eq(ct, "i1") == 0:
+        mt: str = mlir_type(ct)
+        z: str = new_tmp()
+        br: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(z, " = llvm.mlir.constant(0 : "), mt), Str.concat(") : ", mt)))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(br, " = llvm.icmp \"ne\" "), cond_val), Str.concat(", ", z)), Str.concat(" : ", mt)))
+        cond_val = br
+
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cond_val), ", "), body_label), Str.concat(", ", end_label)))
+
+    # Body block
+    emit(Str.concat("  ", Str.concat(body_label, ":")))
+    gen_block(body)
+    if block_always_returns(body) == 0:
+        emit_ind(Str.concat("llvm.br ", cond_label))
+
+    # End block
+    emit(Str.concat("  ", Str.concat(end_label, ":")))
+
+    # Restore break/continue
+    g_break_label = old_break
+    g_continue_label = old_cont
+
+# ==========================================
+# For Loop (C-style: init, cond, update)
+# ==========================================
+fun gen_for_loop(node: i64):
+    init_node: i64 = Memory.read_i64(node + 8)
+    cond_node: i64 = Memory.read_i64(node + 16)
+    update_node: i64 = Memory.read_i64(node + 24)
+    body: i64 = Memory.read_i64(node + 32)
+
+    cond_label: str = new_label()
+    body_label: str = new_label()
+    update_label: str = new_label()
+    end_label: str = new_label()
+
+    old_break: str = g_break_label
+    old_cont: str = g_continue_label
+    g_break_label = end_label
+    g_continue_label = update_label
+
+    # Init
+    push_var_scope()
+    if init_node != 0:
+        gen_statement(init_node)
+
+    # Jump to condition
+    emit_ind(Str.concat("llvm.br ", cond_label))
+
+    # Condition
+    emit(Str.concat("  ", Str.concat(cond_label, ":")))
+    ct: str = infer_expr_type(cond_node)
+    cv: str = gen_expr(cond_node, ct)
+    if str_eq(ct, "bool") == 0 and str_eq(ct, "i1") == 0:
+        mt: str = mlir_type(ct)
+        z: str = new_tmp()
+        br: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(z, " = llvm.mlir.constant(0 : "), mt), Str.concat(") : ", mt)))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(br, " = llvm.icmp \"ne\" "), cv), Str.concat(", ", z)), Str.concat(" : ", mt)))
+        cv = br
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cv), ", "), body_label), Str.concat(", ", end_label)))
+
+    # Body
+    emit(Str.concat("  ", Str.concat(body_label, ":")))
+    gen_block(body)
+    if block_always_returns(body) == 0:
+        emit_ind(Str.concat("llvm.br ", update_label))
+
+    # Update
+    emit(Str.concat("  ", Str.concat(update_label, ":")))
+    if update_node != 0:
+        gen_statement(update_node)
+    emit_ind(Str.concat("llvm.br ", cond_label))
+
+    # End
+    emit(Str.concat("  ", Str.concat(end_label, ":")))
+    pop_var_scope()
+
+    g_break_label = old_break
+    g_continue_label = old_cont
+
+# ==========================================
+# For-Each Loop
+# ==========================================
+fun gen_foreach_loop(node: i64):
+    item_var: str = Memory.read_i64(node + 8) as str
+    col_expr: i64 = Memory.read_i64(node + 24)
+    body: i64 = Memory.read_i64(node + 32)
+
+    cond_label: str = new_label()
+    body_label: str = new_label()
+    end_label: str = new_label()
+
+    old_break: str = g_break_label
+    old_cont: str = g_continue_label
+    g_break_label = end_label
+    g_continue_label = cond_label
+
+    push_var_scope()
+
+    # Get collection pointer
+    col_ptr: str = gen_expr(col_expr, "ptr")
+
+    # Load size from collection header
+    size_val: str = emit_load(col_ptr, "i32")
+
+    # Create index variable
+    idx_alloc: str = emit_alloca("i32")
+    idx_name: str = str_from_range(idx_alloc, 1, Memory.strlen(idx_alloc))
+    z: str = emit_const_i32(0)
+    emit_store(z, idx_alloc, "i32")
+
+    # Create item variable
+    item_alloc: str = emit_alloca("i64")
+    item_name: str = str_from_range(item_alloc, 1, Memory.strlen(item_alloc))
+    add_variable(item_var, item_name, "i64", 0)
+
+    emit_ind(Str.concat("llvm.br ", cond_label))
+
+    # Condition: idx < size
+    emit(Str.concat("  ", Str.concat(cond_label, ":")))
+    cur_idx: str = emit_load(idx_alloc, "i32")
+    cmp: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(cmp, " = llvm.icmp \"slt\" "), cur_idx), Str.concat(", ", size_val)), " : i32"))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cmp), ", "), body_label), Str.concat(", ", end_label)))
+
+    # Body
+    emit(Str.concat("  ", Str.concat(body_label, ":")))
+
+    # Load current element (offset = 16 + idx * elem_size)
+    cur_idx2: str = emit_load(idx_alloc, "i32")
+    idx_i64: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(idx_i64, " = llvm.sext "), cur_idx2), " : i32 to i64"))
+    c8: str = emit_const_i64(8)
+    off: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off, " = llvm.mul "), idx_i64), Str.concat(", ", c8)), " : i64"))
+    c16: str = emit_const_i64(16)
+    off2: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
+    ep: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat(", ", Str.concat(off2, " : !llvm.ptr, i64"))))
+    elem_val: str = emit_load(ep, "i64")
+    emit_store(elem_val, item_alloc, "i64")
+
+    gen_block(body)
+
+    # Increment index
+    cur_idx3: str = emit_load(idx_alloc, "i32")
+    c1: str = emit_const_i32(1)
+    next_idx: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(next_idx, " = llvm.add "), cur_idx3), Str.concat(", ", c1)), " : i32"))
+    emit_store(next_idx, idx_alloc, "i32")
+    emit_ind(Str.concat("llvm.br ", cond_label))
+
+    # End
+    emit(Str.concat("  ", Str.concat(end_label, ":")))
+    pop_var_scope()
+
+    g_break_label = old_break
+    g_continue_label = old_cont
+
+# ==========================================
+# Return Statement
+# ==========================================
+fun gen_return(node: i64):
+    val_node: i64 = Memory.read_i64(node + 8)
+    if val_node == 0:
+        emit_ind("llvm.return")
+        return
+
+    ret_type: str = g_cur_fn_ret_type
+    val: str = gen_expr(val_node, ret_type)
+    vt: str = infer_expr_type(val_node)
+    if str_eq(vt, ret_type) == 0 and str_eq(vt, "unknown") == 0:
+        val = implicit_cast(val, vt, ret_type)
+
+    mt: str = mlir_type(ret_type)
+    emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", val), " : "), mt))
+
+# ==========================================
+# Break / Continue
+# ==========================================
+fun gen_break():
+    if str_eq(g_break_label, "") == 0:
+        emit_ind(Str.concat("llvm.br ", g_break_label))
+
+fun gen_continue():
+    if str_eq(g_continue_label, "") == 0:
+        emit_ind(Str.concat("llvm.br ", g_continue_label))
+
+# ==========================================
+# Match Statement (as if-else chain)
+# ==========================================
+fun gen_match_stmt(node: i64):
+    expr_node: i64 = Memory.read_i64(node + 8)
+    cases: i64 = Memory.read_i64(node + 16)
+    else_body: i64 = Memory.read_i64(node + 24)
+
+    # Generate match expression
+    et: str = infer_expr_type(expr_node)
+    match_val: str = gen_expr(expr_node, et)
+    mt: str = mlir_type(et)
+
+    end_label: str = new_label()
+    cc: i32 = nl_count(cases)
+    i: i32 = 0
+
+    while i < cc:
+        case_node: i64 = nl_get(cases, i)
+        patterns: i64 = Memory.read_i64(case_node + 8)
+        body: i64 = Memory.read_i64(case_node + 16)
+        guard: i64 = Memory.read_i64(case_node + 24)
+
+        then_lbl: str = new_label()
+        next_lbl: str = new_label()
+
+        # Generate pattern comparison (first pattern for now)
+        pc: i32 = nl_count(patterns)
+        skip_cmp: i32 = 0
+        pat_val: str = ""
+        if pc > 0:
+            pat: i64 = nl_get(patterns, 0)
+            pat_nt: i32 = nd_type(pat)
+            if pat_nt == NODE_PATTERN:
+                pptype: str = Memory.read_i64(pat + 8) as str
+                if str_eq(pptype, "enum") == 1:
+                    pp_ename: str = Memory.read_i64(pat + 56) as str
+                    pp_vname: str = Memory.read_i64(pat + 64) as str
+                    pp_idx: i32 = get_enum_value_index(pp_ename, pp_vname)
+                    pat_val = emit_const_i32(pp_idx)
+                elif str_eq(pptype, "value") == 1:
+                    pp_str_val: str = Memory.read_i64(pat + 16) as str
+                    pp_tmp: str = new_tmp()
+                    if str_eq(mt, "!llvm.ptr") == 1:
+                        pat_val = gen_expr(pat, et)
+                    else:
+                        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_tmp, " = llvm.mlir.constant("), pp_str_val), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+                        pat_val = pp_tmp
+                elif str_eq(pptype, "range") == 1:
+                    pp_start_str: str = Memory.read_i64(pat + 24) as str
+                    pp_end_str: str = Memory.read_i64(pat + 32) as str
+                    pp_start_t: str = new_tmp()
+                    pp_end_t: str = new_tmp()
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_start_t, " = llvm.mlir.constant("), pp_start_str), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_end_t, " = llvm.mlir.constant("), pp_end_str), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+                    pp_ge: str = new_tmp()
+                    pp_le: str = new_tmp()
+                    pp_and: str = new_tmp()
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_ge, " = llvm.icmp \"sge\" "), match_val), Str.concat(", ", pp_start_t)), Str.concat(" : ", mt)))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_le, " = llvm.icmp \"sle\" "), match_val), Str.concat(", ", pp_end_t)), Str.concat(" : ", mt)))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_and, " = llvm.and "), pp_ge), Str.concat(", ", pp_le)), " : i1"))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", pp_and), ", "), then_lbl), Str.concat(", ", next_lbl)))
+                    skip_cmp = 1
+                else:
+                    pat_val = emit_const_i32(0)
+            else:
+                pat_val = gen_expr(pat, et)
+
+        if skip_cmp == 0:
+            if pc > 0:
+                cmp: str = new_tmp()
+                emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(cmp, " = llvm.icmp \"eq\" "), match_val), Str.concat(", ", pat_val)), " : "), mt))
+                emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cmp), ", "), then_lbl), Str.concat(", ", next_lbl)))
+            else:
+                emit_ind(Str.concat("llvm.br ", then_lbl))
+
+        emit(Str.concat("  ", Str.concat(then_lbl, ":")))
+        gen_block(body)
+        if block_always_returns(body) == 0:
+            emit_ind(Str.concat("llvm.br ", end_label))
+
+        emit(Str.concat("  ", Str.concat(next_lbl, ":")))
+        i = i + 1
+
+    # Else body
+    if else_body != 0:
+        gen_block(else_body)
+        if block_always_returns(else_body) == 0:
+            emit_ind(Str.concat("llvm.br ", end_label))
+    else:
+        emit_ind(Str.concat("llvm.br ", end_label))
+
+    emit(Str.concat("  ", Str.concat(end_label, ":")))
+
+# ==========================================
+# Match as Expression (returns value)
+# ==========================================
+fun gen_match_expr(node: i64, expected: str) -> str:
+    # For match used as expression, generate as if-else chain with phi-like alloca
+    result_alloc: str = emit_alloca(mlir_type(expected))
+
+    expr_node: i64 = Memory.read_i64(node + 8)
+    cases: i64 = Memory.read_i64(node + 16)
+    else_body: i64 = Memory.read_i64(node + 24)
+
+    et: str = infer_expr_type(expr_node)
+    match_val: str = gen_expr(expr_node, et)
+    mt: str = mlir_type(et)
+    end_label: str = new_label()
+    cc: i32 = nl_count(cases)
+    i: i32 = 0
+
+    while i < cc:
+        case_node: i64 = nl_get(cases, i)
+        patterns: i64 = Memory.read_i64(case_node + 8)
+        body: i64 = Memory.read_i64(case_node + 16)
+
+        then_lbl: str = new_label()
+        next_lbl: str = new_label()
+
+        pc: i32 = nl_count(patterns)
+        skip_cmp2: i32 = 0
+        pat_val: str = ""
+        if pc > 0:
+            pat: i64 = nl_get(patterns, 0)
+            pat_nt2: i32 = nd_type(pat)
+            if pat_nt2 == NODE_PATTERN:
+                pptype2: str = Memory.read_i64(pat + 8) as str
+                if str_eq(pptype2, "enum") == 1:
+                    pp_ename2: str = Memory.read_i64(pat + 56) as str
+                    pp_vname2: str = Memory.read_i64(pat + 64) as str
+                    pp_idx2: i32 = get_enum_value_index(pp_ename2, pp_vname2)
+                    pat_val = emit_const_i32(pp_idx2)
+                elif str_eq(pptype2, "value") == 1:
+                    pp_str_val2: str = Memory.read_i64(pat + 16) as str
+                    pp_tmp2: str = new_tmp()
+                    if str_eq(mt, "!llvm.ptr") == 1:
+                        pat_val = gen_expr(pat, et)
+                    else:
+                        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_tmp2, " = llvm.mlir.constant("), pp_str_val2), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+                        pat_val = pp_tmp2
+                elif str_eq(pptype2, "range") == 1:
+                    pp_start_str2: str = Memory.read_i64(pat + 24) as str
+                    pp_end_str2: str = Memory.read_i64(pat + 32) as str
+                    pp_start_t2: str = new_tmp()
+                    pp_end_t2: str = new_tmp()
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_start_t2, " = llvm.mlir.constant("), pp_start_str2), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_end_t2, " = llvm.mlir.constant("), pp_end_str2), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
+                    pp_ge2: str = new_tmp()
+                    pp_le2: str = new_tmp()
+                    pp_and2: str = new_tmp()
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_ge2, " = llvm.icmp \"sge\" "), match_val), Str.concat(", ", pp_start_t2)), Str.concat(" : ", mt)))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_le2, " = llvm.icmp \"sle\" "), match_val), Str.concat(", ", pp_end_t2)), Str.concat(" : ", mt)))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(pp_and2, " = llvm.and "), pp_ge2), Str.concat(", ", pp_le2)), " : i1"))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", pp_and2), ", "), then_lbl), Str.concat(", ", next_lbl)))
+                    skip_cmp2 = 1
+                else:
+                    pat_val = emit_const_i32(0)
+            else:
+                pat_val = gen_expr(pat, et)
+
+        if skip_cmp2 == 0:
+            if pc > 0:
+                cmp: str = new_tmp()
+                emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(cmp, " = llvm.icmp \"eq\" "), match_val), Str.concat(", ", pat_val)), " : "), mt))
+                emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cmp), ", "), then_lbl), Str.concat(", ", next_lbl)))
+
+        emit(Str.concat("  ", Str.concat(then_lbl, ":")))
+        gen_block(body)
+        emit_ind(Str.concat("llvm.br ", end_label))
+
+        emit(Str.concat("  ", Str.concat(next_lbl, ":")))
+        i = i + 1
+
+    if else_body != 0:
+        gen_block(else_body)
+    emit_ind(Str.concat("llvm.br ", end_label))
+
+    emit(Str.concat("  ", Str.concat(end_label, ":")))
+    return emit_load(result_alloc, mlir_type(expected))
+
+# ==========================================
+# Variable Declaration
+# (moved here from codegen_decl.dlt to avoid forward-ref bug)
+# ==========================================
+fun gen_var_decl(node: i64):
+    vtype: str = Memory.read_i64(node + 8) as str
+    name: str = Memory.read_i64(node + 16) as str
+    val_node: i64 = Memory.read_i64(node + 24)
+
+    # Global vars: init value is stored to the global address (inline, preserving order)
+    if is_global_var(name) == 1 and g_in_function == 0:
+        if val_node != 0:
+            mn: str = get_mlir_name(name)
+            vt: str = get_var_type(name)
+            mt2: str = mlir_type(vt)
+            actual_t: str = infer_expr_type(val_node)
+            gval: str = gen_expr(val_node, vt)
+            if str_eq(actual_t, vt) == 0 and str_eq(actual_t, "unknown") == 0:
+                gval = implicit_cast(gval, actual_t, vt)
+            ga: str = emit_addr_of(mn)
+            emit_store(gval, ga, mt2)
+        return
+
+    # Fix: parser stores "type" for bool/int/float/string keywords — use inferred type
+    if str_eq(vtype, "type") == 1:
+        if val_node != 0:
+            vtype = infer_expr_type(val_node)
+
+    mt: str = mlir_type(vtype)
+
+    if val_node != 0:
+        # Allocate and store value
+        alloc: str = emit_alloca(mt)
+        alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
+        add_variable(name, alloc_name, vtype, 0)
+
+        # Infer actual type and generate expression
+        actual_type: str = infer_expr_type(val_node)
+        value_result: str = gen_expr(val_node, vtype)
+
+        # Implicit cast if needed
+        if str_eq(actual_type, vtype) == 0 and str_eq(actual_type, "unknown") == 0:
+            value_result = implicit_cast(value_result, actual_type, vtype)
+
+        emit_store(value_result, alloc, mt)
+    else:
+        # No initial value — alloca + zero initialize
+        alloc2: str = emit_alloca(mt)
+        alloc_name2: str = str_from_range(alloc2, 1, Memory.strlen(alloc2))
+        add_variable(name, alloc_name2, vtype, 0)
+
+        if is_int_type(vtype) == 1:
+            default_val: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(default_val, " = llvm.mlir.constant(0 : "), mt), Str.concat(") : ", mt)))
+            emit_store(default_val, alloc2, mt)
+        elif is_float_type(vtype) == 1:
+            default_val2: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(default_val2, " = llvm.mlir.constant(0.0 : "), mt), Str.concat(") : ", mt)))
+            emit_store(default_val2, alloc2, mt)
+        elif str_eq(mt, "!llvm.ptr") == 1:
+            default_val3: str = emit_zero_ptr()
+            emit_store(default_val3, alloc2, mt)
+
+# ==========================================
+# Statement Dispatch
+# (moved here from codegen_main.dlt to avoid forward-ref bug)
+# ==========================================
+fun gen_statement(node: i64):
+    if node == 0:
+        return
+    nt: i32 = nd_type(node)
+
+    if nt == NODE_VAR_DECL:
+        gen_var_decl(node)
+    elif nt == NODE_ASSIGN:
+        gen_assignment(node)
+    elif nt == NODE_FIELD_ASSIGN:
+        gen_field_assignment(node)
+    elif nt == NODE_STATIC_FIELD_ASSIGN:
+        gen_static_field_assignment(node)
+    elif nt == NODE_IF:
+        gen_if_stmt(node)
+    elif nt == NODE_WHILE:
+        gen_while_loop(node)
+    elif nt == NODE_FOR:
+        gen_for_loop(node)
+    elif nt == NODE_FOR_EACH:
+        gen_foreach_loop(node)
+    elif nt == NODE_RETURN:
+        gen_return(node)
+    elif nt == NODE_BREAK:
+        gen_break()
+    elif nt == NODE_CONTINUE:
+        gen_continue()
+    elif nt == NODE_PASS:
+        # No-op
+        return
+    elif nt == NODE_FUN_CALL:
+        gen_fun_call(node)
+    elif nt == NODE_STATIC_METHOD:
+        gen_static_method_call(node)
+    elif nt == NODE_INST_METHOD:
+        gen_instance_method_call(node)
+    elif nt == NODE_SUPER_METHOD:
+        gen_super_method_call(node)
+    elif nt == NODE_MATCH:
+        gen_match_stmt(node)
+    elif nt == NODE_IMPORT:
+        # Imports already processed
+        return
+    elif nt == NODE_ARRAY_DECL:
+        gen_var_decl(node)
+    elif nt == NODE_LIST_DECL:
+        gen_var_decl(node)
+    elif nt == NODE_MAP_DECL:
+        gen_var_decl(node)
+
+# ==========================================
+# Generate a Block of Statements
+# ==========================================
+fun gen_block(stmts: i64):
+    if stmts == 0:
+        return
+    sc: i32 = nl_count(stmts)
+    i: i32 = 0
+    while i < sc:
+        gen_statement(nl_get(stmts, i))
+        i = i + 1

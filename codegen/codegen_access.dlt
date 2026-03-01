@@ -1,0 +1,371 @@
+##############################
+# MLIR Codegen Access
+# Field access, static/instance method calls, array access,
+# function calls, super method calls
+# Depends on: codegen_core.dlt, codegen_types.dlt, codegen_expr.dlt
+##############################
+
+# ==========================================
+# Field Access (obj.field)
+# ==========================================
+fun gen_field_access(node: i64) -> str:
+    obj_name: str = Memory.read_i64(node + 8) as str
+    field_name: str = Memory.read_i64(node + 16) as str
+
+    # Check if this is enum access (e.g., Direction.UP)
+    if is_enum_type(obj_name) == 1:
+        eidx: i32 = get_enum_value_index(obj_name, field_name)
+        return emit_const_i32(eidx)
+
+    obj_type: str = get_var_type(obj_name)
+
+    # ptr[T].value — dereference typed pointer
+    if str_eq(field_name, "value") == 1:
+        if is_ptr_type(obj_type) == 1:
+            elem_t: str = ptr_elem_type(obj_type)
+            elem_mt: str = mlir_type(elem_t)
+            ptr_val: str = gen_var_load(obj_name, obj_type)
+            result: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(result, " = llvm.load "), ptr_val), " : !llvm.ptr -> "), elem_mt))
+            return result
+
+    fidx: i32 = get_field_index(obj_type, field_name)
+    ftype: str = get_field_type(obj_type, field_name)
+    mt: str = mlir_type(ftype)
+
+    # Load object pointer
+    obj_ptr: str = gen_var_load(obj_name, obj_type)
+
+    # GEP to field
+    struct_mlir: str = get_struct_mlir_type(obj_type)
+    fp: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(fp, " = llvm.getelementptr "), obj_ptr), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir))))
+
+    # Load field value
+    val: str = emit_load(fp, mt)
+    return val
+
+# ==========================================
+# Self Field Access (self.field in methods)
+# ==========================================
+fun gen_self_field_access(node: i64) -> str:
+    field_name: str = Memory.read_i64(node + 8) as str
+    sname: str = g_cur_method_struct
+
+    fidx: i32 = get_field_index(sname, field_name)
+    ftype: str = get_field_type(sname, field_name)
+    mt: str = mlir_type(ftype)
+
+    struct_mlir: str = get_struct_mlir_type(sname)
+    fp: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(fp, " = llvm.getelementptr %self[0, "), Str.concat(Str.concat(Convert.i64_to_str(fidx as i64), "] : (!llvm.ptr) -> !llvm.ptr, "), struct_mlir)))
+
+    val: str = emit_load(fp, mt)
+    return val
+
+# ==========================================
+# Static Field Access (Struct.field)
+# ==========================================
+fun gen_static_field_access(node: i64) -> str:
+    sname: str = Memory.read_i64(node + 8) as str
+    fname: str = Memory.read_i64(node + 16) as str
+
+    # Check if this is enum access (e.g., Direction.UP)
+    if is_enum_type(sname) == 1:
+        eidx: i32 = get_enum_value_index(sname, fname)
+        return emit_const_i32(eidx)
+
+    full: str = Str.concat(Str.concat(sname, "__"), fname)
+    ga: str = emit_addr_of(full)
+    # TODO: look up type from static fields registry
+    val: str = emit_load(ga, "i64")
+    return val
+
+# ==========================================
+# Function Call
+# ==========================================
+fun gen_fun_call(node: i64) -> str:
+    fname: str = Memory.read_i64(node + 8) as str
+    args_list: i64 = Memory.read_i64(node + 16)
+
+    # Check if it's actually a struct instantiation
+    if is_struct_type(fname) == 1:
+        return gen_struct_instantiation(node)
+
+    # Resolve overloaded function name
+    ac: i32 = 0
+    if args_list != 0:
+        ac = nl_count(args_list)
+
+    # Build arg types string for overload resolution
+    arg_types_str: str = ""
+    ati: i32 = 0
+    while ati < ac:
+        anode_t: i64 = nl_get(args_list, ati)
+        at_raw: str = infer_expr_type(anode_t)
+        at_norm: str = normalize_type(at_raw)
+        if ati > 0:
+            arg_types_str = Str.concat(arg_types_str, ",")
+        arg_types_str = Str.concat(arg_types_str, at_norm)
+        ati = ati + 1
+
+    call_name: str = resolve_overload(fname, arg_types_str)
+
+    # Build argument list
+    arg_str: str = ""
+    type_str: str = ""
+
+    i: i32 = 0
+    while i < ac:
+        anode: i64 = nl_get(args_list, i)
+        at: str = infer_expr_type(anode)
+        if str_eq(at, "unknown") == 1:
+            at = "i64"
+
+        # Check if function has registered param types (e.g., extern)
+        expected_pt: str = get_fun_param_type(call_name, i)
+        if str_eq(expected_pt, "") == 0:
+            av: str = gen_expr(anode, expected_pt)
+            if str_eq(at, expected_pt) == 0 and str_eq(at, "unknown") == 0:
+                av = implicit_cast(av, at, expected_pt)
+            amt: str = mlir_type(expected_pt)
+            if i > 0:
+                arg_str = Str.concat(arg_str, ", ")
+                type_str = Str.concat(type_str, ", ")
+            arg_str = Str.concat(arg_str, av)
+            type_str = Str.concat(type_str, amt)
+        else:
+            av2: str = gen_expr(anode, at)
+            amt2: str = mlir_type(at)
+            if i > 0:
+                arg_str = Str.concat(arg_str, ", ")
+                type_str = Str.concat(type_str, ", ")
+            arg_str = Str.concat(arg_str, av2)
+            type_str = Str.concat(type_str, amt2)
+        i = i + 1
+
+    # Get return type (use mangled name for lookup)
+    ret_type: str = get_fun_ret_type(call_name)
+    ret_mt: str = ""
+    if str_eq(ret_type, "unknown") == 0 and str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
+        ret_mt = mlir_type(ret_type)
+
+    # Emit call (using mangled name)
+    if str_eq(ret_mt, "") == 1:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.call @", call_name), "("), arg_str), Str.concat(") : (", Str.concat(type_str, ") -> ()"))))
+        return ""
+    else:
+        tmp: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.call @"), call_name), "("), arg_str), Str.concat(") : (", Str.concat(type_str, Str.concat(") -> ", ret_mt)))))
+        return tmp
+
+# ==========================================
+# Static Method Call (Struct.method(...))
+# ==========================================
+fun gen_static_method_call(node: i64) -> str:
+    sname: str = Memory.read_i64(node + 8) as str
+    mname: str = Memory.read_i64(node + 16) as str
+    args_list: i64 = Memory.read_i64(node + 24)
+
+    # Mangled name: StructName_methodName
+    mangled: str = Str.concat(Str.concat(sname, "_"), mname)
+
+    # Build argument list
+    arg_str: str = ""
+    type_str: str = ""
+    ac: i32 = 0
+    if args_list != 0:
+        ac = nl_count(args_list)
+
+    # Look up method node to get param types
+    method_node: i64 = find_impl_method(sname, mname)
+    method_params: i64 = 0
+    if method_node != 0:
+        method_params = Memory.read_i64(method_node + 16)
+
+    i: i32 = 0
+    while i < ac:
+        anode: i64 = nl_get(args_list, i)
+        at: str = infer_expr_type(anode)
+        if str_eq(at, "unknown") == 1:
+            at = "i64"
+
+        # Get expected param type from method definition
+        expected_pt: str = ""
+        if method_params != 0:
+            if i < nl_count(method_params):
+                mp_node: i64 = nl_get(method_params, i)
+                expected_pt = Memory.read_i64(mp_node + 16) as str
+
+        if str_eq(expected_pt, "") == 0:
+            av: str = gen_expr(anode, expected_pt)
+            amt: str = mlir_type(expected_pt)
+            if str_eq(at, expected_pt) == 0:
+                av = implicit_cast(av, at, expected_pt)
+            if i > 0:
+                arg_str = Str.concat(arg_str, ", ")
+                type_str = Str.concat(type_str, ", ")
+            arg_str = Str.concat(arg_str, av)
+            type_str = Str.concat(type_str, amt)
+        else:
+            av2: str = gen_expr(anode, at)
+            amt2: str = mlir_type(at)
+            if i > 0:
+                arg_str = Str.concat(arg_str, ", ")
+                type_str = Str.concat(type_str, ", ")
+            arg_str = Str.concat(arg_str, av2)
+            type_str = Str.concat(type_str, amt2)
+        i = i + 1
+
+    # Get return type from impl method or function signature
+    ret_type: str = get_fun_ret_type(mangled)
+    if str_eq(ret_type, "unknown") == 1:
+        # Try full name
+        full: str = Str.concat(Str.concat(sname, "."), mname)
+        ret_type = get_fun_ret_type(full)
+
+    ret_mt: str = ""
+    if str_eq(ret_type, "unknown") == 0 and str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
+        ret_mt = mlir_type(ret_type)
+
+    if str_eq(ret_mt, "") == 1:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.call @", mangled), "("), arg_str), Str.concat(") : (", Str.concat(type_str, ") -> ()"))))
+        return ""
+    else:
+        tmp: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.call @"), mangled), "("), arg_str), Str.concat(") : (", Str.concat(type_str, Str.concat(") -> ", ret_mt)))))
+        return tmp
+
+# ==========================================
+# Instance Method Call (obj.method(...))
+# ==========================================
+fun gen_instance_method_call(node: i64) -> str:
+    obj_name: str = Memory.read_i64(node + 8) as str
+    mname: str = Memory.read_i64(node + 16) as str
+    args_list: i64 = Memory.read_i64(node + 24)
+
+    # Get struct type
+    obj_type: str = ""
+    obj_ptr: str = ""
+    if str_eq(obj_name, "self") == 1:
+        obj_type = g_cur_method_struct
+        obj_ptr = "%self"
+    else:
+        obj_type = get_var_type(obj_name)
+        obj_ptr = gen_var_load(obj_name, obj_type)
+
+    # Mangled name
+    mangled: str = Str.concat(Str.concat(obj_type, "_"), mname)
+
+    # Build argument list (self + args)
+    arg_str: str = obj_ptr
+    type_str: str = "!llvm.ptr"
+
+    ac: i32 = 0
+    if args_list != 0:
+        ac = nl_count(args_list)
+
+    i: i32 = 0
+    while i < ac:
+        anode: i64 = nl_get(args_list, i)
+        at: str = infer_expr_type(anode)
+        if str_eq(at, "unknown") == 1:
+            at = "i64"
+        av: str = gen_expr(anode, at)
+        amt: str = mlir_type(at)
+
+        arg_str = Str.concat(arg_str, Str.concat(", ", av))
+        type_str = Str.concat(type_str, Str.concat(", ", amt))
+        i = i + 1
+
+    # Get return type
+    ret_type: str = get_fun_ret_type(mangled)
+    ret_mt: str = ""
+    if str_eq(ret_type, "unknown") == 0 and str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
+        ret_mt = mlir_type(ret_type)
+
+    if str_eq(ret_mt, "") == 1:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.call @", mangled), "("), arg_str), Str.concat(") : (", Str.concat(type_str, ") -> ()"))))
+        return ""
+    else:
+        tmp: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.call @"), mangled), "("), arg_str), Str.concat(") : (", Str.concat(type_str, Str.concat(") -> ", ret_mt)))))
+        return tmp
+
+# ==========================================
+# Super Method Call
+# ==========================================
+fun gen_super_method_call(node: i64) -> str:
+    mname: str = Memory.read_i64(node + 8) as str
+    args_list: i64 = Memory.read_i64(node + 16)
+
+    # In Dolet, super calls the base class method
+    # The base struct name should be looked up from inheritance map
+    # For now, call parent_StructName_methodName
+    sname: str = g_cur_method_struct
+    mangled: str = Str.concat(Str.concat(sname, "_"), mname)
+
+    arg_str: str = "%self"
+    type_str: str = "!llvm.ptr"
+
+    ac: i32 = 0
+    if args_list != 0:
+        ac = nl_count(args_list)
+
+    i: i32 = 0
+    while i < ac:
+        anode: i64 = nl_get(args_list, i)
+        at: str = infer_expr_type(anode)
+        if str_eq(at, "unknown") == 1:
+            at = "i64"
+        av: str = gen_expr(anode, at)
+        amt: str = mlir_type(at)
+        arg_str = Str.concat(arg_str, Str.concat(", ", av))
+        type_str = Str.concat(type_str, Str.concat(", ", amt))
+        i = i + 1
+
+    ret_type: str = get_fun_ret_type(mangled)
+    ret_mt: str = ""
+    if str_eq(ret_type, "unknown") == 0 and str_eq(ret_type, "") == 0:
+        ret_mt = mlir_type(ret_type)
+
+    if str_eq(ret_mt, "") == 1:
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.call @", mangled), "("), arg_str), Str.concat(") : (", Str.concat(type_str, ") -> ()"))))
+        return ""
+    tmp: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.call @"), mangled), "("), arg_str), Str.concat(") : (", Str.concat(type_str, Str.concat(") -> ", ret_mt)))))
+    return tmp
+
+# ==========================================
+# Array Access (arr[idx])
+# ==========================================
+fun gen_array_access(node: i64, expected: str) -> str:
+    arr_node: i64 = Memory.read_i64(node + 8)
+    idx_node: i64 = Memory.read_i64(node + 16)
+
+    # Get array pointer
+    arr_ptr: str = gen_expr(arr_node, "ptr")
+
+    # Get index value
+    idx_val: str = gen_expr(idx_node, "i64")
+
+    # Default element type
+    elem_type: str = expected
+    if str_eq(elem_type, "unknown") == 1:
+        elem_type = "i64"
+    mt: str = mlir_type(elem_type)
+
+    # Calculate offset: header (16 bytes) + idx * elem_size
+    elem_size: i32 = get_type_size(elem_type)
+    es: str = emit_const_i64(elem_size as i64)
+    off: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off, " = llvm.mul "), idx_val), Str.concat(", ", es)), " : i64"))
+    c16: str = emit_const_i64(16)
+    off2: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
+
+    ep: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), arr_ptr), Str.concat(", ", Str.concat(off2, " : !llvm.ptr, i64"))))
+
+    val: str = emit_load(ep, mt)
+    return val
