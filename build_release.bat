@@ -3,19 +3,18 @@ setlocal enabledelayedexpansion
 
 REM ============================================
 REM Dolet Release Builder
-REM Assembles a distribution folder from dolet-compiler.
+REM Assembles a distribution folder.
 REM
 REM Usage: build_release.bat [version]
 REM   Example: build_release.bat 0.3
 REM
-REM Expects inside dolet-compiler/:
-REM   tools/    - LLVM tools (clang, lld-link, mlir-translate)
-REM   library/  - Standard library + importable libs
-REM   bootstrap at ..\bootstrap\ for compiling
+REM Before running, make sure you have inside dolet-compiler/:
+REM   bin/doletc.exe  - Compiled compiler
+REM   tools/          - LLVM tools (clang, lld-link, mlir-translate)
+REM   library/        - Standard library + importable libs
 REM ============================================
 
 set "SCRIPT_DIR=%~dp0"
-for %%i in ("%SCRIPT_DIR%..") do set "WORKSPACE=%%~fi\"
 set "VER=%~1"
 if "%VER%"=="" set "VER=0.3"
 
@@ -24,50 +23,36 @@ set "DIST=%SCRIPT_DIR%dist\dolet-v%VER%-windows-x64"
 echo [Dolet Release Builder v%VER%]
 echo.
 
+REM --- Verify doletc.exe ---
+if not exist "%SCRIPT_DIR%bin\doletc.exe" (
+    echo [ERROR] bin\doletc.exe not found!
+    echo.
+    echo   To compile doletc.exe, clone the bootstrap compiler and run:
+    echo     git clone https://github.com/dolet-lang/dolet-bootstrap.git bootstrap
+    echo     cd bootstrap
+    echo     python build.py compile
+    echo.
+    exit /b 1
+)
+
 REM --- Verify tools/ ---
 if not exist "%SCRIPT_DIR%tools\clang.exe" (
-    echo [ERROR] tools/ not found in dolet-compiler!
+    echo [ERROR] tools/ not found!
     echo.
-    echo   Clone the LLVM tools:
+    echo   Clone the LLVM tools into dolet-compiler\tools\:
     echo     git clone https://github.com/dolet-lang/tools.git tools
-    echo.
-    echo   Or copy clang.exe, lld-link.exe, mlir-translate.exe manually.
     echo.
     exit /b 1
 )
 
 REM --- Verify library/ ---
 if not exist "%SCRIPT_DIR%library\std" (
-    echo [ERROR] library/ not found in dolet-compiler!
+    echo [ERROR] library/ not found!
     echo.
-    echo   Clone the Dolet library:
+    echo   Clone the Dolet library into dolet-compiler\library\:
     echo     git clone https://github.com/dolet-lang/library.git library
     echo.
     exit /b 1
-)
-
-REM --- Compile doletc.exe if not found or if --compile flag ---
-if not exist "%SCRIPT_DIR%bin\doletc.exe" (
-    echo [BUILD] doletc.exe not found, compiling...
-    echo.
-    
-    REM Check if bootstrap exists
-    if not exist "%WORKSPACE%bootstrap\build.py" (
-        echo [ERROR] Bootstrap compiler not found!
-        echo.
-        echo   Clone the bootstrap compiler next to dolet-compiler:
-        echo     git clone https://github.com/dolet-lang/dolet-bootstrap.git ..\bootstrap
-        echo.
-        echo   Then run this script again.
-        exit /b 1
-    )
-    
-    python "%WORKSPACE%bootstrap\build.py" compile
-    if errorlevel 1 (
-        echo [ERROR] Compilation failed!
-        exit /b 1
-    )
-    echo.
 )
 
 REM --- Clean previous build ---
@@ -105,7 +90,7 @@ if exist "%SCRIPT_DIR%packages" (
     xcopy /Y /E /I /Q "%SCRIPT_DIR%packages" "%DIST%\packages" >nul
     echo   packages\ [OK]
 ) else (
-    echo   packages\ [SKIP] not found
+    echo   packages\ [SKIP]
 )
 
 REM --- Copy dltc.bat driver ---
