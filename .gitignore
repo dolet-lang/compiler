@@ -16,6 +16,7 @@ build/*.obj
 /tools/
 /library/
 /packages/
+/dist/
 
 # Python
 __pycache__/
