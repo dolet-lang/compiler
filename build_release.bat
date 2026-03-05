@@ -118,6 +118,11 @@ if exist "%SCRIPT_DIR%packages" (
 REM --- Copy dltc.bat driver ---
 copy /Y "%SCRIPT_DIR%dltc.bat" "%DIST%\" >nul 2>nul
 
+REM --- Copy README ---
+if exist "%SCRIPT_DIR%DIST_README.md" (
+    copy /Y "%SCRIPT_DIR%DIST_README.md" "%DIST%\README.md" >nul
+)
+
 echo.
 echo ============================================
 echo [SUCCESS] Release assembled at:
