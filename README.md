@@ -37,7 +37,7 @@ The compiler uses **no C runtime** — all runtime functions (memory, I/O, strin
 Download the latest release from [Releases](https://github.com/dolet-lang/dolet-compiler/releases), extract, and run:
 
 ```batch
-bin\doletc.exe hello.dlt
+bin\doletc.exe hello.dlt -o hello.exe
 hello.exe
 ```
 
@@ -103,8 +103,7 @@ print(a.distance(b))
 ```
 dolet-compiler/
 ├── lexer/                 # Tokenizer
-│   ├── tokenizer.dlt
-│   └── token_types.dlt
+│   └── tokenizer.dlt
 ├── parser/                # Recursive descent parser + AST
 │   ├── ast_nodes.dlt
 │   ├── parser_core.dlt
@@ -126,7 +125,8 @@ dolet-compiler/
 ├── bin/doletc.exe         # Compiled compiler
 ├── build/                 # Build artifacts
 ├── tests/                 # Test files
-└── dltc.bat               # Batch driver script
+├── dltc.bat               # Batch driver script
+└── build_release.bat      # Release builder script
 ```
 
 ## Building from Source
@@ -137,68 +137,62 @@ The compiler is self-hosting, so you need the [bootstrap compiler](https://githu
 
 - **Python 3.8+**
 - **LLVM Tools**: `clang.exe`, `lld-link.exe`, `mlir-translate.exe`
-  - Download from [LLVM Releases](https://github.com/llvm/llvm-project/releases)
 
-### 1. Set Up Workspace
-
-Clone all required repos into a workspace directory:
+### 1. Clone the Compiler
 
 ```batch
-mkdir dolet-workspace
-cd dolet-workspace
+git clone https://github.com/dolet-lang/dolet-compiler.git
+cd dolet-compiler
+```
 
-:: Required
-git clone https://github.com/dolet-lang/dolet-compiler.git dolet-compiler
+### 2. Clone Dependencies (inside dolet-compiler)
+
+```batch
 git clone https://github.com/dolet-lang/dolet-bootstrap.git bootstrap
 git clone https://github.com/dolet-lang/library.git library
+git clone https://github.com/dolet-lang/tools.git tools
 ```
 
-### 2. Add LLVM Tools
-
-Create a `tools/` directory at the workspace root and place the LLVM executables:
+Your folder should look like:
 
 ```
-dolet-workspace/
-├── tools/
+dolet-compiler/
+├── bootstrap/         # Python bootstrap compiler (cloned)
+├── library/           # Standard library & runtime (cloned)
+│   ├── std/           # Runtime, std, sys, core
+│   └── importable/    # Math, net, random
+├── tools/             # LLVM toolchain (cloned)
 │   ├── clang.exe
 │   ├── lld-link.exe
 │   └── mlir-translate.exe
-├── dolet-compiler/
-├── bootstrap/
-└── library/
+├── lexer/             # ← Compiler source (this repo)
+├── parser/
+├── codegen/
+└── driver/
 ```
 
 ### 3. Build the Compiler
 
 ```batch
-cd bootstrap
-python build.py compile
+python bootstrap\build.py compile
 ```
 
-This produces `dolet-compiler/bin/doletc.exe`.
+This produces `bin\doletc.exe`.
 
 ### 4. Verify
 
 ```batch
-dolet-compiler\bin\doletc.exe dolet-compiler\tests\test_print.dlt
-dolet-compiler\tests\test_print.exe
+bin\doletc.exe tests\test_print.dlt -o test.exe
+test.exe
 ```
 
-### Required Workspace Layout
+### 5. Build a Release (optional)
 
-```
-dolet-workspace/
-├── dolet-compiler/    # This repo — compiler source
-├── bootstrap/         # Python bootstrap compiler
-├── library/           # Standard library, runtime & importable libs
-│   ├── std/           # Standard library (runtime, std, sys, core)
-│   ├── importable/    # Importable libraries (math, net, random)
-│   └── system-abi-manager/
-├── tools/             # LLVM toolchain (clang, lld-link, mlir-translate)
-└── packages/          # External packages (optional)
+```batch
+build_release.bat 0.3
 ```
 
-> **Note:** The repos must be cloned with these exact directory names and placed side by side for the compiler to find them.
+This creates `dist\dolet-v0.3-windows-x64.zip` ready for distribution.
 
 ## Self-Hosting Flow
 
@@ -218,7 +212,8 @@ dolet-workspace/
 |------------|-------------|
 | [dolet-compiler](https://github.com/dolet-lang/dolet-compiler) | The Dolet compiler (this repo) |
 | [dolet-bootstrap](https://github.com/dolet-lang/dolet-bootstrap) | Python bootstrap compiler |
-| [dolet-library](https://github.com/dolet-lang/library) | Standard library, runtime & importable libs |
+| [library](https://github.com/dolet-lang/library) | Standard library, runtime & importable libs |
+| [tools](https://github.com/dolet-lang/tools) | LLVM toolchain for Windows x64 |
 
 ## License
 
