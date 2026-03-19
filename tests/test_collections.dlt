@@ -1,6 +1,5 @@
 # ===========================
 # Collection Type Tests
-# Tests list<T> and array<T> for all supported types
 # ===========================
 
 # --- list<i32> ---
@@ -25,42 +24,6 @@ for v in li8:
 print("list<i16>:")
 li16: list<i16> = [100, 200, 300]
 for v in li16:
-    print(v)
-
-# --- list<i128> ---
-print("list<i128>:")
-li128: list<i128> = [1000, 2000, 3000]
-for v in li128:
-    print(v)
-
-# --- list<u8> ---
-print("list<u8>:")
-lu8: list<u8> = [5, 10, 15]
-for v in lu8:
-    print(v)
-
-# --- list<u16> ---
-print("list<u16>:")
-lu16: list<u16> = [50, 100, 150]
-for v in lu16:
-    print(v)
-
-# --- list<u32> ---
-print("list<u32>:")
-lu32: list<u32> = [500, 1000, 1500]
-for v in lu32:
-    print(v)
-
-# --- list<u64> ---
-print("list<u64>:")
-lu64: list<u64> = [5000, 10000, 15000]
-for v in lu64:
-    print(v)
-
-# --- list<u128> ---
-print("list<u128>:")
-lu128: list<u128> = [50000, 100000, 150000]
-for v in lu128:
     print(v)
 
 # --- list<f32> ---

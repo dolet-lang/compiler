@@ -125,7 +125,7 @@ fun gen_expr(node: i64, expected: str) -> str:
 
     # Array/List literal
     if nt == NODE_ARRAY_LIT or nt == NODE_LIST_LIT:
-        return gen_list_literal(node)
+        return gen_list_literal(node, expected)
 
     # Map literal
     if nt == NODE_MAP_LIT:
@@ -679,16 +679,27 @@ fun gen_fstring(node: i64) -> str:
 # ==========================================
 # Array/List Literal
 # ==========================================
-fun gen_list_literal(node: i64) -> str:
+fun gen_list_literal(node: i64, expected: str) -> str:
     # Get elements node_list
     elems: i64 = Memory.read_i64(node + 8)
     ec: i32 = 0
     if elems != 0:
         ec = nl_count(elems)
 
-    # Determine element type
+    # Determine element type from expected type annotation (list[T] -> T)
     elem_type: str = "i32"
-    if ec > 0:
+    exp_len: i64 = Memory.strlen(expected)
+    exp_found: i32 = 0
+    exp_i: i64 = 0
+    while exp_i < exp_len:
+        exp_c: i8 = Memory.read_i8((expected as i64) + exp_i)
+        if exp_c == 91:
+            elem_type = str_from_range(expected, exp_i + 1, exp_len - 1)
+            exp_found = 1
+            exp_i = exp_len
+        exp_i = exp_i + 1
+    # Fallback: infer from first element
+    if exp_found == 0 and ec > 0:
         elem_type = infer_expr_type(nl_get(elems, 0))
 
     # Allocate: header(16 bytes: size + capacity) + data (8 bytes per element)
@@ -711,7 +722,12 @@ fun gen_list_literal(node: i64) -> str:
     mt: str = mlir_type(elem_type)
     i: i32 = 0
     while i < ec:
-        eval: str = gen_expr(nl_get(elems, i), elem_type)
+        e_node: i64 = nl_get(elems, i)
+        eval: str = gen_expr(e_node, elem_type)
+        # Cast from inferred type to target element type if needed
+        inf_type: str = infer_expr_type(e_node)
+        if str_eq(inf_type, elem_type) == 0 and str_eq(inf_type, "unknown") == 0:
+            eval = implicit_cast(eval, inf_type, elem_type)
         offset: i64 = 16 + ((i as i64) * 8)
         off_s: str = emit_const_i64(offset)
         ep: str = new_tmp()
