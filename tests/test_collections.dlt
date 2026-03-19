@@ -1,14 +1,14 @@
-# Test list<i32>
+# Test list<i32> with print
 mylist: list<i32> = [1, 2, 3]
 for item in mylist:
-    IOOps.io_println(Convert.i64_to_str(item))
+    print(item)
 
-# Test list<str>
+# Test list<str> with print
 names: list<str> = ["Ali", "Sara", "Omar"]
 for name in names:
     print(name)
 
-# Test array<i32>
+# Test array<i32> with print
 nums: array<i32> = [10, 20, 30]
 for n in nums:
-    IOOps.io_println(Convert.i64_to_str(n))
+    print(n)

@@ -332,6 +332,26 @@ fun gen_foreach_loop(node: i64):
     # Get collection pointer
     col_ptr: str = gen_expr(col_expr, "ptr")
 
+    # Infer element type from collection type annotation
+    col_type: str = infer_expr_type(col_expr)
+    elem_type: str = "i64"
+    # Extract T from list[T] or array[T] (parser normalizes <> to [])
+    ct_len: i64 = Memory.strlen(col_type)
+    lt_i: i64 = 0
+    while lt_i < ct_len:
+        c: i8 = Memory.read_i8((col_type as i64) + lt_i)
+        if c == 91:
+            # Found '[', extract until ']'
+            elem_type = str_from_range(col_type, lt_i + 1, ct_len - 1)
+            lt_i = ct_len
+        lt_i = lt_i + 1
+
+    # Determine MLIR type for element
+    elem_mt: str = mlir_type(elem_type)
+    is_ptr_elem: i32 = 0
+    if str_eq(elem_mt, "!llvm.ptr") == 1:
+        is_ptr_elem = 1
+
     # Load size from collection header
     size_val: str = emit_load(col_ptr, "i32")
 
@@ -341,10 +361,10 @@ fun gen_foreach_loop(node: i64):
     z: str = emit_const_i32(0)
     emit_store(z, idx_alloc, "i32")
 
-    # Create item variable
-    item_alloc: str = emit_alloca("i64")
+    # Create item variable with correct element type
+    item_alloc: str = emit_alloca(elem_mt)
     item_name: str = str_from_range(item_alloc, 1, Memory.strlen(item_alloc))
-    add_variable(item_var, item_name, "i64", 0)
+    add_variable(item_var, item_name, elem_type, 0)
 
     emit_ind(Str.concat("llvm.br ", cond_label))
 
@@ -358,7 +378,7 @@ fun gen_foreach_loop(node: i64):
     # Body
     emit(Str.concat("  ", Str.concat(body_label, ":")))
 
-    # Load current element (offset = 16 + idx * elem_size)
+    # Load current element (offset = 16 + idx * 8)
     cur_idx2: str = emit_load(idx_alloc, "i32")
     idx_i64: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(idx_i64, " = llvm.sext "), cur_idx2), " : i32 to i64"))
@@ -370,8 +390,21 @@ fun gen_foreach_loop(node: i64):
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
     ep: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat("[", Str.concat(off2, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
-    elem_val: str = emit_load(ep, "i64")
-    emit_store(elem_val, item_alloc, "i64")
+
+    # Load and store with correct type
+    if is_ptr_elem == 1:
+        # Pointer types (str, structs): load as !llvm.ptr
+        elem_val: str = emit_load(ep, "!llvm.ptr")
+        emit_store(elem_val, item_alloc, "!llvm.ptr")
+    else:
+        # Integer/float types: load as i64, then trunc if needed
+        elem_val_i64: str = emit_load(ep, "i64")
+        if str_eq(elem_mt, "i64") == 1:
+            emit_store(elem_val_i64, item_alloc, "i64")
+        else:
+            trunc_val: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(trunc_val, " = llvm.trunc "), elem_val_i64), Str.concat(" : i64 to ", elem_mt)), ""))
+            emit_store(trunc_val, item_alloc, elem_mt)
 
     gen_block(body)
 
