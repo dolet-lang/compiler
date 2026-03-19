@@ -6546,22 +6546,16 @@ fun gen_list_literal(node: i64) -> str:
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(cap_tmp, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(c4, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
     emit_store(size_val, cap_tmp, "i32")
 
-    # Store elements (uniform 8-byte storage)
+    # Store elements (8-byte slots, native type storage)
     mt: str = mlir_type(elem_type)
     i: i32 = 0
     while i < ec:
         eval: str = gen_expr(nl_get(elems, i), elem_type)
-        # Cast to i64 for uniform storage if needed
-        if str_eq(mt, "i64") == 0 and str_eq(mt, "!llvm.ptr") == 0:
-            eval = implicit_cast(eval, elem_type, "i64")
         offset: i64 = 16 + ((i as i64) * 8)
         off_s: str = emit_const_i64(offset)
         ep: str = new_tmp()
         emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(off_s, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
-        if str_eq(mt, "!llvm.ptr") == 1:
-            emit_store(eval, ep, "!llvm.ptr")
-        else:
-            emit_store(eval, ep, "i64")
+        emit_store(eval, ep, mt)
         i = i + 1
 
     return mem_p
@@ -7128,20 +7122,9 @@ fun gen_foreach_loop(node: i64):
     ep: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat("[", Str.concat(off2, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
 
-    # Load and store with correct type
-    if is_ptr_elem == 1:
-        # Pointer types (str, structs): load as !llvm.ptr
-        elem_val: str = emit_load(ep, "!llvm.ptr")
-        emit_store(elem_val, item_alloc, "!llvm.ptr")
-    else:
-        # Integer/float types: load as i64, then trunc if needed
-        elem_val_i64: str = emit_load(ep, "i64")
-        if str_eq(elem_mt, "i64") == 1:
-            emit_store(elem_val_i64, item_alloc, "i64")
-        else:
-            trunc_val: str = new_tmp()
-            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(trunc_val, " = llvm.trunc "), elem_val_i64), Str.concat(" : i64 to ", elem_mt)), ""))
-            emit_store(trunc_val, item_alloc, elem_mt)
+    # Load and store with native element type
+    elem_val: str = emit_load(ep, elem_mt)
+    emit_store(elem_val, item_alloc, elem_mt)
 
     gen_block(body)
 

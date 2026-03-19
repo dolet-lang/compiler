@@ -707,22 +707,16 @@ fun gen_list_literal(node: i64) -> str:
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(cap_tmp, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(c4, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
     emit_store(size_val, cap_tmp, "i32")
 
-    # Store elements (uniform 8-byte storage)
+    # Store elements (8-byte slots, native type storage)
     mt: str = mlir_type(elem_type)
     i: i32 = 0
     while i < ec:
         eval: str = gen_expr(nl_get(elems, i), elem_type)
-        # Cast to i64 for uniform storage if needed
-        if str_eq(mt, "i64") == 0 and str_eq(mt, "!llvm.ptr") == 0:
-            eval = implicit_cast(eval, elem_type, "i64")
         offset: i64 = 16 + ((i as i64) * 8)
         off_s: str = emit_const_i64(offset)
         ep: str = new_tmp()
         emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(off_s, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
-        if str_eq(mt, "!llvm.ptr") == 1:
-            emit_store(eval, ep, "!llvm.ptr")
-        else:
-            emit_store(eval, ep, "i64")
+        emit_store(eval, ep, mt)
         i = i + 1
 
     return mem_p

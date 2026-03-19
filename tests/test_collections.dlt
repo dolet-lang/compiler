@@ -1,14 +1,114 @@
-# Test list<i32> with print
-mylist: list<i32> = [1, 2, 3]
-for item in mylist:
-    print(item)
+# ===========================
+# Collection Type Tests
+# Tests list<T> and array<T> for all supported types
+# ===========================
 
-# Test list<str> with print
-names: list<str> = ["Ali", "Sara", "Omar"]
-for name in names:
-    print(name)
+# --- list<i32> ---
+print("list<i32>:")
+li32: list<i32> = [1, 2, 3]
+for v in li32:
+    print(v)
 
-# Test array<i32> with print
-nums: array<i32> = [10, 20, 30]
-for n in nums:
-    print(n)
+# --- list<i64> ---
+print("list<i64>:")
+li64: list<i64> = [100, 200, 300]
+for v in li64:
+    print(v)
+
+# --- list<i8> ---
+print("list<i8>:")
+li8: list<i8> = [10, 20, 30]
+for v in li8:
+    print(v)
+
+# --- list<i16> ---
+print("list<i16>:")
+li16: list<i16> = [100, 200, 300]
+for v in li16:
+    print(v)
+
+# --- list<i128> ---
+print("list<i128>:")
+li128: list<i128> = [1000, 2000, 3000]
+for v in li128:
+    print(v)
+
+# --- list<u8> ---
+print("list<u8>:")
+lu8: list<u8> = [5, 10, 15]
+for v in lu8:
+    print(v)
+
+# --- list<u16> ---
+print("list<u16>:")
+lu16: list<u16> = [50, 100, 150]
+for v in lu16:
+    print(v)
+
+# --- list<u32> ---
+print("list<u32>:")
+lu32: list<u32> = [500, 1000, 1500]
+for v in lu32:
+    print(v)
+
+# --- list<u64> ---
+print("list<u64>:")
+lu64: list<u64> = [5000, 10000, 15000]
+for v in lu64:
+    print(v)
+
+# --- list<u128> ---
+print("list<u128>:")
+lu128: list<u128> = [50000, 100000, 150000]
+for v in lu128:
+    print(v)
+
+# --- list<f32> ---
+print("list<f32>:")
+lf32: list<f32> = [1.5, 2.5, 3.5]
+for v in lf32:
+    print(v)
+
+# --- list<f64> ---
+print("list<f64>:")
+lf64: list<f64> = [10.1, 20.2, 30.3]
+for v in lf64:
+    print(v)
+
+# --- list<str> ---
+print("list<str>:")
+lstr: list<str> = ["Ali", "Sara", "Omar"]
+for v in lstr:
+    print(v)
+
+# --- list<char> ---
+print("list<char>:")
+lchar: list<char> = ['A', 'B', 'C']
+for v in lchar:
+    print(v)
+
+# --- array<i32> ---
+print("array<i32>:")
+ai32: array<i32> = [10, 20, 30]
+for v in ai32:
+    print(v)
+
+# --- array<i64> ---
+print("array<i64>:")
+ai64: array<i64> = [100, 200, 300]
+for v in ai64:
+    print(v)
+
+# --- array<str> ---
+print("array<str>:")
+astr: array<str> = ["Hello", "World"]
+for v in astr:
+    print(v)
+
+# --- array<f64> ---
+print("array<f64>:")
+af64: array<f64> = [1.1, 2.2, 3.3]
+for v in af64:
+    print(v)
+
+print("ALL TESTS DONE")
