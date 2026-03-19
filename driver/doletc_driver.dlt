@@ -94,6 +94,11 @@ fun load_runtime(exe_dir: str) -> str:
     if Memory.strlen(r7) > 0:
         runtime_src = Str.concat(runtime_src, Str.concat("\n", r7))
 
+    # Auto-import collections/list.dlt (list extend methods: size, append, etc.)
+    r8: str = read_file_to_string(Str.concat(std_base, "collections\\list.dlt"))
+    if Memory.strlen(r8) > 0:
+        runtime_src = Str.concat(runtime_src, Str.concat("\n", r8))
+
     return runtime_src
 
 # ==========================================

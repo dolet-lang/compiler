@@ -123,9 +123,20 @@ fun gen_expr(node: i64, expected: str) -> str:
     if nt == NODE_IS_NOT_NULL:
         return gen_is_not_null(node)
 
-    # Array/List literal
+    # Array/List literal — dispatch based on expected type
     if nt == NODE_ARRAY_LIT or nt == NODE_LIST_LIT:
-        return gen_list_literal(node, expected)
+        # Check if expected type starts with "list" → 3-field layout
+        is_list_type: i32 = 0
+        exp_len2: i64 = Memory.strlen(expected)
+        if exp_len2 >= 4:
+            if Memory.read_i8((expected as i64)) == 108:
+                if Memory.read_i8((expected as i64) + 1) == 105:
+                    if Memory.read_i8((expected as i64) + 2) == 115:
+                        if Memory.read_i8((expected as i64) + 3) == 116:
+                            is_list_type = 1
+        if is_list_type == 1:
+            return gen_list_literal(node, expected)
+        return gen_array_literal(node, expected)
 
     # Map literal
     if nt == NODE_MAP_LIT:
@@ -679,14 +690,9 @@ fun gen_fstring(node: i64) -> str:
 # ==========================================
 # Array/List Literal
 # ==========================================
-fun gen_list_literal(node: i64, expected: str) -> str:
-    # Get elements node_list
-    elems: i64 = Memory.read_i64(node + 8)
-    ec: i32 = 0
-    if elems != 0:
-        ec = nl_count(elems)
 
-    # Determine element type from expected type annotation (list[T] -> T)
+# Helper: extract element type from expected type annotation
+fun extract_elem_type(expected: str, elems: i64, ec: i32) -> str:
     elem_type: str = "i32"
     exp_len: i64 = Memory.strlen(expected)
     exp_found: i32 = 0
@@ -701,39 +707,108 @@ fun gen_list_literal(node: i64, expected: str) -> str:
     # Fallback: infer from first element
     if exp_found == 0 and ec > 0:
         elem_type = infer_expr_type(nl_get(elems, 0))
+    return elem_type
 
-    # Calculate element slot size (min 8 for alignment)
-    elem_slot: i64 = get_type_size(elem_type) as i64
-    if elem_slot < 8:
-        elem_slot = 8
+# Helper: calculate element slot size
+fun calc_elem_slot(elem_type: str) -> i64:
+    s: i64 = get_type_size(elem_type) as i64
+    if s < 8:
+        s = 8
+    return s
 
-    # Allocate: header(16 bytes: size + capacity) + data
-    total: i64 = 16 + ((ec as i64) * elem_slot)
+# ------------------------------------------
+# List Literal: 3-field layout
+# [size:i32 | cap:i32 | data_ptr:i64]
+# Supports dynamic resize via library methods
+# ------------------------------------------
+fun gen_list_literal(node: i64, expected: str) -> str:
+    elems: i64 = Memory.read_i64(node + 8)
+    ec: i32 = 0
+    if elems != 0:
+        ec = nl_count(elems)
 
-    sz: str = emit_const_i64(total)
-    mem_p: str = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
-
-    # Store size
-    size_val: str = emit_const_i32(ec)
-    emit_store(size_val, mem_p, "i32")
-
-    # Store capacity
-    cap_tmp: str = new_tmp()
-    c4: str = emit_const_i64(4)
-    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(cap_tmp, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(c4, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
-    emit_store(size_val, cap_tmp, "i32")
-
-    # Store elements (8-byte slots, native type storage)
+    elem_type: str = extract_elem_type(expected, elems, ec)
+    elem_slot: i64 = calc_elem_slot(elem_type)
     mt: str = mlir_type(elem_type)
+
+    # Allocate header (16 bytes)
+    c16h: str = emit_const_i64(16)
+    header_p: str = emit_call("Memory_malloc", c16h, "i64", "!llvm.ptr")
+
+    # Allocate data array
+    init_cap: i32 = ec
+    if init_cap < 4:
+        init_cap = 4
+    data_sz: str = emit_const_i64((init_cap as i64) * elem_slot)
+    data_p: str = emit_call("Memory_malloc", data_sz, "i64", "!llvm.ptr")
+
+    # Write size at +0
+    size_val: str = emit_const_i32(ec)
+    emit_store(size_val, header_p, "i32")
+
+    # Write capacity at +4
+    cap_val: str = emit_const_i32(init_cap)
+    cap_ptr: str = new_tmp()
+    c4off: str = emit_const_i64(4)
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(cap_ptr, " = llvm.getelementptr "), header_p), Str.concat("[", Str.concat(c4off, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+    emit_store(cap_val, cap_ptr, "i32")
+
+    # Write data_ptr at +8
+    dp_ptr: str = new_tmp()
+    c8off: str = emit_const_i64(8)
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(dp_ptr, " = llvm.getelementptr "), header_p), Str.concat("[", Str.concat(c8off, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+    emit_store(data_p, dp_ptr, "!llvm.ptr")
+
+    # Store elements into data array
     i: i32 = 0
     while i < ec:
         e_node: i64 = nl_get(elems, i)
         eval: str = gen_expr(e_node, elem_type)
-        # Cast from inferred type to target element type if needed
         inf_type: str = infer_expr_type(e_node)
         if str_eq(inf_type, elem_type) == 0 and str_eq(inf_type, "unknown") == 0:
             eval = implicit_cast(eval, inf_type, elem_type)
-        offset: i64 = 16 + ((i as i64) * elem_slot)
+        offset: i64 = (i as i64) * elem_slot
+        off_s: str = emit_const_i64(offset)
+        ep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), data_p), Str.concat("[", Str.concat(off_s, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+        emit_store(eval, ep, mt)
+        i = i + 1
+
+    return header_p
+
+# ------------------------------------------
+# Array Literal: inline layout (max performance)
+# [size:i32 | elem0 | elem1 | ...]
+# Fixed-size, zero pointer indirection
+# ------------------------------------------
+fun gen_array_literal(node: i64, expected: str) -> str:
+    elems: i64 = Memory.read_i64(node + 8)
+    ec: i32 = 0
+    if elems != 0:
+        ec = nl_count(elems)
+
+    elem_type: str = extract_elem_type(expected, elems, ec)
+    elem_slot: i64 = calc_elem_slot(elem_type)
+    mt: str = mlir_type(elem_type)
+
+    # Allocate: size(4 bytes) + elements inline
+    total: i64 = 4 + ((ec as i64) * elem_slot)
+    sz: str = emit_const_i64(total)
+    mem_p: str = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
+
+    # Write size at +0
+    size_val: str = emit_const_i32(ec)
+    emit_store(size_val, mem_p, "i32")
+
+    # Store elements inline at +4
+    i: i32 = 0
+    while i < ec:
+        e_node: i64 = nl_get(elems, i)
+        eval: str = gen_expr(e_node, elem_type)
+        inf_type: str = infer_expr_type(e_node)
+        if str_eq(inf_type, elem_type) == 0 and str_eq(inf_type, "unknown") == 0:
+            eval = implicit_cast(eval, inf_type, elem_type)
+        offset: i64 = 4 + ((i as i64) * elem_slot)
         off_s: str = emit_const_i64(offset)
         ep: str = new_tmp()
         emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(off_s, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))

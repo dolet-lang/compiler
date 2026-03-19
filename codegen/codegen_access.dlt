@@ -254,12 +254,23 @@ fun gen_instance_method_call(node: i64) -> str:
         obj_type = get_var_type(obj_name)
         obj_ptr = gen_var_load(obj_name, obj_type)
 
-    # Mangled name
-    mangled: str = Str.concat(Str.concat(obj_type, "_"), mname)
+    # Strip generic parameter from type name (e.g., list[i32] -> list)
+    base_type: str = obj_type
+    bt_len: i64 = Memory.strlen(obj_type)
+    bt_i: i64 = 0
+    while bt_i < bt_len:
+        if Memory.read_i8((obj_type as i64) + bt_i) == 91:
+            base_type = str_from_range(obj_type, 0, bt_i)
+            bt_i = bt_len
+        bt_i = bt_i + 1
 
-    # Build argument list (self + args)
+    # Mangled name
+    mangled: str = Str.concat(Str.concat(base_type, "_"), mname)
+
+    # Build argument list (self + args) and collect arg types for overload
     arg_str: str = obj_ptr
     type_str: str = "!llvm.ptr"
+    call_arg_types: str = ""
 
     ac: i32 = 0
     if args_list != 0:
@@ -276,7 +287,15 @@ fun gen_instance_method_call(node: i64) -> str:
 
         arg_str = Str.concat(arg_str, Str.concat(", ", av))
         type_str = Str.concat(type_str, Str.concat(", ", amt))
+        # Build overload type string
+        if Memory.strlen(call_arg_types) > 0:
+            call_arg_types = Str.concat(call_arg_types, Str.concat(",", at))
+        else:
+            call_arg_types = at
         i = i + 1
+
+    # Resolve overloaded method name
+    mangled = resolve_overload(mangled, call_arg_types)
 
     # Get return type
     ret_type: str = get_fun_ret_type(mangled)

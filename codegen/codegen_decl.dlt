@@ -116,7 +116,27 @@ fun gen_method_def(struct_name: str, node: i64):
     is_static: i64 = Memory.read_i64(node + 72)
 
     # Mangled name: StructName_methodName
-    mangled: str = Str.concat(Str.concat(struct_name, "_"), mname)
+    base_mangled: str = Str.concat(Str.concat(struct_name, "_"), mname)
+
+    # Build param types string (skip self) for overload resolution
+    mpt_str: str = ""
+    mpc: i32 = 0
+    if params != 0:
+        mpc = nl_count(params)
+    mpi: i32 = 0
+    while mpi < mpc:
+        mpn: i64 = nl_get(params, mpi)
+        mpname: str = Memory.read_i64(mpn + 8) as str
+        if str_eq(mpname, "self") == 0:
+            mptype: str = Memory.read_i64(mpn + 16) as str
+            if Memory.strlen(mpt_str) > 0:
+                mpt_str = Str.concat(mpt_str, Str.concat(",", mptype))
+            else:
+                mpt_str = mptype
+        mpi = mpi + 1
+
+    # Resolve overloaded name
+    mangled: str = resolve_overload(base_mangled, mpt_str)
 
     g_tmp_counter = 0
 
@@ -127,17 +147,23 @@ fun gen_method_def(struct_name: str, node: i64):
     pc: i32 = 0
     if params != 0:
         pc = nl_count(params)
+    arg_idx: i32 = 0
     i: i32 = 0
     while i < pc:
         pnode: i64 = nl_get(params, i)
         pname: str = Memory.read_i64(pnode + 8) as str
         ptype: str = Memory.read_i64(pnode + 16) as str
-        pmt: str = mlir_type(ptype)
-        if i > 0 or is_static == 0:
-            param_str = Str.concat(param_str, Str.concat(", ", Str.concat(Str.concat("%arg", Convert.i64_to_str(i as i64)), Str.concat(": ", pmt))))
+        # Skip self parameter (already added implicitly)
+        if str_eq(pname, "self") == 1:
+            i = i + 1
         else:
-            param_str = Str.concat(Str.concat("%arg", Convert.i64_to_str(i as i64)), Str.concat(": ", pmt))
-        i = i + 1
+            pmt: str = mlir_type(ptype)
+            if arg_idx > 0 or is_static == 0:
+                param_str = Str.concat(param_str, Str.concat(", ", Str.concat(Str.concat("%arg", Convert.i64_to_str(arg_idx as i64)), Str.concat(": ", pmt))))
+            else:
+                param_str = Str.concat(Str.concat("%arg", Convert.i64_to_str(arg_idx as i64)), Str.concat(": ", pmt))
+            arg_idx = arg_idx + 1
+            i = i + 1
 
     ret_mt: str = ""
     has_return: i32 = 0
@@ -166,15 +192,20 @@ fun gen_method_def(struct_name: str, node: i64):
     if is_static == 0:
         add_variable("self", "self", struct_name, 1)
 
-    # Register params
+    # Register params (skip self)
+    arg_idx = 0
     i = 0
     while i < pc:
         pnode2: i64 = nl_get(params, i)
         pname2: str = Memory.read_i64(pnode2 + 8) as str
         ptype2: str = Memory.read_i64(pnode2 + 16) as str
-        arg_name: str = Str.concat("arg", Convert.i64_to_str(i as i64))
-        add_variable(pname2, arg_name, ptype2, 1)
-        i = i + 1
+        if str_eq(pname2, "self") == 1:
+            i = i + 1
+        else:
+            arg_name: str = Str.concat("arg", Convert.i64_to_str(arg_idx as i64))
+            add_variable(pname2, arg_name, ptype2, 1)
+            arg_idx = arg_idx + 1
+            i = i + 1
 
     if body != 0:
         gen_block(body)

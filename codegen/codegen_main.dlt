@@ -195,7 +195,7 @@ fun collect_declarations(ast: i64):
                     register_impl_method(isname, mname, mnode)
                     j2 = j2 + 1
 
-        # Extend blocks
+        # Extend blocks — register method signatures with overload support
         if nt == NODE_EXTEND_BLOCK:
             etname: str = Memory.read_i64(node + 8) as str
             emethods: i64 = Memory.read_i64(node + 16)
@@ -206,7 +206,24 @@ fun collect_declarations(ast: i64):
                     enode: i64 = nl_get(emethods, j3)
                     emname: str = Memory.read_i64(enode + 8) as str
                     emret: str = Memory.read_i64(enode + 24) as str
-                    emangled: str = Str.concat(Str.concat(etname, "_"), emname)
+                    emangled_base: str = Str.concat(Str.concat(etname, "_"), emname)
+                    # Build param types string (skip self) for overload
+                    eparams: i64 = Memory.read_i64(enode + 16)
+                    ept_str: str = ""
+                    if eparams != 0:
+                        epc: i32 = nl_count(eparams)
+                        epi: i32 = 0
+                        while epi < epc:
+                            epn: i64 = nl_get(eparams, epi)
+                            epname: str = Memory.read_i64(epn + 8) as str
+                            if str_eq(epname, "self") == 0:
+                                eptype: str = Memory.read_i64(epn + 16) as str
+                                if Memory.strlen(ept_str) > 0:
+                                    ept_str = Str.concat(ept_str, Str.concat(",", eptype))
+                                else:
+                                    ept_str = eptype
+                            epi = epi + 1
+                    emangled: str = register_overload(emangled_base, ept_str)
                     register_fun_sig(emangled, emret)
                     j3 = j3 + 1
 

@@ -197,6 +197,10 @@ fun infer_expr_type(node: i64) -> str:
     if ntype == NODE_STR_CONCAT:
         return "string"
 
+    # Self reference returns current struct/extend type
+    if ntype == NODE_SELF:
+        return g_cur_method_struct
+
     if ntype == NODE_VAR_REF:
         vname: str = Memory.read_i64(node + 8) as str
         return get_var_type(vname)
@@ -279,7 +283,16 @@ fun infer_expr_type(node: i64) -> str:
         else:
             im_obj_type = get_var_type(im_obj)
         if str_eq(im_obj_type, "") == 0 and str_eq(im_obj_type, "unknown") == 0:
-            im_mangled: str = Str.concat(Str.concat(im_obj_type, "_"), im_mname)
+            # Strip generic parameter (list[i32] -> list)
+            im_base: str = im_obj_type
+            imb_len: i64 = Memory.strlen(im_obj_type)
+            imb_i: i64 = 0
+            while imb_i < imb_len:
+                if Memory.read_i8((im_obj_type as i64) + imb_i) == 91:
+                    im_base = str_from_range(im_obj_type, 0, imb_i)
+                    imb_i = imb_len
+                imb_i = imb_i + 1
+            im_mangled: str = Str.concat(Str.concat(im_base, "_"), im_mname)
             im_rt: str = get_fun_ret_type(im_mangled)
             if str_eq(im_rt, "unknown") == 0 and str_eq(im_rt, "") == 0:
                 return im_rt

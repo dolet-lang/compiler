@@ -322,7 +322,8 @@ fun parse_extend_block() -> i64:
     eat(TK_EXTEND)
 
     tname: str = cur_val()
-    eat(TK_IDENT)
+    # Accept keywords like list/array/map as type names
+    advance()
 
     if cur_kind() == TK_COLON:
         advance()

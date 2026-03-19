@@ -1,12 +1,28 @@
-# Minimal: i128 then u8
-print("i128:")
-li128: list<i128> = [1000, 2000, 3000]
-for a in li128:
-    print(a)
+# Test library methods with new 3-field layout
 
-print("u8:")
-lu8: list<u8> = [5, 10, 15]
-for b in lu8:
-    print(b)
+# Test size()
+mylist: list<i32> = [1, 2, 3]
+print("initial size:")
+print(mylist.size())
 
-print("DONE")
+# Test append()
+mylist.append(4)
+mylist.append(5)
+print("after append size:")
+print(mylist.size())
+
+# Test foreach after append
+print("values:")
+for v in mylist:
+    print(v)
+
+# Test is_empty
+print("is_empty:")
+print(mylist.is_empty())
+
+# Test clear
+mylist.clear()
+print("after clear size:")
+print(mylist.size())
+
+print("ALL METHODS DONE")

@@ -378,23 +378,43 @@ fun gen_foreach_loop(node: i64):
     # Body
     emit(Str.concat("  ", Str.concat(body_label, ":")))
 
-    # Calculate element slot size (must match list literal allocation)
+    # Calculate element slot size
     elem_slot_sz: i64 = get_type_size(elem_type) as i64
     if elem_slot_sz < 8:
         elem_slot_sz = 8
 
-    # Load current element (offset = 16 + idx * elem_slot)
+    # Detect if collection is list (3-field) or array (inline)
+    is_list: i32 = 0
+    if Memory.read_i8((col_type as i64)) == 108:
+        if Memory.read_i8((col_type as i64) + 1) == 105:
+            is_list = 1
+
+    # Get base data pointer
+    base_data: str = col_ptr
+    if is_list == 1:
+        # list: load data_ptr from header +8
+        dp_off: str = emit_const_i64(8)
+        dp_gep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(dp_gep, " = llvm.getelementptr "), col_ptr), Str.concat("[", Str.concat(dp_off, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+        base_data = emit_load(dp_gep, "!llvm.ptr")
+
+    # Load current element
     cur_idx2: str = emit_load(idx_alloc, "i32")
     idx_i64: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(idx_i64, " = llvm.sext "), cur_idx2), " : i32 to i64"))
-    c8: str = emit_const_i64(elem_slot_sz)
+    c_slot: str = emit_const_i64(elem_slot_sz)
     off: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off, " = llvm.mul "), idx_i64), Str.concat(", ", c8)), " : i64"))
-    c16: str = emit_const_i64(16)
-    off2: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off, " = llvm.mul "), idx_i64), Str.concat(", ", c_slot)), " : i64"))
+
+    # Add base offset (array: +4 for size field, list: +0 since data_ptr is separate)
+    final_off: str = off
+    if is_list == 0:
+        c4base: str = emit_const_i64(4)
+        final_off = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(final_off, " = llvm.add "), off), Str.concat(", ", c4base)), " : i64"))
+
     ep: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat("[", Str.concat(off2, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), base_data), Str.concat("[", Str.concat(final_off, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
 
     # Load and store with native element type
     elem_val: str = emit_load(ep, elem_mt)
