@@ -6530,13 +6530,11 @@ fun gen_list_literal(node: i64) -> str:
     if ec > 0:
         elem_type = infer_expr_type(nl_get(elems, 0))
 
-    # Allocate: header(16 bytes: size + capacity) + data
-    elem_size: i32 = get_type_size(elem_type)
-    total: i64 = 16 + ((ec as i64) * (elem_size as i64))
-    total_s: str = Convert.i64_to_str(total)
+    # Allocate: header(16 bytes: size + capacity) + data (8 bytes per element)
+    total: i64 = 16 + ((ec as i64) * 8)
 
     sz: str = emit_const_i64(total)
-    mem_p: str = emit_call("malloc", sz, "i64", "!llvm.ptr")
+    mem_p: str = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
 
     # Store size
     size_val: str = emit_const_i32(ec)
@@ -6545,19 +6543,25 @@ fun gen_list_literal(node: i64) -> str:
     # Store capacity
     cap_tmp: str = new_tmp()
     c4: str = emit_const_i64(4)
-    emit_ind(Str.concat(Str.concat(Str.concat(cap_tmp, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(c4, " : !llvm.ptr, i64"))))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(cap_tmp, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(c4, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
     emit_store(size_val, cap_tmp, "i32")
 
-    # Store elements
+    # Store elements (uniform 8-byte storage)
     mt: str = mlir_type(elem_type)
     i: i32 = 0
     while i < ec:
         eval: str = gen_expr(nl_get(elems, i), elem_type)
-        offset: i64 = 16 + ((i as i64) * (elem_size as i64))
+        # Cast to i64 for uniform storage if needed
+        if str_eq(mt, "i64") == 0 and str_eq(mt, "!llvm.ptr") == 0:
+            eval = implicit_cast(eval, elem_type, "i64")
+        offset: i64 = 16 + ((i as i64) * 8)
         off_s: str = emit_const_i64(offset)
         ep: str = new_tmp()
-        emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(off_s, " : !llvm.ptr, i64"))))
-        emit_store(eval, ep, mt)
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(off_s, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+        if str_eq(mt, "!llvm.ptr") == 1:
+            emit_store(eval, ep, "!llvm.ptr")
+        else:
+            emit_store(eval, ep, "i64")
         i = i + 1
 
     return mem_p
@@ -6575,7 +6579,7 @@ fun gen_map_literal(node: i64) -> str:
     # Header: 16 bytes (size + capacity), then entries of (key_ptr + value_ptr) = 16 bytes each
     total: i64 = 16 + ((ec as i64) * 16)
     sz: str = emit_const_i64(total)
-    mem_p: str = emit_call("malloc", sz, "i64", "!llvm.ptr")
+    mem_p: str = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
 
     # Store size
     size_val: str = emit_const_i32(ec)
@@ -6589,17 +6593,24 @@ fun gen_map_literal(node: i64) -> str:
         val_node: i64 = Memory.read_i64(entry + 16)
 
         kv: str = gen_expr(key_node, "string")
-        vv: str = gen_expr(val_node, "i64")
+        vt: str = infer_expr_type(val_node)
+        if str_eq(vt, "unknown") == 1:
+            vt = "i64"
+        vmt: str = mlir_type(vt)
+        vv: str = gen_expr(val_node, vt)
+        # Cast value to i64 for uniform storage
+        if str_eq(vt, "i64") == 0:
+            vv = implicit_cast(vv, vt, "i64")
 
         offset: i64 = 16 + ((i as i64) * 16)
         ko: str = emit_const_i64(offset)
         kp: str = new_tmp()
-        emit_ind(Str.concat(Str.concat(Str.concat(kp, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(ko, " : !llvm.ptr, i64"))))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(kp, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(ko, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
         emit_store(kv, kp, "!llvm.ptr")
 
         vo: str = emit_const_i64(offset + 8)
         vp: str = new_tmp()
-        emit_ind(Str.concat(Str.concat(Str.concat(vp, " = llvm.getelementptr "), mem_p), Str.concat(", ", Str.concat(vo, " : !llvm.ptr, i64"))))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(vp, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(vo, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
         emit_store(vv, vp, "i64")
 
         i = i + 1
@@ -7041,8 +7052,8 @@ fun gen_for_loop(node: i64):
 # ==========================================
 fun gen_foreach_loop(node: i64):
     item_var: str = Memory.read_i64(node + 8) as str
-    col_expr: i64 = Memory.read_i64(node + 24)
-    body: i64 = Memory.read_i64(node + 32)
+    col_expr: i64 = Memory.read_i64(node + 32)
+    body: i64 = Memory.read_i64(node + 40)
 
     cond_label: str = new_label()
     body_label: str = new_label()
@@ -7095,7 +7106,7 @@ fun gen_foreach_loop(node: i64):
     off2: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
     ep: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat(", ", Str.concat(off2, " : !llvm.ptr, i64"))))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat("[", Str.concat(off2, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
     elem_val: str = emit_load(ep, "i64")
     emit_store(elem_val, item_alloc, "i64")
 
@@ -8138,7 +8149,7 @@ fun gen_array_access(node: i64, expected: str) -> str:
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
 
     ep: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), arr_ptr), Str.concat(", ", Str.concat(off2, " : !llvm.ptr, i64"))))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), arr_ptr), Str.concat("[", Str.concat(off2, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
 
     val: str = emit_load(ep, mt)
     return val

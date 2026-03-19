@@ -365,7 +365,7 @@ fun gen_array_access(node: i64, expected: str) -> str:
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
 
     ep: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), arr_ptr), Str.concat(", ", Str.concat(off2, " : !llvm.ptr, i64"))))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), arr_ptr), Str.concat("[", Str.concat(off2, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
 
     val: str = emit_load(ep, mt)
     return val

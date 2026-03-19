@@ -315,8 +315,8 @@ fun gen_for_loop(node: i64):
 # ==========================================
 fun gen_foreach_loop(node: i64):
     item_var: str = Memory.read_i64(node + 8) as str
-    col_expr: i64 = Memory.read_i64(node + 24)
-    body: i64 = Memory.read_i64(node + 32)
+    col_expr: i64 = Memory.read_i64(node + 32)
+    body: i64 = Memory.read_i64(node + 40)
 
     cond_label: str = new_label()
     body_label: str = new_label()
@@ -369,7 +369,7 @@ fun gen_foreach_loop(node: i64):
     off2: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(off2, " = llvm.add "), off), Str.concat(", ", c16)), " : i64"))
     ep: str = new_tmp()
-    emit_ind(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat(", ", Str.concat(off2, " : !llvm.ptr, i64"))))
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(ep, " = llvm.getelementptr "), col_ptr), Str.concat("[", Str.concat(off2, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
     elem_val: str = emit_load(ep, "i64")
     emit_store(elem_val, item_alloc, "i64")
 
