@@ -69,6 +69,24 @@ fun parse_fun_def(is_async: i64) -> i64:
     return mk_fun_def(name, params, ret_type, body2, 0, 0, "", is_async)
 
 # ==========================================
+# Parse Type Parameter List: <T>, <T, U>, <K, V>
+# Returns node_list of param name strings, or 0 if no <
+# ==========================================
+fun parse_type_param_list() -> i64:
+    if cur_kind() != TK_LESS:
+        return 0
+    advance()
+    params: i64 = mk_node_list(8)
+    while cur_kind() != TK_GREATER and cur_kind() != TK_EOF:
+        pname: str = cur_val()
+        eat(TK_IDENT)
+        nl_add(params, pname as i64)
+        if cur_kind() == TK_COMMA:
+            advance()
+    eat(TK_GREATER)
+    return params
+
+# ==========================================
 # Struct Declaration
 # struct Name:
 #     field: type
@@ -80,6 +98,9 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
 
     name: str = cur_val()
     eat(TK_IDENT)
+
+    # Optional type parameters: struct Name<T, U>
+    type_params: i64 = parse_type_param_list()
 
     # Optional extends: struct Name extends Base, Other
     parents: i64 = 0
@@ -169,7 +190,7 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
             if cur_kind() == TK_NEWLINE:
                 skip_newlines()
 
-    return mk_struct_decl(name, fields, 0, base_class, methods, is_abstract, 0, parents)
+    return mk_struct_decl(name, fields, type_params, base_class, methods, is_abstract, 0, parents)
 
 # @transparent struct — parse normally then set flag=2 in stack_alloc field
 fun parse_struct_decl_transparent() -> i64:
@@ -288,6 +309,9 @@ fun parse_impl_block() -> i64:
     sname: str = cur_val()
     eat(TK_IDENT)
 
+    # Optional type parameters: impl Name<T>
+    type_params: i64 = parse_type_param_list()
+
     # Optional trait name: impl Struct for Trait
     trait_name: str = ""
     # (simplified — Dolet uses impl Struct: syntax)
@@ -317,7 +341,7 @@ fun parse_impl_block() -> i64:
         else:
             break
 
-    return mk_impl_block(sname, methods, trait_name)
+    return mk_impl_block(sname, methods, trait_name, type_params)
 
 # ==========================================
 # Extend Block
@@ -331,6 +355,9 @@ fun parse_extend_block() -> i64:
     tname: str = cur_val()
     # Accept keywords like list/array/map as type names
     advance()
+
+    # Optional type parameters: extend Name<T>
+    type_params: i64 = parse_type_param_list()
 
     if cur_kind() == TK_COLON:
         advance()
@@ -352,7 +379,7 @@ fun parse_extend_block() -> i64:
         else:
             break
 
-    return mk_extend_block(tname, methods)
+    return mk_extend_block(tname, methods, type_params)
 
 # ==========================================
 # Import Statement

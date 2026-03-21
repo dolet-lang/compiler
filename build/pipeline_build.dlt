@@ -1843,12 +1843,13 @@ fun imethod_method(n: i64) -> str:
 fun imethod_args(n: i64) -> i64:
     return Memory.read_i64(n + 24)
 
-# ImplBlockNode: f0=struct_name (str), f1=methods (node_list), f2=trait_name (str, 0 if none)
-fun mk_impl_block(sname: str, methods: i64, trait_name: str) -> i64:
+# ImplBlockNode: f0=struct_name (str), f1=methods (node_list), f2=trait_name (str, 0 if none), f3=type_params (node_list, 0 if none)
+fun mk_impl_block(sname: str, methods: i64, trait_name: str, type_params: i64) -> i64:
     n: i64 = alloc_node(NODE_IMPL_BLOCK)
     Memory.write_i64(n + 8, sname as i64)
     Memory.write_i64(n + 16, methods)
     Memory.write_i64(n + 24, trait_name as i64)
+    Memory.write_i64(n + 32, type_params)
     return n
 
 fun impl_struct(n: i64) -> str:
@@ -1859,6 +1860,9 @@ fun impl_methods(n: i64) -> i64:
 
 fun impl_trait(n: i64) -> str:
     return Memory.read_i64(n + 24) as str
+
+fun impl_type_params(n: i64) -> i64:
+    return Memory.read_i64(n + 32)
 
 # MethodDefNode: f0=name (str), f1=params (node_list), f2=return_type (str, 0 if void),
 #                f3=body (node_list), f4=is_static (0/1), f5=access_modifier (str),
@@ -2253,11 +2257,12 @@ fun tmsig_ret_type(n: i64) -> str:
 # Misc Nodes
 # ==========================================
 
-# ExtendBlockNode: f0=type_name (str), f1=methods (node_list)
-fun mk_extend_block(tname: str, methods: i64) -> i64:
+# ExtendBlockNode: f0=type_name (str), f1=methods (node_list), f2=type_params (node_list, 0 if none)
+fun mk_extend_block(tname: str, methods: i64, type_params: i64) -> i64:
     n: i64 = alloc_node(NODE_EXTEND_BLOCK)
     Memory.write_i64(n + 8, tname as i64)
     Memory.write_i64(n + 16, methods)
+    Memory.write_i64(n + 24, type_params)
     return n
 
 fun extend_tname(n: i64) -> str:
@@ -2265,6 +2270,9 @@ fun extend_tname(n: i64) -> str:
 
 fun extend_methods(n: i64) -> i64:
     return Memory.read_i64(n + 16)
+
+fun extend_type_params(n: i64) -> i64:
+    return Memory.read_i64(n + 24)
 
 # CodeBlockPlaceholderNode: f0=params (node_list, 0)
 fun mk_code_block_ph(params: i64) -> i64:
@@ -3728,6 +3736,24 @@ fun parse_fun_def(is_async: i64) -> i64:
     return mk_fun_def(name, params, ret_type, body2, 0, 0, "", is_async)
 
 # ==========================================
+# Parse Type Parameter List: <T>, <T, U>, <K, V>
+# Returns node_list of param name strings, or 0 if no <
+# ==========================================
+fun parse_type_param_list() -> i64:
+    if cur_kind() != TK_LESS:
+        return 0
+    advance()
+    params: i64 = mk_node_list(8)
+    while cur_kind() != TK_GREATER and cur_kind() != TK_EOF:
+        pname: str = cur_val()
+        eat(TK_IDENT)
+        nl_add(params, pname as i64)
+        if cur_kind() == TK_COMMA:
+            advance()
+    eat(TK_GREATER)
+    return params
+
+# ==========================================
 # Struct Declaration
 # struct Name:
 #     field: type
@@ -3739,6 +3765,9 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
 
     name: str = cur_val()
     eat(TK_IDENT)
+
+    # Optional type parameters: struct Name<T, U>
+    type_params: i64 = parse_type_param_list()
 
     # Optional extends: struct Name extends Base, Other
     parents: i64 = 0
@@ -3828,7 +3857,7 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
             if cur_kind() == TK_NEWLINE:
                 skip_newlines()
 
-    return mk_struct_decl(name, fields, 0, base_class, methods, is_abstract, 0, parents)
+    return mk_struct_decl(name, fields, type_params, base_class, methods, is_abstract, 0, parents)
 
 # @transparent struct — parse normally then set flag=2 in stack_alloc field
 fun parse_struct_decl_transparent() -> i64:
@@ -3947,6 +3976,9 @@ fun parse_impl_block() -> i64:
     sname: str = cur_val()
     eat(TK_IDENT)
 
+    # Optional type parameters: impl Name<T>
+    type_params: i64 = parse_type_param_list()
+
     # Optional trait name: impl Struct for Trait
     trait_name: str = ""
     # (simplified — Dolet uses impl Struct: syntax)
@@ -3976,7 +4008,7 @@ fun parse_impl_block() -> i64:
         else:
             break
 
-    return mk_impl_block(sname, methods, trait_name)
+    return mk_impl_block(sname, methods, trait_name, type_params)
 
 # ==========================================
 # Extend Block
@@ -3990,6 +4022,9 @@ fun parse_extend_block() -> i64:
     tname: str = cur_val()
     # Accept keywords like list/array/map as type names
     advance()
+
+    # Optional type parameters: extend Name<T>
+    type_params: i64 = parse_type_param_list()
 
     if cur_kind() == TK_COLON:
         advance()
@@ -4011,7 +4046,7 @@ fun parse_extend_block() -> i64:
         else:
             break
 
-    return mk_extend_block(tname, methods)
+    return mk_extend_block(tname, methods, type_params)
 
 # ==========================================
 # Import Statement
@@ -5460,6 +5495,43 @@ fun resolve_overload(orig_name: str, arg_types_str: str) -> str:
     return orig_name
 
 # ==========================================
+# Generic Type Registry
+# Tracks which struct names have type parameters
+# ==========================================
+g_generic_names: i64 = 0
+g_generic_params: i64 = 0
+g_generic_count: i32 = 0
+
+fun init_generic_registry():
+    g_generic_names = Memory.malloc_zeroed(128 * 8)
+    g_generic_params = Memory.malloc_zeroed(128 * 8)
+    g_generic_count = 0
+
+fun register_generic(name: str, params: i64):
+    off: i64 = (g_generic_count as i64) * 8
+    Memory.write_i64(g_generic_names + off, name as i64)
+    Memory.write_i64(g_generic_params + off, params)
+    g_generic_count = g_generic_count + 1
+
+fun is_generic_type(name: str) -> i32:
+    i: i32 = 0
+    while i < g_generic_count:
+        off: i64 = (i as i64) * 8
+        if str_eq(Memory.read_i64(g_generic_names + off) as str, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+fun get_generic_params(name: str) -> i64:
+    i: i32 = 0
+    while i < g_generic_count:
+        off: i64 = (i as i64) * 8
+        if str_eq(Memory.read_i64(g_generic_names + off) as str, name) == 1:
+            return Memory.read_i64(g_generic_params + off)
+        i = i + 1
+    return 0
+
+# ==========================================
 # Init All Registries
 # ==========================================
 fun init_all_registries():
@@ -5477,6 +5549,7 @@ fun init_all_registries():
     init_static_fields()
     init_impl_registry()
     init_overload_registry()
+    init_generic_registry()
     # Pre-register common strings
     gen_string_const("%s\n")
     gen_string_const("null")
@@ -8639,6 +8712,11 @@ fun collect_declarations(ast: i64):
             fields: i64 = Memory.read_i64(node + 16)
             base_class: str = Memory.read_i64(node + 32) as str
             s_stack_alloc: i64 = Memory.read_i64(node + 56)
+
+            # Register generic type parameters if present
+            s_type_params: i64 = Memory.read_i64(node + 24)
+            if s_type_params != 0:
+                register_generic(sname, s_type_params)
 
             # @transparent struct — register as transparent, not as regular struct
             if s_stack_alloc == 2:

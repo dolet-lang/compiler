@@ -1043,6 +1043,43 @@ fun resolve_overload(orig_name: str, arg_types_str: str) -> str:
     return orig_name
 
 # ==========================================
+# Generic Type Registry
+# Tracks which struct names have type parameters
+# ==========================================
+g_generic_names: i64 = 0
+g_generic_params: i64 = 0
+g_generic_count: i32 = 0
+
+fun init_generic_registry():
+    g_generic_names = Memory.malloc_zeroed(128 * 8)
+    g_generic_params = Memory.malloc_zeroed(128 * 8)
+    g_generic_count = 0
+
+fun register_generic(name: str, params: i64):
+    off: i64 = (g_generic_count as i64) * 8
+    Memory.write_i64(g_generic_names + off, name as i64)
+    Memory.write_i64(g_generic_params + off, params)
+    g_generic_count = g_generic_count + 1
+
+fun is_generic_type(name: str) -> i32:
+    i: i32 = 0
+    while i < g_generic_count:
+        off: i64 = (i as i64) * 8
+        if str_eq(Memory.read_i64(g_generic_names + off) as str, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+fun get_generic_params(name: str) -> i64:
+    i: i32 = 0
+    while i < g_generic_count:
+        off: i64 = (i as i64) * 8
+        if str_eq(Memory.read_i64(g_generic_names + off) as str, name) == 1:
+            return Memory.read_i64(g_generic_params + off)
+        i = i + 1
+    return 0
+
+# ==========================================
 # Init All Registries
 # ==========================================
 fun init_all_registries():
@@ -1060,6 +1097,7 @@ fun init_all_registries():
     init_static_fields()
     init_impl_registry()
     init_overload_registry()
+    init_generic_registry()
     # Pre-register common strings
     gen_string_const("%s\n")
     gen_string_const("null")

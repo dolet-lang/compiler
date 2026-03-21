@@ -945,12 +945,13 @@ fun imethod_method(n: i64) -> str:
 fun imethod_args(n: i64) -> i64:
     return Memory.read_i64(n + 24)
 
-# ImplBlockNode: f0=struct_name (str), f1=methods (node_list), f2=trait_name (str, 0 if none)
-fun mk_impl_block(sname: str, methods: i64, trait_name: str) -> i64:
+# ImplBlockNode: f0=struct_name (str), f1=methods (node_list), f2=trait_name (str, 0 if none), f3=type_params (node_list, 0 if none)
+fun mk_impl_block(sname: str, methods: i64, trait_name: str, type_params: i64) -> i64:
     n: i64 = alloc_node(NODE_IMPL_BLOCK)
     Memory.write_i64(n + 8, sname as i64)
     Memory.write_i64(n + 16, methods)
     Memory.write_i64(n + 24, trait_name as i64)
+    Memory.write_i64(n + 32, type_params)
     return n
 
 fun impl_struct(n: i64) -> str:
@@ -961,6 +962,9 @@ fun impl_methods(n: i64) -> i64:
 
 fun impl_trait(n: i64) -> str:
     return Memory.read_i64(n + 24) as str
+
+fun impl_type_params(n: i64) -> i64:
+    return Memory.read_i64(n + 32)
 
 # MethodDefNode: f0=name (str), f1=params (node_list), f2=return_type (str, 0 if void),
 #                f3=body (node_list), f4=is_static (0/1), f5=access_modifier (str),
@@ -1355,11 +1359,12 @@ fun tmsig_ret_type(n: i64) -> str:
 # Misc Nodes
 # ==========================================
 
-# ExtendBlockNode: f0=type_name (str), f1=methods (node_list)
-fun mk_extend_block(tname: str, methods: i64) -> i64:
+# ExtendBlockNode: f0=type_name (str), f1=methods (node_list), f2=type_params (node_list, 0 if none)
+fun mk_extend_block(tname: str, methods: i64, type_params: i64) -> i64:
     n: i64 = alloc_node(NODE_EXTEND_BLOCK)
     Memory.write_i64(n + 8, tname as i64)
     Memory.write_i64(n + 16, methods)
+    Memory.write_i64(n + 24, type_params)
     return n
 
 fun extend_tname(n: i64) -> str:
@@ -1367,6 +1372,9 @@ fun extend_tname(n: i64) -> str:
 
 fun extend_methods(n: i64) -> i64:
     return Memory.read_i64(n + 16)
+
+fun extend_type_params(n: i64) -> i64:
+    return Memory.read_i64(n + 24)
 
 # CodeBlockPlaceholderNode: f0=params (node_list, 0)
 fun mk_code_block_ph(params: i64) -> i64:

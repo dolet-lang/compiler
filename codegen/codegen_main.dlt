@@ -137,6 +137,11 @@ fun collect_declarations(ast: i64):
             base_class: str = Memory.read_i64(node + 32) as str
             s_stack_alloc: i64 = Memory.read_i64(node + 56)
 
+            # Register generic type parameters if present
+            s_type_params: i64 = Memory.read_i64(node + 24)
+            if s_type_params != 0:
+                register_generic(sname, s_type_params)
+
             # @transparent struct — register as transparent, not as regular struct
             if s_stack_alloc == 2:
                 # Get first (and only) field's type as inner raw type
