@@ -389,6 +389,8 @@ fun main() -> i32:
     # Resolve and load user imports
     std_base: str = Str.concat(exe_dir, "\\..\\library\\std\\std\\")
     src_dir: str = get_file_dir(input_path)
+    if Memory.strlen(src_dir) == 0:
+        src_dir = "."
     imp_src: str = resolve_and_load_imports(user_src, std_base, src_dir)
     imp_len: i64 = Memory.strlen(imp_src)
     if imp_len > 0:

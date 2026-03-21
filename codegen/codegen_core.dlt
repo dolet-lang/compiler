@@ -726,6 +726,10 @@ fun mlir_type(dolet_type: str) -> str:
         return "f32"
     if str_eq(dolet_type, "F64") == 1:
         return "f64"
+    if str_eq(dolet_type, "Bool") == 1:
+        return "i1"
+    if str_eq(dolet_type, "Char") == 1:
+        return "i8"
 
     # Compiler intrinsic types (__i32 → LLVM i32, etc.)
     if str_eq(dolet_type, "__i8") == 1:

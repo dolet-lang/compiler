@@ -24,7 +24,7 @@ for %%f in (test_*.dlt) do (
         set /a FAIL+=1
     ) else (
         echo [COMPILED] Running...
-        "%%~nf.exe"
+        .\%%~nf.exe
         if errorlevel 1 (
             echo [FAIL] %%~nf - RUNTIME ERROR
             set /a FAIL+=1

@@ -145,7 +145,6 @@ fun collect_declarations(ast: i64):
                         tf: i64 = nl_get(fields, 0)
                         inner_t: str = Memory.read_i64(tf + 16) as str
                         register_transparent(sname, inner_t)
-                i = i + 1
             else:
                 # Merge parent fields if struct extends another
                 if str_eq(base_class, "") == 0:

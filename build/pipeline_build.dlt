@@ -5143,6 +5143,10 @@ fun mlir_type(dolet_type: str) -> str:
         return "f32"
     if str_eq(dolet_type, "F64") == 1:
         return "f64"
+    if str_eq(dolet_type, "Bool") == 1:
+        return "i1"
+    if str_eq(dolet_type, "Char") == 1:
+        return "i8"
 
     # Compiler intrinsic types (__i32 → LLVM i32, etc.)
     if str_eq(dolet_type, "__i8") == 1:
@@ -8644,7 +8648,6 @@ fun collect_declarations(ast: i64):
                         tf: i64 = nl_get(fields, 0)
                         inner_t: str = Memory.read_i64(tf + 16) as str
                         register_transparent(sname, inner_t)
-                i = i + 1
             else:
                 # Merge parent fields if struct extends another
                 if str_eq(base_class, "") == 0:
@@ -9610,6 +9613,8 @@ fun main() -> i32:
     # Resolve and load user imports
     std_base: str = Str.concat(exe_dir, "\\..\\library\\std\\std\\")
     src_dir: str = get_file_dir(input_path)
+    if Memory.strlen(src_dir) == 0:
+        src_dir = "."
     imp_src: str = resolve_and_load_imports(user_src, std_base, src_dir)
     imp_len: i64 = Memory.strlen(imp_src)
     if imp_len > 0:
