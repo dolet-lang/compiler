@@ -71,6 +71,8 @@ fun is_string_type(t: str) -> i32:
 fun is_ptr_type(t: str) -> i32:
     if str_eq(t, "ptr") == 1:
         return 1
+    if str_eq(t, "Pointer") == 1:
+        return 1
     if str_eq(t, "!llvm.ptr") == 1:
         return 1
     if is_string_type(t) == 1:
@@ -115,11 +117,11 @@ fun wider_int_type(a: str, b: str) -> str:
 # ==========================================
 fun implicit_cast(value: str, from_type: str, to_type: str) -> str:
     # Resolve aliases only for unknown types (not built-in i32/i64/f32/f64/str/etc.)
-    if is_int_type(from_type) == 0 and is_float_type(from_type) == 0 and is_string_type(from_type) == 0 and str_eq(from_type, "bool") == 0 and str_eq(from_type, "ptr") == 0 and str_eq(from_type, "unknown") == 0 and str_eq(from_type, "null") == 0:
+    if is_int_type(from_type) == 0 and is_float_type(from_type) == 0 and is_string_type(from_type) == 0 and str_eq(from_type, "bool") == 0 and str_eq(from_type, "ptr") == 0 and str_eq(from_type, "Pointer") == 0 and str_eq(from_type, "unknown") == 0 and str_eq(from_type, "null") == 0:
         from_resolved: str = resolve_alias(from_type)
         if str_eq(from_resolved, "") == 0:
             return implicit_cast(value, from_resolved, to_type)
-    if is_int_type(to_type) == 0 and is_float_type(to_type) == 0 and is_string_type(to_type) == 0 and str_eq(to_type, "bool") == 0 and str_eq(to_type, "ptr") == 0 and str_eq(to_type, "unknown") == 0 and str_eq(to_type, "null") == 0:
+    if is_int_type(to_type) == 0 and is_float_type(to_type) == 0 and is_string_type(to_type) == 0 and str_eq(to_type, "bool") == 0 and str_eq(to_type, "ptr") == 0 and str_eq(to_type, "Pointer") == 0 and str_eq(to_type, "unknown") == 0 and str_eq(to_type, "null") == 0:
         to_resolved: str = resolve_alias(to_type)
         if str_eq(to_resolved, "") == 0:
             return implicit_cast(value, from_type, to_resolved)

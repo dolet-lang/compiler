@@ -1,0 +1,46 @@
+# Test 34: Pointer<T> — Library-defined generic pointer type
+
+# Allocate via Memory directly (known working)
+raw: i64 = Memory.malloc_zeroed(32)
+
+# Write and read via Memory (known working)
+Memory.write_i32(raw, 42)
+result: i32 = Memory.read_i32(raw)
+print(result)
+
+# Create Pointer from raw address
+p: ptr = raw as ptr
+p.write_i32(99)
+print(p.read_i32())
+
+# Offset
+off: i64 = 8
+p2: ptr = p.offset(off)
+val: i64 = 100
+p2.write_i64(val)
+print(p2.read_i64())
+
+# is_null
+print(p.is_null())
+
+# to_i64
+addr: i64 = p.to_i64()
+print(addr)
+
+# add (n * stride)
+n: i64 = 2
+stride: i64 = 8
+p3: ptr = p.add(n, stride)
+val2: i64 = 999
+p3.write_i64(val2)
+print(p3.read_i64())
+
+# zero
+bytes: i64 = 32
+p.zero(bytes)
+print(p.read_i32())
+
+# Free
+Memory.free(raw)
+
+print("PASS")

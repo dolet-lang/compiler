@@ -133,10 +133,10 @@ TK_CHAR_TYPE: i32 = 134
 # indents buffer: i32 array (4 bytes each)
 # ==========================================
 
-MAX_TOKENS: i32 = 8192
-out_kinds: i64 = Memory.malloc_zeroed(32768)
-out_values: i64 = Memory.malloc_zeroed(65536)
-out_indents: i64 = Memory.malloc_zeroed(32768)
+MAX_TOKENS: i32 = 32768
+out_kinds: i64 = Memory.malloc_zeroed(131072)
+out_values: i64 = Memory.malloc_zeroed(262144)
+out_indents: i64 = Memory.malloc_zeroed(131072)
 out_count: i32 = 0
 
 fun emit_token(kind: i32, value: str, indent: i32):
@@ -2465,6 +2465,17 @@ fun eat(expected: i32):
     else:
         panic(@"Expected token kind {expected}, got {cur_kind()} (value='{cur_val()}')")
 
+# Eat a > token, handling >> (SHIFT_RIGHT) by splitting it into two >
+fun eat_greater():
+    if cur_kind() == TK_GREATER:
+        p_pos = p_pos + 1
+    elif cur_kind() == TK_SHIFT_RIGHT:
+        # Mutate >> to single > — outer parser consumes remaining >
+        Memory.write_i32(p_kinds + ((p_pos as i64) * 4), TK_GREATER)
+        Memory.write_i64(p_values + ((p_pos as i64) * 8), ">" as i64)
+    else:
+        panic(@"Expected '>' or '>>', got {cur_kind()} (value='{cur_val()}')")
+
 fun skip_newlines() -> i32:
     while cur_kind() == TK_NEWLINE:
         p_pos = p_pos + 1
@@ -3125,12 +3136,16 @@ fun parse_type_name() -> str:
                 close_kind = TK_GREATER
             advance()
             inner: str = parse_type_name()
-            # Handle map[K,V] or map<K,V>
-            if cur_kind() == TK_COMMA:
+            # Handle map[K,V] or map<K,V> — support multiple type params
+            while cur_kind() == TK_COMMA:
                 advance()
                 inner2: str = parse_type_name()
                 inner = Str.concat(Str.concat(inner, ","), inner2)
-            eat(close_kind)
+            # Handle >> for nested generics like array<array<i32>>
+            if close_kind == TK_GREATER:
+                eat_greater()
+            else:
+                eat(close_kind)
             return Str.concat(Str.concat(Str.concat(ts, "["), inner), "]")
         return ts
     # Custom type (struct name, etc.)
@@ -3144,7 +3159,16 @@ fun parse_type_name() -> str:
                 close_kind2 = TK_GREATER
             advance()
             inner3: str = parse_type_name()
-            eat(close_kind2)
+            # Handle multiple type params: TypeName<K, V>
+            while cur_kind() == TK_COMMA:
+                advance()
+                inner4: str = parse_type_name()
+                inner3 = Str.concat(Str.concat(inner3, ","), inner4)
+            # Handle >> for nested generics like MyType<MyType<i32>>
+            if close_kind2 == TK_GREATER:
+                eat_greater()
+            else:
+                eat(close_kind2)
             return Str.concat(Str.concat(Str.concat(tn, "["), inner3), "]")
         return tn
     # Function pointer type: fun(i32, i32) -> i32
@@ -3686,6 +3710,8 @@ fun parse_fun_def(is_async: i64) -> i64:
     # Parse parameters
     eat(TK_LPAREN)
     params: i64 = mk_node_list(16)
+    is_variadic: i64 = 0
+    variadic_param: str = ""
 
     while cur_kind() != TK_RPAREN:
         pname: str = cur_val()
@@ -3703,6 +3729,8 @@ fun parse_fun_def(is_async: i64) -> i64:
         # Optional variadic: name...
         if cur_kind() == TK_ELLIPSIS:
             advance()
+            is_variadic = 1
+            variadic_param = pname
 
         # Optional type: name: type
         ptype: str = ""
@@ -3729,11 +3757,11 @@ fun parse_fun_def(is_async: i64) -> i64:
         advance()
         skip_newlines()
         body: i64 = parse_indented_block(fi)
-        return mk_fun_def(name, params, ret_type, body, 0, 0, "", is_async)
+        return mk_fun_def(name, params, ret_type, body, 0, is_variadic, variadic_param, is_async)
 
     # No colon = abstract method (trait method signature)
     body2: i64 = mk_node_list(4)
-    return mk_fun_def(name, params, ret_type, body2, 0, 0, "", is_async)
+    return mk_fun_def(name, params, ret_type, body2, 0, is_variadic, variadic_param, is_async)
 
 # ==========================================
 # Parse Type Parameter List: <T>, <T, U>, <K, V>
@@ -4972,6 +5000,34 @@ fun get_transparent_inner(name: str) -> str:
     return ""
 
 # ==========================================
+# Parent Struct Registry (child -> parent mapping for inheritance)
+# ==========================================
+g_parent_struct_names: i64 = 0
+g_parent_struct_targets: i64 = 0
+g_parent_struct_count: i32 = 0
+
+fun init_parent_registry():
+    g_parent_struct_names = Memory.malloc_zeroed(128 * 8)
+    g_parent_struct_targets = Memory.malloc_zeroed(128 * 8)
+    g_parent_struct_count = 0
+
+fun register_parent_struct(child: str, parent: str):
+    off: i64 = (g_parent_struct_count as i64) * 8
+    Memory.write_i64(g_parent_struct_names + off, child as i64)
+    Memory.write_i64(g_parent_struct_targets + off, parent as i64)
+    g_parent_struct_count = g_parent_struct_count + 1
+
+fun get_parent_struct(child: str) -> str:
+    i: i32 = 0
+    while i < g_parent_struct_count:
+        off: i64 = (i as i64) * 8
+        cn: str = Memory.read_i64(g_parent_struct_names + off) as str
+        if str_eq(cn, child) == 1:
+            return Memory.read_i64(g_parent_struct_targets + off) as str
+        i = i + 1
+    return ""
+
+# ==========================================
 # Type Alias Registry
 # type i32 = I32 → resolve i32 to I32
 # ==========================================
@@ -5253,9 +5309,13 @@ fun mlir_type(dolet_type: str) -> str:
         return "!llvm.ptr"
     if str_eq(dolet_type, "ptr") == 1:
         return "!llvm.ptr"
+    if str_eq(dolet_type, "Pointer") == 1:
+        return "!llvm.ptr"
     if str_eq(dolet_type, "array") == 1:
         return "!llvm.ptr"
     if str_eq(dolet_type, "list") == 1:
+        return "!llvm.ptr"
+    if str_eq(dolet_type, "map") == 1:
         return "!llvm.ptr"
     if str_eq(dolet_type, "null") == 1:
         return "!llvm.ptr"
@@ -5548,6 +5608,7 @@ fun init_all_registries():
     init_fun_sigs()
     init_struct_registry()
     init_transparent_registry()
+    init_parent_registry()
     init_alias_registry()
     init_enum_registry()
     init_global_vars()
@@ -5635,6 +5696,8 @@ fun is_string_type(t: str) -> i32:
 fun is_ptr_type(t: str) -> i32:
     if str_eq(t, "ptr") == 1:
         return 1
+    if str_eq(t, "Pointer") == 1:
+        return 1
     if str_eq(t, "!llvm.ptr") == 1:
         return 1
     if is_string_type(t) == 1:
@@ -5679,11 +5742,11 @@ fun wider_int_type(a: str, b: str) -> str:
 # ==========================================
 fun implicit_cast(value: str, from_type: str, to_type: str) -> str:
     # Resolve aliases only for unknown types (not built-in i32/i64/f32/f64/str/etc.)
-    if is_int_type(from_type) == 0 and is_float_type(from_type) == 0 and is_string_type(from_type) == 0 and str_eq(from_type, "bool") == 0 and str_eq(from_type, "ptr") == 0 and str_eq(from_type, "unknown") == 0 and str_eq(from_type, "null") == 0:
+    if is_int_type(from_type) == 0 and is_float_type(from_type) == 0 and is_string_type(from_type) == 0 and str_eq(from_type, "bool") == 0 and str_eq(from_type, "ptr") == 0 and str_eq(from_type, "Pointer") == 0 and str_eq(from_type, "unknown") == 0 and str_eq(from_type, "null") == 0:
         from_resolved: str = resolve_alias(from_type)
         if str_eq(from_resolved, "") == 0:
             return implicit_cast(value, from_resolved, to_type)
-    if is_int_type(to_type) == 0 and is_float_type(to_type) == 0 and is_string_type(to_type) == 0 and str_eq(to_type, "bool") == 0 and str_eq(to_type, "ptr") == 0 and str_eq(to_type, "unknown") == 0 and str_eq(to_type, "null") == 0:
+    if is_int_type(to_type) == 0 and is_float_type(to_type) == 0 and is_string_type(to_type) == 0 and str_eq(to_type, "bool") == 0 and str_eq(to_type, "ptr") == 0 and str_eq(to_type, "Pointer") == 0 and str_eq(to_type, "unknown") == 0 and str_eq(to_type, "null") == 0:
         to_resolved: str = resolve_alias(to_type)
         if str_eq(to_resolved, "") == 0:
             return implicit_cast(value, from_type, to_resolved)
@@ -5817,6 +5880,11 @@ fun infer_expr_type(node: i64) -> str:
         return rt
 
     if ntype == NODE_COMPARISON or ntype == NODE_LOGICAL_OP:
+        return "bool"
+
+    if ntype == NODE_IS_NULL:
+        return "bool"
+    if ntype == NODE_IS_NOT_NULL:
         return "bool"
 
     if ntype == NODE_UNARY_OP:
@@ -6871,6 +6939,13 @@ fun gen_map_literal(node: i64) -> str:
     size_val: str = emit_const_i32(ec)
     emit_store(size_val, mem_p, "i32")
 
+    # Store capacity at +4
+    map_cap_val: str = emit_const_i32(ec)
+    map_cap_ptr: str = new_tmp()
+    map_c4off: str = emit_const_i64(4)
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(map_cap_ptr, " = llvm.getelementptr "), mem_p), Str.concat("[", Str.concat(map_c4off, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+    emit_store(map_cap_val, map_cap_ptr, "i32")
+
     # Store entries
     i: i32 = 0
     while i < ec:
@@ -7818,6 +7893,8 @@ fun gen_fun_def(node: i64):
     params: i64 = Memory.read_i64(node + 16)
     ret_type: str = Memory.read_i64(node + 24) as str
     body: i64 = Memory.read_i64(node + 32)
+    is_variadic: i64 = Memory.read_i64(node + 48)
+    variadic_pname: str = Memory.read_i64(node + 56) as str
 
     # Resolve overloaded (mangled) function name
     fpt_str: str = build_param_types_str(params)
@@ -7836,6 +7913,10 @@ fun gen_fun_def(node: i64):
         pnode: i64 = nl_get(params, i)
         pname: str = Memory.read_i64(pnode + 8) as str
         ptype: str = Memory.read_i64(pnode + 16) as str
+        # Skip variadic parameter (not yet supported in codegen)
+        if is_variadic == 1 and str_eq(pname, variadic_pname) == 1:
+            i = i + 1
+            continue
         pmt: str = mlir_type(ptype)
         if i > 0:
             param_str = Str.concat(param_str, ", ")
@@ -7872,6 +7953,10 @@ fun gen_fun_def(node: i64):
         pnode2: i64 = nl_get(params, i)
         pname2: str = Memory.read_i64(pnode2 + 8) as str
         ptype2: str = Memory.read_i64(pnode2 + 16) as str
+        # Skip variadic parameter (not yet supported in codegen)
+        if is_variadic == 1 and str_eq(pname2, variadic_pname) == 1:
+            i = i + 1
+            continue
         arg_name: str = Str.concat("arg", Convert.i64_to_str(i as i64))
         add_variable(pname2, arg_name, ptype2, 1)
         i = i + 1
@@ -8506,17 +8591,40 @@ fun gen_instance_method_call(node: i64) -> str:
     if args_list != 0:
         ac = nl_count(args_list)
 
+    # Look up method node to get param types for implicit casting
+    method_node2: i64 = find_impl_method(base_type, mname)
+    method_params2: i64 = 0
+    if method_node2 != 0:
+        method_params2 = Memory.read_i64(method_node2 + 16)
+
     i: i32 = 0
     while i < ac:
         anode: i64 = nl_get(args_list, i)
         at: str = infer_expr_type(anode)
         if str_eq(at, "unknown") == 1:
             at = "i64"
-        av: str = gen_expr(anode, at)
-        amt: str = mlir_type(at)
 
-        arg_str = Str.concat(arg_str, Str.concat(", ", av))
-        type_str = Str.concat(type_str, Str.concat(", ", amt))
+        # Get expected param type from method definition (skip self at index 0)
+        expected_pt2: str = ""
+        if method_params2 != 0:
+            param_idx: i32 = i + 1
+            if param_idx < nl_count(method_params2):
+                mp_node2: i64 = nl_get(method_params2, param_idx)
+                expected_pt2 = Memory.read_i64(mp_node2 + 16) as str
+
+        if str_eq(expected_pt2, "") == 0:
+            av: str = gen_expr(anode, expected_pt2)
+            amt: str = mlir_type(expected_pt2)
+            if str_eq(at, expected_pt2) == 0 and str_eq(at, "unknown") == 0:
+                av = implicit_cast(av, at, expected_pt2)
+            arg_str = Str.concat(arg_str, Str.concat(", ", av))
+            type_str = Str.concat(type_str, Str.concat(", ", amt))
+        else:
+            av2: str = gen_expr(anode, at)
+            amt2: str = mlir_type(at)
+            arg_str = Str.concat(arg_str, Str.concat(", ", av2))
+            type_str = Str.concat(type_str, Str.concat(", ", amt2))
+
         # Build overload type string
         if Memory.strlen(call_arg_types) > 0:
             call_arg_types = Str.concat(call_arg_types, Str.concat(",", at))
@@ -8529,6 +8637,16 @@ fun gen_instance_method_call(node: i64) -> str:
 
     # Get return type
     ret_type: str = get_fun_ret_type(mangled)
+    # If method not found on child type, try parent type (inheritance)
+    if str_eq(ret_type, "unknown") == 1:
+        parent_type: str = get_parent_struct(base_type)
+        if str_eq(parent_type, "") == 0:
+            parent_mangled: str = Str.concat(Str.concat(parent_type, "_"), mname)
+            parent_mangled = resolve_overload(parent_mangled, call_arg_types)
+            parent_rt: str = get_fun_ret_type(parent_mangled)
+            if str_eq(parent_rt, "unknown") == 0:
+                mangled = parent_mangled
+                ret_type = parent_rt
     ret_mt: str = ""
     if str_eq(ret_type, "unknown") == 0 and str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
         ret_mt = mlir_type(ret_type)
@@ -8549,9 +8667,11 @@ fun gen_super_method_call(node: i64) -> str:
     args_list: i64 = Memory.read_i64(node + 16)
 
     # In Dolet, super calls the base class method
-    # The base struct name should be looked up from inheritance map
-    # For now, call parent_StructName_methodName
+    # Look up parent struct from inheritance registry
     sname: str = g_cur_method_struct
+    parent_sname: str = get_parent_struct(sname)
+    if str_eq(parent_sname, "") == 0:
+        sname = parent_sname
     mangled: str = Str.concat(Str.concat(sname, "_"), mname)
 
     arg_str: str = "%self"
@@ -8791,6 +8911,7 @@ fun collect_declarations(ast: i64):
                                 nl_add(merged, nl_get(fields, ci))
                                 ci = ci + 1
                         fields = merged
+                    register_parent_struct(sname, base_class)
                 if fields != 0:
                     register_struct(sname, fields)
                 # Register inline method signatures with param types (methods at +40)
@@ -9330,10 +9451,10 @@ fun init_tokenizer_constants():
     TK_ARRAY = 114
 
 fun init_tokenizer_buffers():
-    MAX_TOKENS = 8192
-    out_kinds = Memory.malloc_zeroed(32768)
-    out_values = Memory.malloc_zeroed(65536)
-    out_indents = Memory.malloc_zeroed(32768)
+    MAX_TOKENS = 32768
+    out_kinds = Memory.malloc_zeroed(131072)
+    out_values = Memory.malloc_zeroed(262144)
+    out_indents = Memory.malloc_zeroed(131072)
     out_count = 0
     tok_pos = 0
     tok_len = 0

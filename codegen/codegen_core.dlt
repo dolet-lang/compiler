@@ -829,6 +829,8 @@ fun mlir_type(dolet_type: str) -> str:
         return "!llvm.ptr"
     if str_eq(dolet_type, "ptr") == 1:
         return "!llvm.ptr"
+    if str_eq(dolet_type, "Pointer") == 1:
+        return "!llvm.ptr"
     if str_eq(dolet_type, "array") == 1:
         return "!llvm.ptr"
     if str_eq(dolet_type, "list") == 1:
