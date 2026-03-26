@@ -517,12 +517,16 @@ fun parse_type_name() -> str:
                 close_kind = TK_GREATER
             advance()
             inner: str = parse_type_name()
-            # Handle map[K,V] or map<K,V>
-            if cur_kind() == TK_COMMA:
+            # Handle map[K,V] or map<K,V> — support multiple type params
+            while cur_kind() == TK_COMMA:
                 advance()
                 inner2: str = parse_type_name()
                 inner = Str.concat(Str.concat(inner, ","), inner2)
-            eat(close_kind)
+            # Handle >> for nested generics like array<array<i32>>
+            if close_kind == TK_GREATER:
+                eat_greater()
+            else:
+                eat(close_kind)
             return Str.concat(Str.concat(Str.concat(ts, "["), inner), "]")
         return ts
     # Custom type (struct name, etc.)
@@ -536,7 +540,16 @@ fun parse_type_name() -> str:
                 close_kind2 = TK_GREATER
             advance()
             inner3: str = parse_type_name()
-            eat(close_kind2)
+            # Handle multiple type params: TypeName<K, V>
+            while cur_kind() == TK_COMMA:
+                advance()
+                inner4: str = parse_type_name()
+                inner3 = Str.concat(Str.concat(inner3, ","), inner4)
+            # Handle >> for nested generics like MyType<MyType<i32>>
+            if close_kind2 == TK_GREATER:
+                eat_greater()
+            else:
+                eat(close_kind2)
             return Str.concat(Str.concat(Str.concat(tn, "["), inner3), "]")
         return tn
     # Function pointer type: fun(i32, i32) -> i32

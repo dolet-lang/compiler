@@ -170,6 +170,7 @@ fun collect_declarations(ast: i64):
                                 nl_add(merged, nl_get(fields, ci))
                                 ci = ci + 1
                         fields = merged
+                    register_parent_struct(sname, base_class)
                 if fields != 0:
                     register_struct(sname, fields)
                 # Register inline method signatures with param types (methods at +40)

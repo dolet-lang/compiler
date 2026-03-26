@@ -282,6 +282,17 @@ fun eat(expected: i32):
     else:
         panic(@"Expected token kind {expected}, got {cur_kind()} (value='{cur_val()}')")
 
+# Eat a > token, handling >> (SHIFT_RIGHT) by splitting it into two >
+fun eat_greater():
+    if cur_kind() == TK_GREATER:
+        p_pos = p_pos + 1
+    elif cur_kind() == TK_SHIFT_RIGHT:
+        # Mutate >> to single > — outer parser consumes remaining >
+        Memory.write_i32(p_kinds + ((p_pos as i64) * 4), TK_GREATER)
+        Memory.write_i64(p_values + ((p_pos as i64) * 8), ">" as i64)
+    else:
+        panic(@"Expected '>' or '>>', got {cur_kind()} (value='{cur_val()}')")
+
 fun skip_newlines() -> i32:
     while cur_kind() == TK_NEWLINE:
         p_pos = p_pos + 1

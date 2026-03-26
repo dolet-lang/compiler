@@ -520,6 +520,34 @@ fun get_transparent_inner(name: str) -> str:
     return ""
 
 # ==========================================
+# Parent Struct Registry (child -> parent mapping for inheritance)
+# ==========================================
+g_parent_struct_names: i64 = 0
+g_parent_struct_targets: i64 = 0
+g_parent_struct_count: i32 = 0
+
+fun init_parent_registry():
+    g_parent_struct_names = Memory.malloc_zeroed(128 * 8)
+    g_parent_struct_targets = Memory.malloc_zeroed(128 * 8)
+    g_parent_struct_count = 0
+
+fun register_parent_struct(child: str, parent: str):
+    off: i64 = (g_parent_struct_count as i64) * 8
+    Memory.write_i64(g_parent_struct_names + off, child as i64)
+    Memory.write_i64(g_parent_struct_targets + off, parent as i64)
+    g_parent_struct_count = g_parent_struct_count + 1
+
+fun get_parent_struct(child: str) -> str:
+    i: i32 = 0
+    while i < g_parent_struct_count:
+        off: i64 = (i as i64) * 8
+        cn: str = Memory.read_i64(g_parent_struct_names + off) as str
+        if str_eq(cn, child) == 1:
+            return Memory.read_i64(g_parent_struct_targets + off) as str
+        i = i + 1
+    return ""
+
+# ==========================================
 # Type Alias Registry
 # type i32 = I32 → resolve i32 to I32
 # ==========================================
@@ -1096,6 +1124,7 @@ fun init_all_registries():
     init_fun_sigs()
     init_struct_registry()
     init_transparent_registry()
+    init_parent_registry()
     init_alias_registry()
     init_enum_registry()
     init_global_vars()

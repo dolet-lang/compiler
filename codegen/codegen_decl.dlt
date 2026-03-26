@@ -13,6 +13,8 @@ fun gen_fun_def(node: i64):
     params: i64 = Memory.read_i64(node + 16)
     ret_type: str = Memory.read_i64(node + 24) as str
     body: i64 = Memory.read_i64(node + 32)
+    is_variadic: i64 = Memory.read_i64(node + 48)
+    variadic_pname: str = Memory.read_i64(node + 56) as str
 
     # Resolve overloaded (mangled) function name
     fpt_str: str = build_param_types_str(params)
@@ -31,6 +33,10 @@ fun gen_fun_def(node: i64):
         pnode: i64 = nl_get(params, i)
         pname: str = Memory.read_i64(pnode + 8) as str
         ptype: str = Memory.read_i64(pnode + 16) as str
+        # Skip variadic parameter (not yet supported in codegen)
+        if is_variadic == 1 and str_eq(pname, variadic_pname) == 1:
+            i = i + 1
+            continue
         pmt: str = mlir_type(ptype)
         if i > 0:
             param_str = Str.concat(param_str, ", ")
@@ -67,6 +73,10 @@ fun gen_fun_def(node: i64):
         pnode2: i64 = nl_get(params, i)
         pname2: str = Memory.read_i64(pnode2 + 8) as str
         ptype2: str = Memory.read_i64(pnode2 + 16) as str
+        # Skip variadic parameter (not yet supported in codegen)
+        if is_variadic == 1 and str_eq(pname2, variadic_pname) == 1:
+            i = i + 1
+            continue
         arg_name: str = Str.concat("arg", Convert.i64_to_str(i as i64))
         add_variable(pname2, arg_name, ptype2, 1)
         i = i + 1

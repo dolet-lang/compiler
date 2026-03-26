@@ -19,6 +19,8 @@ fun parse_fun_def(is_async: i64) -> i64:
     # Parse parameters
     eat(TK_LPAREN)
     params: i64 = mk_node_list(16)
+    is_variadic: i64 = 0
+    variadic_param: str = ""
 
     while cur_kind() != TK_RPAREN:
         pname: str = cur_val()
@@ -36,6 +38,8 @@ fun parse_fun_def(is_async: i64) -> i64:
         # Optional variadic: name...
         if cur_kind() == TK_ELLIPSIS:
             advance()
+            is_variadic = 1
+            variadic_param = pname
 
         # Optional type: name: type
         ptype: str = ""
@@ -62,11 +66,11 @@ fun parse_fun_def(is_async: i64) -> i64:
         advance()
         skip_newlines()
         body: i64 = parse_indented_block(fi)
-        return mk_fun_def(name, params, ret_type, body, 0, 0, "", is_async)
+        return mk_fun_def(name, params, ret_type, body, 0, is_variadic, variadic_param, is_async)
 
     # No colon = abstract method (trait method signature)
     body2: i64 = mk_node_list(4)
-    return mk_fun_def(name, params, ret_type, body2, 0, 0, "", is_async)
+    return mk_fun_def(name, params, ret_type, body2, 0, is_variadic, variadic_param, is_async)
 
 # ==========================================
 # Parse Type Parameter List: <T>, <T, U>, <K, V>

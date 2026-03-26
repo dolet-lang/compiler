@@ -255,6 +255,11 @@ fun infer_expr_type(node: i64) -> str:
     if ntype == NODE_COMPARISON or ntype == NODE_LOGICAL_OP:
         return "bool"
 
+    if ntype == NODE_IS_NULL:
+        return "bool"
+    if ntype == NODE_IS_NOT_NULL:
+        return "bool"
+
     if ntype == NODE_UNARY_OP:
         return infer_expr_type(Memory.read_i64(node + 16))
 
