@@ -909,8 +909,15 @@ fun gen_struct_instantiation(node: i64) -> str:
     field_vals: i64 = Memory.read_i64(node + 16)
 
     ssize: i32 = calculate_struct_size(sname)
-    sz: str = emit_const_i64(ssize as i64)
-    mem_p: str = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
+    mem_p: str = ""
+    if is_heap_struct(sname) == 1:
+        # @heap annotation — allocate on the heap
+        sz: str = emit_const_i64(ssize as i64)
+        mem_p = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
+    else:
+        # default (@stack or unmarked) — allocate on the stack
+        struct_mtype: str = get_struct_mlir_type(sname)
+        mem_p = emit_alloca(struct_mtype)
 
     # Count passed field_vals
     fvc: i32 = 0

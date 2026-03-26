@@ -202,7 +202,7 @@ fun parse_statement() -> i64:
             return mk_self_field(sfname)
         return mk_self()
 
-    # Annotation: @stack, @inline, @transparent, etc.
+    # Annotation: @stack, @heap, @transparent, @inline, etc.
     if k == TK_AT:
         advance()
         ann_name: str = ""
@@ -210,11 +210,20 @@ fun parse_statement() -> i64:
             ann_name = cur_val()
             advance()
         elif cur_kind() == TK_STACK:
+            ann_name = "stack"
             advance()
         # @transparent struct → pass flag=2 via stack_alloc field
         if str_eq(ann_name, "transparent") == 1:
             if cur_kind() == TK_STRUCT:
                 return parse_struct_decl_transparent()
+        # @stack struct → pass flag=1 (alias for default, stack is the default)
+        if str_eq(ann_name, "stack") == 1:
+            if cur_kind() == TK_STRUCT:
+                return parse_struct_decl_stack()
+        # @heap struct → pass flag=3 via stack_alloc field (explicit heap allocation)
+        if str_eq(ann_name, "heap") == 1:
+            if cur_kind() == TK_STRUCT:
+                return parse_struct_decl_heap()
         return parse_statement()
 
     # Identifier: var decl, assignment, function call, method call

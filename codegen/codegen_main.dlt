@@ -151,6 +151,9 @@ fun collect_declarations(ast: i64):
                         inner_t: str = Memory.read_i64(tf + 16) as str
                         register_transparent(sname, inner_t)
             else:
+                # @heap struct — mark for Memory.malloc; otherwise default is llvm.alloca (stack)
+                if s_stack_alloc == 3:
+                    register_heap_struct(sname)
                 # Merge parent fields if struct extends another
                 if str_eq(base_class, "") == 0:
                     parent_fields: i64 = get_struct_fields(base_class)

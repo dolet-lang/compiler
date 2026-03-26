@@ -3894,6 +3894,20 @@ fun parse_struct_decl_transparent() -> i64:
     Memory.write_i64(node + 56, 2)
     return node
 
+# @stack struct — parse normally then set flag=1 in stack_alloc field (default = stack anyway)
+fun parse_struct_decl_stack() -> i64:
+    node: i64 = parse_struct_decl(0)
+    # Set stack_alloc (offset +56) to 1 = stack marker (same as default, explicit annotation)
+    Memory.write_i64(node + 56, 1)
+    return node
+
+# @heap struct — parse normally then set flag=3 in stack_alloc field (explicit heap allocation)
+fun parse_struct_decl_heap() -> i64:
+    node: i64 = parse_struct_decl(0)
+    # Set stack_alloc (offset +56) to 3 = heap marker (opt-in to Memory.malloc)
+    Memory.write_i64(node + 56, 3)
+    return node
+
 # ==========================================
 # Enum Declaration
 # enum Name:
@@ -4405,7 +4419,7 @@ fun parse_statement() -> i64:
             return mk_self_field(sfname)
         return mk_self()
 
-    # Annotation: @stack, @inline, @transparent, etc.
+    # Annotation: @stack, @heap, @transparent, @inline, etc.
     if k == TK_AT:
         advance()
         ann_name: str = ""
@@ -4413,11 +4427,20 @@ fun parse_statement() -> i64:
             ann_name = cur_val()
             advance()
         elif cur_kind() == TK_STACK:
+            ann_name = "stack"
             advance()
         # @transparent struct → pass flag=2 via stack_alloc field
         if str_eq(ann_name, "transparent") == 1:
             if cur_kind() == TK_STRUCT:
                 return parse_struct_decl_transparent()
+        # @stack struct → pass flag=1 (alias for default, stack is the default)
+        if str_eq(ann_name, "stack") == 1:
+            if cur_kind() == TK_STRUCT:
+                return parse_struct_decl_stack()
+        # @heap struct → pass flag=3 via stack_alloc field (explicit heap allocation)
+        if str_eq(ann_name, "heap") == 1:
+            if cur_kind() == TK_STRUCT:
+                return parse_struct_decl_heap()
         return parse_statement()
 
     # Identifier: var decl, assignment, function call, method call
@@ -4998,6 +5021,33 @@ fun get_transparent_inner(name: str) -> str:
             return Memory.read_i64(g_trans_inner + off) as str
         i = i + 1
     return ""
+
+# ==========================================
+# Heap Struct Registry (@heap → Memory.malloc)
+# Default allocation is stack (llvm.alloca).
+# Only structs marked @heap use Memory.malloc.
+# ==========================================
+g_heap_names: i64 = 0
+g_heap_count: i32 = 0
+
+fun init_stack_registry():
+    g_heap_names = Memory.malloc_zeroed(128 * 8)
+    g_heap_count = 0
+
+fun register_heap_struct(name: str):
+    off: i64 = (g_heap_count as i64) * 8
+    Memory.write_i64(g_heap_names + off, name as i64)
+    g_heap_count = g_heap_count + 1
+
+fun is_heap_struct(name: str) -> i32:
+    i: i32 = 0
+    while i < g_heap_count:
+        off: i64 = (i as i64) * 8
+        tn: str = Memory.read_i64(g_heap_names + off) as str
+        if str_eq(tn, name) == 1:
+            return 1
+        i = i + 1
+    return 0
 
 # ==========================================
 # Parent Struct Registry (child -> parent mapping for inheritance)
@@ -5608,6 +5658,7 @@ fun init_all_registries():
     init_fun_sigs()
     init_struct_registry()
     init_transparent_registry()
+    init_stack_registry()
     init_parent_registry()
     init_alias_registry()
     init_enum_registry()
@@ -6986,8 +7037,15 @@ fun gen_struct_instantiation(node: i64) -> str:
     field_vals: i64 = Memory.read_i64(node + 16)
 
     ssize: i32 = calculate_struct_size(sname)
-    sz: str = emit_const_i64(ssize as i64)
-    mem_p: str = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
+    mem_p: str = ""
+    if is_heap_struct(sname) == 1:
+        # @heap annotation — allocate on the heap
+        sz: str = emit_const_i64(ssize as i64)
+        mem_p = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
+    else:
+        # default (@stack or unmarked) — allocate on the stack
+        struct_mtype: str = get_struct_mlir_type(sname)
+        mem_p = emit_alloca(struct_mtype)
 
     # Count passed field_vals
     fvc: i32 = 0
@@ -8892,6 +8950,9 @@ fun collect_declarations(ast: i64):
                         inner_t: str = Memory.read_i64(tf + 16) as str
                         register_transparent(sname, inner_t)
             else:
+                # @heap struct — mark for Memory.malloc; otherwise default is llvm.alloca (stack)
+                if s_stack_alloc == 3:
+                    register_heap_struct(sname)
                 # Merge parent fields if struct extends another
                 if str_eq(base_class, "") == 0:
                     parent_fields: i64 = get_struct_fields(base_class)

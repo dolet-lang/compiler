@@ -520,6 +520,33 @@ fun get_transparent_inner(name: str) -> str:
     return ""
 
 # ==========================================
+# Heap Struct Registry (@heap → Memory.malloc)
+# Default allocation is stack (llvm.alloca).
+# Only structs marked @heap use Memory.malloc.
+# ==========================================
+g_heap_names: i64 = 0
+g_heap_count: i32 = 0
+
+fun init_stack_registry():
+    g_heap_names = Memory.malloc_zeroed(128 * 8)
+    g_heap_count = 0
+
+fun register_heap_struct(name: str):
+    off: i64 = (g_heap_count as i64) * 8
+    Memory.write_i64(g_heap_names + off, name as i64)
+    g_heap_count = g_heap_count + 1
+
+fun is_heap_struct(name: str) -> i32:
+    i: i32 = 0
+    while i < g_heap_count:
+        off: i64 = (i as i64) * 8
+        tn: str = Memory.read_i64(g_heap_names + off) as str
+        if str_eq(tn, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+# ==========================================
 # Parent Struct Registry (child -> parent mapping for inheritance)
 # ==========================================
 g_parent_struct_names: i64 = 0
@@ -1128,6 +1155,7 @@ fun init_all_registries():
     init_fun_sigs()
     init_struct_registry()
     init_transparent_registry()
+    init_stack_registry()
     init_parent_registry()
     init_alias_registry()
     init_enum_registry()

@@ -203,6 +203,20 @@ fun parse_struct_decl_transparent() -> i64:
     Memory.write_i64(node + 56, 2)
     return node
 
+# @stack struct — parse normally then set flag=1 in stack_alloc field (default = stack anyway)
+fun parse_struct_decl_stack() -> i64:
+    node: i64 = parse_struct_decl(0)
+    # Set stack_alloc (offset +56) to 1 = stack marker (same as default, explicit annotation)
+    Memory.write_i64(node + 56, 1)
+    return node
+
+# @heap struct — parse normally then set flag=3 in stack_alloc field (explicit heap allocation)
+fun parse_struct_decl_heap() -> i64:
+    node: i64 = parse_struct_decl(0)
+    # Set stack_alloc (offset +56) to 3 = heap marker (opt-in to Memory.malloc)
+    Memory.write_i64(node + 56, 3)
+    return node
+
 # ==========================================
 # Enum Declaration
 # enum Name:
