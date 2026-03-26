@@ -34,22 +34,47 @@ for %%f in (
     test_14_silicon
     test_15_inheritance
     test_16_import
+    test_17_type_alias
+    test_18_nullable
+    test_19_collections
+    test_20_foreach
+    test_21_static
+    test_22_access_modifiers
+    test_23_fun_pointers
+    test_24_variadic
+    test_25_context_blocks
+    test_26_async
+    test_27_stack_alloc
+    test_28_nested_access
+    test_29_super_method
+    test_30_reverse_loop
+    test_31_advanced_match
+    test_32_list_methods
+    test_33_nested_collections
     test_mini_struct
+    test_import_helper
 ) do (
     echo [TEST] %%f
     if exist "%TESTS_DIR%\%%f.dlt" (
+        REM Delete old exe to prevent stale cache
+        if exist "%TESTS_DIR%\%%f.exe" del /q "%TESTS_DIR%\%%f.exe"
         %COMPILER% "%TESTS_DIR%\%%f.dlt" -o "%TESTS_DIR%\%%f.exe" 2>&1
-        if errorlevel 1 (
-            echo   [FAIL] Compilation failed
-            set /a FAIL+=1
-            set "ERRORS=!ERRORS! %%f"
-        ) else (
+        if exist "%TESTS_DIR%\%%f.exe" (
             echo   [PASS] Compiled OK
             set /a PASS+=1
             REM Try to run
             "%TESTS_DIR%\%%f.exe" 2>&1
             echo.
+            REM Cleanup exe after running
+            del /q "%TESTS_DIR%\%%f.exe" 2>nul
+        ) else (
+            echo   [FAIL] Compilation failed
+            set /a FAIL+=1
+            set "ERRORS=!ERRORS! %%f"
         )
+        REM Cleanup intermediate files
+        if exist "%TESTS_DIR%\%%f.mlir" del /q "%TESTS_DIR%\%%f.mlir" 2>nul
+        if exist "%TESTS_DIR%\%%f.ll" del /q "%TESTS_DIR%\%%f.ll" 2>nul
     ) else (
         echo   [SKIP] File not found
     )
@@ -62,17 +87,22 @@ for %%f in (
 ) do (
     echo [TEST] e2e/%%f
     if exist "%E2E_DIR%\%%f.dlt" (
+        REM Delete old exe to prevent stale cache
+        if exist "%E2E_DIR%\%%f.exe" del /q "%E2E_DIR%\%%f.exe"
         %COMPILER% "%E2E_DIR%\%%f.dlt" -o "%E2E_DIR%\%%f.exe" 2>&1
-        if errorlevel 1 (
-            echo   [FAIL] Compilation failed
-            set /a FAIL+=1
-            set "ERRORS=!ERRORS! e2e/%%f"
-        ) else (
+        if exist "%E2E_DIR%\%%f.exe" (
             echo   [PASS] Compiled OK
             set /a PASS+=1
             "%E2E_DIR%\%%f.exe" 2>&1
             echo.
+            del /q "%E2E_DIR%\%%f.exe" 2>nul
+        ) else (
+            echo   [FAIL] Compilation failed
+            set /a FAIL+=1
+            set "ERRORS=!ERRORS! e2e/%%f"
         )
+        if exist "%E2E_DIR%\%%f.mlir" del /q "%E2E_DIR%\%%f.mlir" 2>nul
+        if exist "%E2E_DIR%\%%f.ll" del /q "%E2E_DIR%\%%f.ll" 2>nul
     ) else (
         echo   [SKIP] File not found
     )
