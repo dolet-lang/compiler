@@ -2,6 +2,7 @@
 # Test 26: Async/Await
 # Tests async function declaration and await
 ##############################
+import std
 
 async fun fetch_value() -> i32:
     return 42

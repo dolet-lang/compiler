@@ -2,6 +2,7 @@
 # Test 01: Data Types
 # Tests all basic data types from DOLET_LANGUAGE_FEATURES.md
 ##############################
+import std
 
 # Signed integers
 a8: i8 = 127

@@ -2,6 +2,7 @@
 # Test 18: Nullable Variables
 # Tests nullable declarations and null checks
 ##############################
+import std
 
 # Nullable string — default to empty, not null
 name: str = ""

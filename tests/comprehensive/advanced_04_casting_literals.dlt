@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 04
 # Type Casting, Hex/Bin/Oct, Nullable Variables
 ##############################
+import std
 
 print("=== Hex Literals ===")
 h1: i32 = 0xFF

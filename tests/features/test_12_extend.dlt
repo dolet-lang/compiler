@@ -2,6 +2,7 @@
 # Test 12: Extend Blocks
 # Tests extending existing types with new methods
 ##############################
+import std
 
 # Extend a struct with additional methods
 struct Vector2:

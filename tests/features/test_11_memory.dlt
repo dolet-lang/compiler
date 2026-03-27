@@ -2,6 +2,7 @@
 # Test 11: Memory Operations
 # Tests Memory struct operations (auto-imported runtime)
 ##############################
+import std
 
 # Allocate memory
 mem_ptr: i64 = Memory.malloc_zeroed(64)

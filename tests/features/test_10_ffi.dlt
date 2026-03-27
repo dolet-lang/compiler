@@ -2,6 +2,7 @@
 # Test 10: FFI (Foreign Function Interface)
 # Tests extern block and calling external functions
 ##############################
+import std
 
 # Extern function declaration
 extern lib "user32.dll":

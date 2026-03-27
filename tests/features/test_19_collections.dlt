@@ -2,6 +2,7 @@
 # Test 19: Collections (list & array)
 # Tests basic list and array creation
 ##############################
+import std
 
 # List creation using list<T> syntax
 nums: list<i32> = [10, 20, 30]

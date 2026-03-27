@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 02
 # Memory Operations: malloc, free, read/write
 ##############################
+import std
 
 print("=== Basic Allocation ===")
 mem: i64 = Memory.malloc_zeroed(256)

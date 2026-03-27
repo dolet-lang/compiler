@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 05
 # Module Imports + Complex Struct Interaction
 ##############################
+import std
 
 import advanced_05_math_lib
 

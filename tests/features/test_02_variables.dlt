@@ -2,6 +2,7 @@
 # Test 02: Variables & Constants
 # Tests variable declarations, type inference, constants
 ##############################
+import std
 
 # Type inference
 name = "Dolet"

@@ -2,6 +2,7 @@
 # Test 16: Module Imports
 # Tests importing local modules
 ##############################
+import std
 
 import test_import_helper
 
@@ -10,3 +11,4 @@ print(@"10 + 20 = {result}")
 
 msg: str = helper_greet("Dolet")
 print(msg)
+

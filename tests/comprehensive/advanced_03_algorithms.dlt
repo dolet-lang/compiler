@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 03
 # Complex Algorithms: sorting, searching, math
 ##############################
+import std
 
 # === Bubble Sort (in-memory array) ===
 fun bubble_sort(arr: i64, size: i32):

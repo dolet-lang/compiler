@@ -2,6 +2,7 @@
 # Test 31: Advanced Match
 # Tests match with multiple patterns and enum matching
 ##############################
+import std
 
 # Match with multiple case values
 x: i32 = 5

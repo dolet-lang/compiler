@@ -2,6 +2,7 @@
 # Test 20: For-Each Loop
 # Tests iterating over collections
 ##############################
+import std
 
 # List iteration with <T> syntax
 items: list<i32> = [10, 20, 30]

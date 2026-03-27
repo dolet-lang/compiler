@@ -1,6 +1,7 @@
 ##############################
 # Math Library Module (imported by advanced_05_imports.dlt)
 ##############################
+import std
 
 fun math_abs(n: i32) -> i32:
     if n < 0:

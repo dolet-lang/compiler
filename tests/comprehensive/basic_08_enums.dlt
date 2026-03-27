@@ -2,6 +2,7 @@
 # Comprehensive Basic Test 08
 # Enums: basic, with values, match on enum
 ##############################
+import std
 
 # === Basic Enum ===
 enum Direction:

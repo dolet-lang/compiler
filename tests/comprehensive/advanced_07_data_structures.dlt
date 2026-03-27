@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 07
 # Data Structures: Linked List, Stack, Queue (all manual memory)
 ##############################
+import std
 
 # === Node: 8 bytes value + 8 bytes next_ptr = 16 bytes ===
 fun node_new(value: i32) -> i64:

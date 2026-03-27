@@ -2,6 +2,7 @@
 # Test 30: Reverse Loop & Step
 # Tests reverse for loop and negative step
 ##############################
+import std
 
 # Reverse for loop (auto-reverse)
 print("Reverse 5 to 0:")

@@ -2,6 +2,7 @@
 # Comprehensive Basic Test 06
 # Strings: concat, interpolation, comparison, methods
 ##############################
+import std
 
 print("=== String Literals ===")
 s1: str = "Hello"

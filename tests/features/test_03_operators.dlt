@@ -2,6 +2,7 @@
 # Test 03: Operators
 # Tests arithmetic, comparison, logical, bitwise, compound assignment
 ##############################
+import std
 
 # Arithmetic
 a: i32 = 10

@@ -2,6 +2,7 @@
 # Test 21: Static Methods & Fields
 # Tests static fun and static field access
 ##############################
+import std
 
 struct MathHelper:
     value: i32 = 0

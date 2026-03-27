@@ -2,6 +2,7 @@
 # Test 07: Structs
 # Tests struct declarations, fields, instantiation, methods
 ##############################
+import std
 
 # Basic struct
 struct Point:

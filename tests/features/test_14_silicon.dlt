@@ -2,6 +2,7 @@
 # Test 14: Silicon Functions (Hardware Intrinsics)
 # Tests @sqrt and other builtin functions
 ##############################
+import std
 
 # @sqrt - hardware instruction
 x: f64 = 16.0

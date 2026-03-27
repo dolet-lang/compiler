@@ -2,6 +2,7 @@
 # Test 22: Access Modifiers
 # Tests public, private, protected fields
 ##############################
+import std
 
 struct Account:
     public username: str

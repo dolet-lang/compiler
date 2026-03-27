@@ -2,6 +2,7 @@
 # Comprehensive Basic Test 05
 # Functions: params, return, recursion, multiple calls
 ##############################
+import std
 
 # === Simple function ===
 fun say_hello():

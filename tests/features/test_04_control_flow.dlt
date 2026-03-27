@@ -2,6 +2,7 @@
 # Test 04: Control Flow
 # Tests if/elif/else, match, ternary
 ##############################
+import std
 
 # If/Else
 x: i32 = 15

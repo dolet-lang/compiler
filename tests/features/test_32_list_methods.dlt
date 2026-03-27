@@ -2,6 +2,7 @@
 # Test 32: List Methods
 # Tests list creation and size
 ##############################
+import std
 
 # Create list with <T> syntax
 nums: list<i32> = [10, 20, 30, 40, 50]

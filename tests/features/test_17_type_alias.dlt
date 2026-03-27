@@ -2,6 +2,7 @@
 # Test 17: Type Aliases
 # Tests type alias declarations
 ##############################
+import std
 
 # Basic type alias
 type UserID = i64

@@ -2,6 +2,7 @@
 # Test 23: Higher-Order Functions
 # Tests passing functions as callbacks via ptr
 ##############################
+import std
 
 fun add(a: i32, b: i32) -> i32:
     return a + b

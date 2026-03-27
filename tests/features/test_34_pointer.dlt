@@ -1,4 +1,5 @@
 # Test 34: Pointer<T> — Library-defined generic pointer type
+import std
 
 # Allocate via Memory directly (known working)
 raw: i64 = Memory.malloc_zeroed(32)

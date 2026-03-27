@@ -2,6 +2,7 @@
 # Comprehensive Basic Test 04
 # Loops: for, while, break, continue, reverse, step, nested
 ##############################
+import std
 
 print("=== For Loop Basic ===")
 for i in 0 to 4:

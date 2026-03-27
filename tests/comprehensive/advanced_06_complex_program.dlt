@@ -3,6 +3,7 @@
 # Complex Program: Student Grade Tracker
 # Tests structs, impl, functions, loops, strings, memory, conditionals
 ##############################
+import std
 
 # === Memory-based student array ===
 fun store_student_data(arr: i64, idx: i32, name: str, g1: i32, g2: i32, g3: i32):

@@ -2,6 +2,7 @@
 # Test 29: Inheritance & Methods
 # Tests struct inheritance with methods
 ##############################
+import std
 
 struct Animal:
     name: str

@@ -2,6 +2,7 @@
 # Comprehensive Basic Test 02
 # All Operators: Arithmetic, Comparison, Logical, Bitwise
 ##############################
+import std
 
 print("=== Arithmetic Operators ===")
 print(10 + 3)

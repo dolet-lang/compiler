@@ -2,6 +2,7 @@
 # Test 25: Resource Management
 # Tests manual resource patterns (context blocks are future)
 ##############################
+import std
 
 # Simulating resource management with explicit close
 struct Resource:

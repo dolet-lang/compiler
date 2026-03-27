@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 01
 # Impl Blocks: methods, static methods, constructors, self
 ##############################
+import std
 
 struct Vector2:
     x: f64

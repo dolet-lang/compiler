@@ -2,6 +2,7 @@
 # Test 28: Field Access
 # Tests struct field access patterns
 ##############################
+import std
 
 struct Point:
     x: i32

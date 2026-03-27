@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 08
 # String-Heavy: Building, parsing, manipulating strings
 ##############################
+import std
 
 # === String Builder Pattern ===
 fun repeat_str(s: str, count: i32) -> str:

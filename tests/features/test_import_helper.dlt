@@ -1,6 +1,8 @@
+import std
+
 fun helper_add(a: i32, b: i32) -> i32:
     return a + b
 
 fun helper_greet(name: str) -> str:
     return Str.concat("Hello, ", name)
-    
+

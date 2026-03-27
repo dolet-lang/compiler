@@ -2,6 +2,7 @@
 # Comprehensive Advanced Test 09
 # Full Mini-App: Inventory Management System
 ##############################
+import std
 
 # === Enums ===
 enum ItemType:

@@ -1,4 +1,6 @@
 # Test: runtime auto-import (Memory, Convert, IOOps, Str)
+import std
+
 val: i32 = 0
 s: str = ""
 msg: str = ""

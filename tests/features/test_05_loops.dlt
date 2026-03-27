@@ -2,6 +2,7 @@
 # Test 05: Loops
 # Tests for, while, break, continue
 ##############################
+import std
 
 # For loop with range
 print("for 0 to 5:")

@@ -2,6 +2,7 @@
 # Test 08: Enums
 # Tests enum declarations and usage
 ##############################
+import std
 
 # Basic enum
 enum Direction:

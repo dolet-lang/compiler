@@ -2,6 +2,7 @@
 # Test 13: Traits
 # Tests trait declaration and implementation
 ##############################
+import std
 
 # Trait declaration
 trait Display:

@@ -2,6 +2,7 @@
 # Test 06: Functions
 # Tests function definitions, params, return types
 ##############################
+import std
 
 # Basic function
 fun greet(name: str) -> str:

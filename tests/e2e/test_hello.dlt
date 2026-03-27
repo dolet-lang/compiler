@@ -1,2 +1,4 @@
 # Test: basic hello world with runtime
+import std
+
 IOOps.io_println("Hello from Dolet!")

@@ -2,6 +2,7 @@
 # Test 33: Multi-Dimensional Data
 # Tests nested data using structs (nested generics are future)
 ##############################
+import std
 
 # Simple matrix using struct
 struct Row:

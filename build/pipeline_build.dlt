@@ -9596,56 +9596,19 @@ fun get_exe_dir() -> str:
     return PathOps.get_exe_directory()
 
 fun load_runtime(exe_dir: str) -> str:
-    # New library layout:
-    #   bin/doletc.exe
-    #   library/sys/windows/    — extern declarations
-    #   library/core/           — zero-OS: memory read/write + types
-    #   library/platform/       — platform-specific: alloc, io, str, etc.
-    #   library/std/            — standard library: io, string, etc.
-    sys_base:   str = Str.concat(exe_dir, "\\..\\library\\sys\\windows\\")
+    # Core-only runtime: zero OS dependency
+    # Loads: memory read/write + types (integers, floats, primitives)
     core_base:  str = Str.concat(exe_dir, "\\..\\library\\core\\")
-    plat_base:  str = Str.concat(exe_dir, "\\..\\library\\platform\\")
-    std_base_l: str = Str.concat(exe_dir, "\\..\\library\\std\\")
     types_base: str = Str.concat(core_base, "types\\")
 
     runtime_src: str = ""
 
-    # 1. Extern declarations (Windows ABI)
-    r1: str = read_file_to_string(Str.concat(sys_base, "kernel32.dlt"))
+    # 1. Core: pure memory read/write ops
+    r1: str = read_file_to_string(Str.concat(core_base, "memory.dlt"))
     if Memory.strlen(r1) > 0:
         runtime_src = Str.concat(runtime_src, Str.concat("\n", r1))
 
-    # 2. Core: pure memory read/write ops (no OS dependency)
-    r2: str = read_file_to_string(Str.concat(core_base, "memory.dlt"))
-    if Memory.strlen(r2) > 0:
-        runtime_src = Str.concat(runtime_src, Str.concat("\n", r2))
-
-    # 3. Platform: heap allocator (extends Memory with malloc/free via HeapAlloc)
-    r3: str = read_file_to_string(Str.concat(plat_base, "alloc.dlt"))
-    if Memory.strlen(r3) > 0:
-        runtime_src = Str.concat(runtime_src, Str.concat("\n", r3))
-
-    # 4. Platform: string formatting (Convert struct)
-    r4: str = read_file_to_string(Str.concat(plat_base, "format.dlt"))
-    if Memory.strlen(r4) > 0:
-        runtime_src = Str.concat(runtime_src, Str.concat("\n", r4))
-
-    # 5. Platform: string operations (Str struct)
-    r5: str = read_file_to_string(Str.concat(plat_base, "str.dlt"))
-    if Memory.strlen(r5) > 0:
-        runtime_src = Str.concat(runtime_src, Str.concat("\n", r5))
-
-    # 6. Platform: I/O operations (IOOps struct)
-    r6: str = read_file_to_string(Str.concat(plat_base, "io.dlt"))
-    if Memory.strlen(r6) > 0:
-        runtime_src = Str.concat(runtime_src, Str.concat("\n", r6))
-
-    # 7. Std: print() overloads
-    r7: str = read_file_to_string(Str.concat(std_base_l, "io.dlt"))
-    if Memory.strlen(r7) > 0:
-        runtime_src = Str.concat(runtime_src, Str.concat("\n", r7))
-
-    # 8-11. Core types: @transparent wrappers + collections
+    # 2-4. Core types
     rt_int: str = read_file_to_string(Str.concat(types_base, "integers.dlt"))
     if Memory.strlen(rt_int) > 0:
         runtime_src = Str.concat(runtime_src, Str.concat("\n", rt_int))
@@ -9655,11 +9618,94 @@ fun load_runtime(exe_dir: str) -> str:
     rt_prm: str = read_file_to_string(Str.concat(types_base, "primitives.dlt"))
     if Memory.strlen(rt_prm) > 0:
         runtime_src = Str.concat(runtime_src, Str.concat("\n", rt_prm))
-    rt_col: str = read_file_to_string(Str.concat(types_base, "collections.dlt"))
-    if Memory.strlen(rt_col) > 0:
-        runtime_src = Str.concat(runtime_src, Str.concat("\n", rt_col))
 
     return runtime_src
+
+fun load_std(exe_dir: str) -> str:
+    # OS-dependent standard library layer
+    # Requires: import std
+    sys_base:   str = Str.concat(exe_dir, "\\..\\library\\sys\\windows\\")
+    core_base:  str = Str.concat(exe_dir, "\\..\\library\\core\\")
+    plat_base:  str = Str.concat(exe_dir, "\\..\\library\\platform\\")
+    std_base_l: str = Str.concat(exe_dir, "\\..\\library\\std\\")
+    types_base: str = Str.concat(core_base, "types\\")
+
+    std_src: str = ""
+
+    # 1. Extern declarations (Windows ABI)
+    r1: str = read_file_to_string(Str.concat(sys_base, "kernel32.dlt"))
+    if Memory.strlen(r1) > 0:
+        std_src = Str.concat(std_src, Str.concat("\n", r1))
+
+    # 2. Heap allocator (extend Memory: malloc/free)
+    r2: str = read_file_to_string(Str.concat(plat_base, "alloc.dlt"))
+    if Memory.strlen(r2) > 0:
+        std_src = Str.concat(std_src, Str.concat("\n", r2))
+
+    # 3. String formatting (Convert struct)
+    r3: str = read_file_to_string(Str.concat(plat_base, "format.dlt"))
+    if Memory.strlen(r3) > 0:
+        std_src = Str.concat(std_src, Str.concat("\n", r3))
+
+    # 4. String operations (Str struct)
+    r4: str = read_file_to_string(Str.concat(plat_base, "str.dlt"))
+    if Memory.strlen(r4) > 0:
+        std_src = Str.concat(std_src, Str.concat("\n", r4))
+
+    # 5. I/O operations (IOOps struct)
+    r5: str = read_file_to_string(Str.concat(plat_base, "io.dlt"))
+    if Memory.strlen(r5) > 0:
+        std_src = Str.concat(std_src, Str.concat("\n", r5))
+
+    # 6. print() overloads
+    r6: str = read_file_to_string(Str.concat(std_base_l, "io.dlt"))
+    if Memory.strlen(r6) > 0:
+        std_src = Str.concat(std_src, Str.concat("\n", r6))
+
+    # 7. Collections (List, Array, Map — depend on malloc)
+    rt_col: str = read_file_to_string(Str.concat(types_base, "collections.dlt"))
+    if Memory.strlen(rt_col) > 0:
+        std_src = Str.concat(std_src, Str.concat("\n", rt_col))
+
+    return std_src
+
+fun has_import_std(src: str) -> i32:
+    # Scan for a line that is exactly "import std" (not "import std.something")
+    slen: i64 = Memory.strlen(src)
+    i: i64 = 0
+    line_start: i64 = 0
+    while i <= slen:
+        c: i8 = 0
+        if i < slen:
+            c = Memory.read_i8((src as i64) + i)
+        if c == 10 or c == 13 or i == slen:
+            line_len: i64 = i - line_start
+            # "import std" = 10 chars (105,109,112,111,114,116,32,115,116,100)
+            if line_len >= 10:
+                b0: i8 = Memory.read_i8((src as i64) + line_start)
+                b1: i8 = Memory.read_i8((src as i64) + line_start + 1)
+                b2: i8 = Memory.read_i8((src as i64) + line_start + 2)
+                b3: i8 = Memory.read_i8((src as i64) + line_start + 3)
+                b4: i8 = Memory.read_i8((src as i64) + line_start + 4)
+                b5: i8 = Memory.read_i8((src as i64) + line_start + 5)
+                b6: i8 = Memory.read_i8((src as i64) + line_start + 6)
+                b7: i8 = Memory.read_i8((src as i64) + line_start + 7)
+                b8: i8 = Memory.read_i8((src as i64) + line_start + 8)
+                b9: i8 = Memory.read_i8((src as i64) + line_start + 9)
+                if b0 == 105 and b1 == 109 and b2 == 112 and b3 == 111 and b4 == 114 and b5 == 116 and b6 == 32 and b7 == 115 and b8 == 116 and b9 == 100:
+                    # Check next char is NOT a dot (46) — that would be "import std.something"
+                    if line_len == 10:
+                        return 1
+                    next_c: i8 = Memory.read_i8((src as i64) + line_start + 10)
+                    if next_c != 46:
+                        return 1
+            if c == 13 and (i + 1) < slen:
+                nr: i8 = Memory.read_i8((src as i64) + i + 1)
+                if nr == 10:
+                    i = i + 1
+            line_start = i + 1
+        i = i + 1
+    return 0
 
 # ==========================================
 # Module Import Resolution
@@ -9755,12 +9801,18 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
                         name_end = name_end + 1
                     if name_end > name_start:
                         mod_name: str = str_from_range(user_src, name_start, name_end)
-                        resolved: str = try_resolve_module(mod_name, std_base, src_dir)
-                        if Memory.strlen(resolved) > 0:
-                            mod_src: str = read_file_to_string(resolved)
-                            if Memory.strlen(mod_src) > 0:
-                                IOOps.io_println(Str.concat(Str.concat("[import] ", mod_name), Str.concat(" -> ", resolved)))
-                                imported = Str.concat(imported, Str.concat("\n", mod_src))
+                        # Skip "import std" — handled by load_std() in main
+                        if str_eq(mod_name, "std") == 1:
+                            i = i + 1
+                            line_start = i
+                            i = i - 1
+                        else:
+                            resolved: str = try_resolve_module(mod_name, std_base, src_dir)
+                            if Memory.strlen(resolved) > 0:
+                                mod_src: str = read_file_to_string(resolved)
+                                if Memory.strlen(mod_src) > 0:
+                                    IOOps.io_println(Str.concat(Str.concat("[import] ", mod_name), Str.concat(" -> ", resolved)))
+                                    imported = Str.concat(imported, Str.concat("\n", mod_src))
             # Move past newline chars
             if c == 13 and (i + 1) < slen:
                 nr: i8 = Memory.read_i8((user_src as i64) + i + 1)
@@ -9931,9 +9983,16 @@ fun main() -> i32:
     if no_runtime == 0:
         rt: str = load_runtime(exe_dir)
         rt_len: i64 = Memory.strlen(rt)
-        if rt_len > 0:
-            source = Str.concat(rt, Str.concat("\n", user_src))
-            IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(rt_len), " chars")))
+        # Check if user wants OS layer (import std)
+        std_rt: str = ""
+        if has_import_std(user_src) == 1:
+            std_rt = load_std(exe_dir)
+            IOOps.io_println("[import] std -> loaded OS layer")
+        std_len: i64 = Memory.strlen(std_rt)
+        total_rt: i64 = rt_len + std_len
+        if total_rt > 0:
+            source = Str.concat(rt, Str.concat("\n", Str.concat(std_rt, Str.concat("\n", user_src))))
+            IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(total_rt), " chars")))
 
     # Resolve and load user imports
     std_base: str = Str.concat(exe_dir, "\\..\\library\\")

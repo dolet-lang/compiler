@@ -1,2 +1,4 @@
+import std
+
 ptr: i64 = Memory.malloc(64)
 print(ptr)

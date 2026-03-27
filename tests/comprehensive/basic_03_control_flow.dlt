@@ -2,6 +2,7 @@
 # Comprehensive Basic Test 03
 # Control Flow: if/elif/else, match, nested conditions
 ##############################
+import std
 
 print("=== Simple If ===")
 x: i32 = 15

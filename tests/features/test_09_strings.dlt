@@ -2,6 +2,7 @@
 # Test 09: Strings
 # Tests string interpolation, concatenation
 ##############################
+import std
 
 # Basic string
 msg: str = "Hello World"

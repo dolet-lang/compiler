@@ -2,6 +2,7 @@
 # Test 15: Struct Inheritance
 # Tests struct extends and super method calls
 ##############################
+import std
 
 struct Entity:
     x: i32

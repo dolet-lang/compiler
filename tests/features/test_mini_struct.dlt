@@ -1,6 +1,7 @@
 ##############################
 # Minimal struct test
 ##############################
+import std
 
 struct Point:
     x: i64
