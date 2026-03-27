@@ -11,6 +11,12 @@ fun gen_assignment(node: i64):
     name: str = Memory.read_i64(node + 8) as str
     val_node: i64 = Memory.read_i64(node + 16)
 
+    # Check const/imm reassignment
+    vc: i32 = is_var_const(name)
+    if vc == 1:
+        IOOps.io_println(Str.concat("[error] Cannot reassign immutable variable '", Str.concat(name, "'")))
+        return
+
     mn: str = get_mlir_name(name)
     if str_eq(mn, "") == 1:
         # Variable doesn't exist — create it (implicit declaration)
@@ -21,7 +27,7 @@ fun gen_assignment(node: i64):
         alloc: str = emit_alloca(mt)
         # Store the mlir_name without the % prefix
         alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
-        add_variable(name, alloc_name, vt, 0)
+        add_variable(name, alloc_name, vt, 0, 0)
         mn = alloc_name
 
     vt2: str = get_var_type(name)
@@ -364,7 +370,7 @@ fun gen_foreach_loop(node: i64):
     # Create item variable with correct element type
     item_alloc: str = emit_alloca(elem_mt)
     item_name: str = str_from_range(item_alloc, 1, Memory.strlen(item_alloc))
-    add_variable(item_var, item_name, elem_type, 0)
+    add_variable(item_var, item_name, elem_type, 0, 0)
 
     emit_ind(Str.concat("llvm.br ", cond_label))
 
@@ -655,6 +661,7 @@ fun gen_var_decl(node: i64):
     vtype: str = Memory.read_i64(node + 8) as str
     name: str = Memory.read_i64(node + 16) as str
     val_node: i64 = Memory.read_i64(node + 24)
+    is_const: i32 = Memory.read_i64(node + 48) as i32
 
     # Global vars: init value is stored to the global address (inline, preserving order)
     if is_global_var(name) == 1 and g_in_function == 0:
@@ -681,7 +688,7 @@ fun gen_var_decl(node: i64):
         # Allocate and store value
         alloc: str = emit_alloca(mt)
         alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
-        add_variable(name, alloc_name, vtype, 0)
+        add_variable(name, alloc_name, vtype, 0, is_const)
 
         # Infer actual type and generate expression
         actual_type: str = infer_expr_type(val_node)
@@ -696,7 +703,7 @@ fun gen_var_decl(node: i64):
         # No initial value — alloca + zero initialize
         alloc2: str = emit_alloca(mt)
         alloc_name2: str = str_from_range(alloc2, 1, Memory.strlen(alloc2))
-        add_variable(name, alloc_name2, vtype, 0)
+        add_variable(name, alloc_name2, vtype, 0, is_const)
 
         if is_int_type(vtype) == 1:
             default_val: str = new_tmp()

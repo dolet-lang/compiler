@@ -53,6 +53,7 @@ for %%f in (
     test_33_nested_collections
     test_mini_struct
     test_import_helper
+    test_35_mut_imm
 ) do (
     echo [TEST] %%f
     if exist "%TESTS_DIR%\%%f.dlt" (

@@ -43,6 +43,10 @@ fun parse_statement() -> i64:
     if k == TK_CONST:
         return parse_const_decl()
 
+    # Imm declaration (alias for const)
+    if k == TK_IMM:
+        return parse_imm_decl()
+
     # Static declaration (treat as const for now)
     if k == TK_STATIC:
         advance()

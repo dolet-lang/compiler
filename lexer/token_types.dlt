@@ -138,6 +138,7 @@ enum TokenType:
     CONST
     STATIC
     MUT
+    IMM
 
     # ========================
     # Arrays / Lists

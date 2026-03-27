@@ -490,3 +490,24 @@ fun parse_const_decl() -> i64:
     if str_eq(vtype, "") == 1:
         return mk_var_decl("", name, val, 1, 1, 0)
     return mk_var_decl(vtype, name, val, 0, 1, 0)
+
+# ==========================================
+# Imm Declaration: imm name = expr  or  imm name: type = expr
+# Same as const — immutable variable
+# ==========================================
+fun parse_imm_decl() -> i64:
+    eat(TK_IMM)
+    name: str = cur_val()
+    eat(TK_IDENT)
+
+    vtype: str = ""
+    if cur_kind() == TK_COLON:
+        advance()
+        vtype = parse_type_name()
+
+    eat(TK_ASSIGN)
+    val: i64 = parse_expression()
+
+    if str_eq(vtype, "") == 1:
+        return mk_var_decl("", name, val, 1, 1, 0)
+    return mk_var_decl(vtype, name, val, 0, 1, 0)

@@ -93,6 +93,7 @@ TK_IS: i32 = 96
 TK_CONST: i32 = 97
 TK_STATIC: i32 = 98
 TK_MUT: i32 = 99
+TK_IMM: i32 = 115
 TK_PUBLIC: i32 = 100
 TK_PRIVATE: i32 = 101
 TK_PROTECT: i32 = 102
@@ -418,6 +419,8 @@ fun resolve_keyword(name: str) -> i32:
         return TK_STATIC
     if str_eq(name, "mut") == 1:
         return TK_MUT
+    if str_eq(name, "imm") == 1:
+        return TK_IMM
     if str_eq(name, "public") == 1:
         return TK_PUBLIC
     if str_eq(name, "private") == 1:
@@ -882,6 +885,10 @@ fun tk_name(k: i32) -> str:
         return "CONST"
     if k == 98:
         return "STATIC"
+    if k == 99:
+        return "MUT"
+    if k == 115:
+        return "IMM"
     if k == 112:
         return "LIST"
     if k == 113:

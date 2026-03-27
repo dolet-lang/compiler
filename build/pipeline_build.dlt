@@ -94,6 +94,7 @@ TK_IS: i32 = 96
 TK_CONST: i32 = 97
 TK_STATIC: i32 = 98
 TK_MUT: i32 = 99
+TK_IMM: i32 = 115
 TK_PUBLIC: i32 = 100
 TK_PRIVATE: i32 = 101
 TK_PROTECT: i32 = 102
@@ -419,6 +420,8 @@ fun resolve_keyword(name: str) -> i32:
         return TK_STATIC
     if str_eq(name, "mut") == 1:
         return TK_MUT
+    if str_eq(name, "imm") == 1:
+        return TK_IMM
     if str_eq(name, "public") == 1:
         return TK_PUBLIC
     if str_eq(name, "private") == 1:
@@ -883,6 +886,10 @@ fun tk_name(k: i32) -> str:
         return "CONST"
     if k == 98:
         return "STATIC"
+    if k == 99:
+        return "MUT"
+    if k == 115:
+        return "IMM"
     if k == 112:
         return "LIST"
     if k == 113:
@@ -3689,6 +3696,27 @@ fun parse_const_decl() -> i64:
         return mk_var_decl("", name, val, 1, 1, 0)
     return mk_var_decl(vtype, name, val, 0, 1, 0)
 
+# ==========================================
+# Imm Declaration: imm name = expr  or  imm name: type = expr
+# Same as const — immutable variable
+# ==========================================
+fun parse_imm_decl() -> i64:
+    eat(TK_IMM)
+    name: str = cur_val()
+    eat(TK_IDENT)
+
+    vtype: str = ""
+    if cur_kind() == TK_COLON:
+        advance()
+        vtype = parse_type_name()
+
+    eat(TK_ASSIGN)
+    val: i64 = parse_expression()
+
+    if str_eq(vtype, "") == 1:
+        return mk_var_decl("", name, val, 1, 1, 0)
+    return mk_var_decl(vtype, name, val, 0, 1, 0)
+
 ##############################
 # Parser Declarations
 # fun, struct, enum, trait, impl, import, extern, type alias
@@ -4265,6 +4293,10 @@ fun parse_statement() -> i64:
     if k == TK_CONST:
         return parse_const_decl()
 
+    # Imm declaration (alias for const)
+    if k == TK_IMM:
+        return parse_imm_decl()
+
     # Static declaration (treat as const for now)
     if k == TK_STATIC:
         advance()
@@ -4811,6 +4843,7 @@ g_var_names: i64 = 0
 g_var_mlir: i64 = 0
 g_var_types: i64 = 0
 g_var_is_param: i64 = 0
+g_var_is_const: i64 = 0
 g_var_count: i32 = 0
 g_var_cap: i32 = 512
 
@@ -4820,15 +4853,17 @@ fun init_var_registry():
     g_var_mlir = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_types = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_is_param = Memory.malloc_zeroed((g_var_cap as i64) * 4)
+    g_var_is_const = Memory.malloc_zeroed((g_var_cap as i64) * 4)
     g_var_count = 0
 
-fun add_variable(name: str, mlir_name: str, vtype: str, is_param: i32):
+fun add_variable(name: str, mlir_name: str, vtype: str, is_param: i32, is_const: i32):
     off8: i64 = (g_var_count as i64) * 8
     off4: i64 = (g_var_count as i64) * 4
     Memory.write_i64(g_var_names + off8, name as i64)
     Memory.write_i64(g_var_mlir + off8, mlir_name as i64)
     Memory.write_i64(g_var_types + off8, vtype as i64)
     Memory.write_i32(g_var_is_param + off4, is_param)
+    Memory.write_i32(g_var_is_const + off4, is_const)
     g_var_count = g_var_count + 1
 
 fun get_mlir_name(name: str) -> str:
@@ -4859,6 +4894,17 @@ fun is_param_var(name: str) -> i32:
         vn: str = Memory.read_i64(g_var_names + off8) as str
         if str_eq(vn, name) == 1:
             return Memory.read_i32(g_var_is_param + off4)
+        i = i - 1
+    return 0
+
+fun is_var_const(name: str) -> i32:
+    i: i32 = g_var_count - 1
+    while i >= 0:
+        off8: i64 = (i as i64) * 8
+        off4: i64 = (i as i64) * 4
+        vn: str = Memory.read_i64(g_var_names + off8) as str
+        if str_eq(vn, name) == 1:
+            return Memory.read_i32(g_var_is_const + off4)
         i = i - 1
     return 0
 
@@ -7176,6 +7222,12 @@ fun gen_assignment(node: i64):
     name: str = Memory.read_i64(node + 8) as str
     val_node: i64 = Memory.read_i64(node + 16)
 
+    # Check const/imm reassignment
+    vc: i32 = is_var_const(name)
+    if vc == 1:
+        IOOps.io_println(Str.concat("[error] Cannot reassign immutable variable '", Str.concat(name, "'")))
+        return
+
     mn: str = get_mlir_name(name)
     if str_eq(mn, "") == 1:
         # Variable doesn't exist — create it (implicit declaration)
@@ -7186,7 +7238,7 @@ fun gen_assignment(node: i64):
         alloc: str = emit_alloca(mt)
         # Store the mlir_name without the % prefix
         alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
-        add_variable(name, alloc_name, vt, 0)
+        add_variable(name, alloc_name, vt, 0, 0)
         mn = alloc_name
 
     vt2: str = get_var_type(name)
@@ -7529,7 +7581,7 @@ fun gen_foreach_loop(node: i64):
     # Create item variable with correct element type
     item_alloc: str = emit_alloca(elem_mt)
     item_name: str = str_from_range(item_alloc, 1, Memory.strlen(item_alloc))
-    add_variable(item_var, item_name, elem_type, 0)
+    add_variable(item_var, item_name, elem_type, 0, 0)
 
     emit_ind(Str.concat("llvm.br ", cond_label))
 
@@ -7820,6 +7872,7 @@ fun gen_var_decl(node: i64):
     vtype: str = Memory.read_i64(node + 8) as str
     name: str = Memory.read_i64(node + 16) as str
     val_node: i64 = Memory.read_i64(node + 24)
+    is_const: i32 = Memory.read_i64(node + 48) as i32
 
     # Global vars: init value is stored to the global address (inline, preserving order)
     if is_global_var(name) == 1 and g_in_function == 0:
@@ -7846,7 +7899,7 @@ fun gen_var_decl(node: i64):
         # Allocate and store value
         alloc: str = emit_alloca(mt)
         alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
-        add_variable(name, alloc_name, vtype, 0)
+        add_variable(name, alloc_name, vtype, 0, is_const)
 
         # Infer actual type and generate expression
         actual_type: str = infer_expr_type(val_node)
@@ -7861,7 +7914,7 @@ fun gen_var_decl(node: i64):
         # No initial value — alloca + zero initialize
         alloc2: str = emit_alloca(mt)
         alloc_name2: str = str_from_range(alloc2, 1, Memory.strlen(alloc2))
-        add_variable(name, alloc_name2, vtype, 0)
+        add_variable(name, alloc_name2, vtype, 0, is_const)
 
         if is_int_type(vtype) == 1:
             default_val: str = new_tmp()
@@ -8021,7 +8074,7 @@ fun gen_fun_def(node: i64):
             i = i + 1
             continue
         arg_name: str = Str.concat("arg", Convert.i64_to_str(i as i64))
-        add_variable(pname2, arg_name, ptype2, 1)
+        add_variable(pname2, arg_name, ptype2, 1, 0)
         i = i + 1
 
     # Generate body
@@ -8199,7 +8252,7 @@ fun gen_method_def(struct_name: str, node: i64):
 
     # Register self only for instance methods
     if is_static == 0:
-        add_variable("self", "self", struct_name, 1)
+        add_variable("self", "self", struct_name, 1, 0)
 
     # Register params (skip self)
     arg_idx = 0
@@ -8212,7 +8265,7 @@ fun gen_method_def(struct_name: str, node: i64):
             i = i + 1
         else:
             arg_name: str = Str.concat("arg", Convert.i64_to_str(arg_idx as i64))
-            add_variable(pname2, arg_name, ptype2, 1)
+            add_variable(pname2, arg_name, ptype2, 1, 0)
             arg_idx = arg_idx + 1
             i = i + 1
 
@@ -9230,7 +9283,8 @@ fun gen_global_var_decls():
 
         # Create unique mlir name
         mname: str = gname
-        add_variable(gname, mname, vtype, 0)
+        g_is_const: i32 = Memory.read_i64(gnode + 48) as i32
+        add_variable(gname, mname, vtype, 0, g_is_const)
 
         # Emit global declaration
         emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", mname), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
@@ -9516,6 +9570,7 @@ fun init_tokenizer_constants():
     TK_LIST = 112
     TK_MAP = 113
     TK_ARRAY = 114
+    TK_IMM = 115
 
 fun init_tokenizer_buffers():
     MAX_TOKENS = 32768

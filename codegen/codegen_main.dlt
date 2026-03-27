@@ -426,7 +426,8 @@ fun gen_global_var_decls():
 
         # Create unique mlir name
         mname: str = gname
-        add_variable(gname, mname, vtype, 0)
+        g_is_const: i32 = Memory.read_i64(gnode + 48) as i32
+        add_variable(gname, mname, vtype, 0, g_is_const)
 
         # Emit global declaration
         emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", mname), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))

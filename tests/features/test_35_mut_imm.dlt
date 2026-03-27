@@ -1,0 +1,54 @@
+##############################
+# Test 35: mut & imm Keywords
+# Tests mutable and immutable variable declarations
+##############################
+import std
+
+# ===== mut — mutable variables =====
+mut x: i32 = 10
+print(x)
+x = 20
+print(x)
+
+mut name: str = "hello"
+print(name)
+name = "world"
+print(name)
+
+# mut with type inference
+mut count = 0
+count = count + 1
+print(count)
+
+# ===== imm — immutable variables =====
+imm PI: f64 = 3.14159
+print(PI)
+
+imm MAX: i32 = 100
+print(MAX)
+
+imm greeting: str = "Dolet"
+print(greeting)
+
+# imm with type inference
+imm version = 1
+print(version)
+
+# ===== mixing mut and imm =====
+imm base: i32 = 10
+mut result: i32 = base + 5
+print(result)
+result = base + 20
+print(result)
+
+# ===== mut in loops =====
+mut sum: i32 = 0
+mut i: i32 = 1
+while i <= 5:
+    sum = sum + i
+    i = i + 1
+print(sum)
+
+# ===== const still works (backward compatible) =====
+const OLD_CONST: i32 = 42
+print(OLD_CONST)

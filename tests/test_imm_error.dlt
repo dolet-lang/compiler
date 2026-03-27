@@ -1,0 +1,6 @@
+import std
+
+imm pi: f32 = 3.14
+print(pi)
+pi = 2.71
+print(pi)

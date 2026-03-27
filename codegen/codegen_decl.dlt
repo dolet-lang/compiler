@@ -78,7 +78,7 @@ fun gen_fun_def(node: i64):
             i = i + 1
             continue
         arg_name: str = Str.concat("arg", Convert.i64_to_str(i as i64))
-        add_variable(pname2, arg_name, ptype2, 1)
+        add_variable(pname2, arg_name, ptype2, 1, 0)
         i = i + 1
 
     # Generate body
@@ -256,7 +256,7 @@ fun gen_method_def(struct_name: str, node: i64):
 
     # Register self only for instance methods
     if is_static == 0:
-        add_variable("self", "self", struct_name, 1)
+        add_variable("self", "self", struct_name, 1, 0)
 
     # Register params (skip self)
     arg_idx = 0
@@ -269,7 +269,7 @@ fun gen_method_def(struct_name: str, node: i64):
             i = i + 1
         else:
             arg_name: str = Str.concat("arg", Convert.i64_to_str(arg_idx as i64))
-            add_variable(pname2, arg_name, ptype2, 1)
+            add_variable(pname2, arg_name, ptype2, 1, 0)
             arg_idx = arg_idx + 1
             i = i + 1
 
