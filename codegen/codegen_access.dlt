@@ -19,6 +19,31 @@ fun gen_field_access(node: i64) -> str:
 
     obj_type: str = get_var_type(obj_name)
 
+    # Access control enforcement
+    acc: str = get_field_access(obj_type, field_name)
+    if str_eq(acc, "private") == 1:
+        in_struct: i32 = 0
+        if (g_cur_method_struct as i64) != 0:
+            if Memory.strlen(g_cur_method_struct) > 0:
+                if str_eq(g_cur_method_struct, obj_type) == 1:
+                    in_struct = 1
+        if in_struct == 0:
+            IOOps.io_println(Str.concat("[error] Cannot access private field: ", field_name))
+    elif str_eq(acc, "protected") == 1:
+        allowed: i32 = 0
+        if (g_cur_method_struct as i64) != 0:
+            if Memory.strlen(g_cur_method_struct) > 0:
+                if str_eq(g_cur_method_struct, obj_type) == 1:
+                    allowed = 1
+                if allowed == 0:
+                    par: str = get_parent_struct(g_cur_method_struct)
+                    if (par as i64) != 0:
+                        if Memory.strlen(par) > 0:
+                            if str_eq(par, obj_type) == 1:
+                                allowed = 1
+        if allowed == 0:
+            IOOps.io_println(Str.concat("[error] Cannot access protected field: ", field_name))
+
     # ptr[T].value — dereference typed pointer
     if str_eq(field_name, "value") == 1:
         if is_ptr_type(obj_type) == 1:
@@ -445,3 +470,34 @@ fun gen_array_access(node: i64, expected: str) -> str:
 
     val: str = emit_load(ep, mt)
     return val
+
+# ==========================================
+# Namespaced Function Call: ns.func(args)
+# NODE_NS_FUN_CALL layout: +8=ns, +16=fname, +24=args, +32=type_args
+# We ignore the ns prefix since symbols are loaded into flat scope.
+# ==========================================
+fun gen_ns_fun_call(node: i64) -> str:
+    fname: str = Memory.read_i64(node + 16) as str
+    args_list: i64 = Memory.read_i64(node + 24)
+    # Build a proxy node with NODE_FUN_CALL layout (+8=fname, +16=args)
+    proxy: i64 = Memory.malloc_zeroed(64)
+    Memory.write_i32(proxy, 61)              # NODE_FUN_CALL = 61
+    Memory.write_i64(proxy + 8, fname as i64)
+    Memory.write_i64(proxy + 16, args_list)
+    return gen_fun_call(proxy)
+
+# ==========================================
+# Namespaced Static Method: ns.Struct.method(args)
+# NODE_NS_STATIC_METHOD layout: +8=ns, +16=sname, +24=method, +32=args
+# ==========================================
+fun gen_ns_static_method(node: i64) -> str:
+    sname: str = Memory.read_i64(node + 16) as str
+    mname: str = Memory.read_i64(node + 24) as str
+    args_list: i64 = Memory.read_i64(node + 32)
+    # Build a proxy node with NODE_STATIC_METHOD layout (+8=sname, +16=mname, +24=args)
+    proxy: i64 = Memory.malloc_zeroed(64)
+    Memory.write_i32(proxy, 85)              # NODE_STATIC_METHOD = 85
+    Memory.write_i64(proxy + 8, sname as i64)
+    Memory.write_i64(proxy + 16, mname as i64)
+    Memory.write_i64(proxy + 24, args_list)
+    return gen_static_method_call(proxy)

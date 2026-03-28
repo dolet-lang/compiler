@@ -382,6 +382,27 @@ fun get_field_type(struct_name: str, field_name: str) -> str:
         i = i + 1
     return "unknown"
 
+# Returns access modifier for a struct field: "public", "private", or "protected"
+fun get_field_access(struct_name: str, field_name: str) -> str:
+    fields: i64 = get_struct_fields(struct_name)
+    if fields == 0:
+        return "public"
+    fc: i32 = nl_count(fields)
+    i: i32 = 0
+    while i < fc:
+        fnode: i64 = nl_get(fields, i)
+        fname: str = Memory.read_i64(fnode + 8) as str
+        if str_eq(fname, field_name) == 1:
+            # access modifier is at offset +40
+            acc_val: i64 = Memory.read_i64(fnode + 40)
+            if acc_val != 0:
+                acc: str = acc_val as str
+                if Memory.strlen(acc) > 0:
+                    return acc
+            return "public"
+        i = i + 1
+    return "public"
+
 fun get_type_size(t: str) -> i32:
     w: i32 = int_type_width(t)
     if w > 0:

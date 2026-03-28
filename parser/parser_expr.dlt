@@ -232,6 +232,31 @@ fun parse_dot_access(first: str) -> i64:
     member: str = cur_val()
     eat(TK_IDENT)
 
+    # Namespace-qualified access: ns.func() or ns.Struct.method()
+    if is_module_name(first) == 1:
+        # ns.func(args) or ns.Struct(args)
+        if cur_kind() == TK_LPAREN:
+            nargs: i64 = parse_arg_list()
+            nfc: i8 = Memory.read_i8(member as i64)
+            if nfc >= 65 and nfc <= 90:
+                return mk_ns_struct_inst(first, member, nargs, 0)
+            return mk_ns_fun_call(first, member, nargs, 0)
+        # ns.Struct.method(args) or ns.sub.something
+        if cur_kind() == TK_DOT:
+            eat(TK_DOT)
+            third: str = cur_val()
+            eat(TK_IDENT)
+            if cur_kind() == TK_LPAREN:
+                targs: i64 = parse_arg_list()
+                tfc: i8 = Memory.read_i8(member as i64)
+                if tfc >= 65 and tfc <= 90:
+                    return mk_ns_static_method(first, member, third, targs)
+                return mk_ns_fun_call(first, third, targs, 0)
+            # ns.Struct.field — simple access
+            return mk_ns_access(first, member)
+        # ns.symbol
+        return mk_ns_access(first, member)
+
     # Static/instance method call: Name.method(args)
     if cur_kind() == TK_LPAREN:
         margs: i64 = parse_arg_list()

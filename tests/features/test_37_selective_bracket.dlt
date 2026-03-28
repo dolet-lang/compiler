@@ -1,0 +1,5 @@
+import std.[io, string]
+
+fun main():
+    msg: str = Str.concat("bracket", " import works!")
+    print(msg)

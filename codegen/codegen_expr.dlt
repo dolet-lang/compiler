@@ -89,6 +89,14 @@ fun gen_expr(node: i64, expected: str) -> str:
     if nt == NODE_STATIC_METHOD:
         return gen_static_method_call(node)
 
+    # Namespaced function call: ns.func(args)
+    if nt == NODE_NS_FUN_CALL:
+        return gen_ns_fun_call(node)
+
+    # Namespaced static method call: ns.Struct.method(args)
+    if nt == NODE_NS_STATIC_METHOD:
+        return gen_ns_static_method(node)
+
     # Instance method call
     if nt == NODE_INST_METHOD:
         return gen_instance_method_call(node)

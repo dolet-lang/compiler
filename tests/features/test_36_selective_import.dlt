@@ -1,0 +1,4 @@
+import std.io
+
+fun main():
+    print("selective import works!")

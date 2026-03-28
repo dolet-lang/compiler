@@ -1158,6 +1158,42 @@ fun get_generic_params(name: str) -> i64:
     return 0
 
 # ==========================================
+# Module Symbol Registry
+# Maps (module_name, symbol_name) for qualified access
+# kind: 0=fun, 1=struct, 2=var
+# ==========================================
+g_mod_sym_module: i64 = 0
+g_mod_sym_name: i64 = 0
+g_mod_sym_kind: i64 = 0
+g_mod_sym_count: i32 = 0
+
+fun init_module_registry():
+    g_mod_sym_module = Memory.malloc_zeroed(512 * 8)
+    g_mod_sym_name = Memory.malloc_zeroed(512 * 8)
+    g_mod_sym_kind = Memory.malloc_zeroed(512 * 4)
+    g_mod_sym_count = 0
+
+fun register_module_symbol(mod_name: str, sym_name: str, kind: i32):
+    off8: i64 = (g_mod_sym_count as i64) * 8
+    off4: i64 = (g_mod_sym_count as i64) * 4
+    Memory.write_i64(g_mod_sym_module + off8, mod_name as i64)
+    Memory.write_i64(g_mod_sym_name + off8, sym_name as i64)
+    Memory.write_i32(g_mod_sym_kind + off4, kind)
+    g_mod_sym_count = g_mod_sym_count + 1
+
+fun lookup_module_symbol(mod_name: str, sym_name: str) -> i32:
+    i: i32 = 0
+    while i < g_mod_sym_count:
+        off8: i64 = (i as i64) * 8
+        m: str = Memory.read_i64(g_mod_sym_module + off8) as str
+        s: str = Memory.read_i64(g_mod_sym_name + off8) as str
+        if str_eq(m, mod_name) == 1:
+            if str_eq(s, sym_name) == 1:
+                return 1
+        i = i + 1
+    return 0
+
+# ==========================================
 # Init All Registries
 # ==========================================
 fun init_all_registries():
@@ -1178,6 +1214,7 @@ fun init_all_registries():
     init_impl_registry()
     init_overload_registry()
     init_generic_registry()
+    init_module_registry()
     # Pre-register common strings
     gen_string_const("%s\n")
     gen_string_const("null")

@@ -4,89 +4,90 @@ import std
 print("--- Signed Integers ---")
 
 print("list<i8>:")
-li8: list<i8> = [10, 20, 30]
+mut li8: list<i8> = [10, 20, 30]
 for v1 in li8:
     print(v1)
 
 print("list<i16>:")
-li16: list<i16> = [100, 200, 300]
+mut li16: list<i16> = [100, 200, 300]
 for v2 in li16:
     print(v2)
 
 print("list<i32>:")
-li32: list<i32> = [1, 2, 3]
+mut li32: list<i32> = [1, 2, 3]
 for v3 in li32:
     print(v3)
 
 print("list<i64>:")
-li64: list<i64> = [100, 200, 300]
+mut li64: list<i64> = [100, 200, 300]
 for v4 in li64:
     print(v4)
 
 print("list<i128>:")
-li128: list<i128> = [1000, 2000, 3000]
+mut li128: list<i128> = [1000, 2000, 3000]
 for v5 in li128:
     print(v5)
 
 print("--- Unsigned Integers ---")
 
 print("list<u8>:")
-lu8: list<u8> = [5, 10, 15]
+mut lu8: list<u8> = [5, 10, 15]
 for v6 in lu8:
     print(v6)
 
 print("list<u16>:")
-lu16: list<u16> = [50, 100, 150]
+mut lu16: list<u16> = [50, 100, 150]
 for v7 in lu16:
     print(v7)
 
 print("list<u32>:")
-lu32: list<u32> = [500, 1000, 1500]
+mut lu32: list<u32> = [500, 1000, 1500]
 for v8 in lu32:
     print(v8)
 
 print("list<u64>:")
-lu64: list<u64> = [5000, 10000, 15000]
+mut lu64: list<u64> = [5000, 10000, 15000]
 for v9 in lu64:
     print(v9)
 
 print("list<u128>:")
-lu128: list<u128> = [50000, 100000, 150000]
+mut lu128: list<u128> = [50000, 100000, 150000]
 for v10 in lu128:
     print(v10)
 
 print("--- Float & String & Char ---")
 
 print("list<f32>:")
-lf32: list<f32> = [1.5, 2.5, 3.5]
+mut lf32: list<f32> = [1.5, 2.5, 3.5]
 for v11 in lf32:
     print(v11)
 
 print("list<f64>:")
-lf64: list<f64> = [10.1, 20.2, 30.3]
+mut lf64: list<f64> = [10.1, 20.2, 30.3]
 for v12 in lf64:
     print(v12)
 
 print("list<str>:")
-lstr: list<str> = ["Ali", "Sara", "Omar"]
+mut lstr: list<str> = ["Ali", "Sara", "Omar"]
 for v13 in lstr:
     print(v13)
 
 print("list<char>:")
-lchar: list<char> = ['A', 'B', 'C']
+mut lchar: list<char> = ['A', 'B', 'C']
 for v14 in lchar:
     print(v14)
 
 print("--- Arrays ---")
 
 print("array<i32>:")
-ai32: array<i32> = [10, 20, 30]
+mut ai32: array<i32> = [10, 20, 30]
 for v15 in ai32:
     print(v15)
 
 print("array<str>:")
-astr: array<str> = ["Hello", "World"]
+mut astr: array<str> = ["Hello", "World"]
 for v16 in astr:
     print(v16)
 
 print("ALL TESTS DONE")
+

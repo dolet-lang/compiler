@@ -86,6 +86,33 @@ fun gen_field_assignment(node: i64):
     # Get struct type of object
     obj_type: str = get_var_type(obj_name)
 
+    # Access control enforcement for field assignment
+    acc: str = get_field_access(obj_type, field_name)
+    if str_eq(acc, "private") == 1:
+        in_struct: i32 = 0
+        if (g_cur_method_struct as i64) != 0:
+            if Memory.strlen(g_cur_method_struct) > 0:
+                if str_eq(g_cur_method_struct, obj_type) == 1:
+                    in_struct = 1
+        if in_struct == 0:
+            IOOps.io_println(Str.concat("[error] Cannot assign to private field: ", field_name))
+            return
+    elif str_eq(acc, "protected") == 1:
+        allowed2: i32 = 0
+        if (g_cur_method_struct as i64) != 0:
+            if Memory.strlen(g_cur_method_struct) > 0:
+                if str_eq(g_cur_method_struct, obj_type) == 1:
+                    allowed2 = 1
+                if allowed2 == 0:
+                    par2: str = get_parent_struct(g_cur_method_struct)
+                    if (par2 as i64) != 0:
+                        if Memory.strlen(par2) > 0:
+                            if str_eq(par2, obj_type) == 1:
+                                allowed2 = 1
+        if allowed2 == 0:
+            IOOps.io_println(Str.concat("[error] Cannot assign to protected field: ", field_name))
+            return
+
     # ptr[T].value = x → store through typed pointer
     if str_eq(field_name, "value") == 1:
         if is_ptr_type(obj_type) == 1:
@@ -755,6 +782,10 @@ fun gen_statement(node: i64):
         gen_fun_call(node)
     elif nt == NODE_STATIC_METHOD:
         gen_static_method_call(node)
+    elif nt == NODE_NS_FUN_CALL:
+        gen_ns_fun_call(node)
+    elif nt == NODE_NS_STATIC_METHOD:
+        gen_ns_static_method(node)
     elif nt == NODE_INST_METHOD:
         gen_instance_method_call(node)
     elif nt == NODE_SUPER_METHOD:

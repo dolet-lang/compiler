@@ -123,3 +123,4 @@ fun init_pipeline():
     init_tokenizer_constants()
     init_tokenizer_buffers()
     init_ast_constants()
+    init_module_names()

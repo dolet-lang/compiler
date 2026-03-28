@@ -432,18 +432,36 @@ fun parse_import_stmt() -> i64:
     # Check for dot notation: import math.dsqrt
     if cur_kind() == TK_DOT:
         advance()
-        sym_name: str = cur_val()
-        eat(TK_IDENT)
-
-        # Check for .dlt extension
-        if str_eq(sym_name, "dlt") == 1:
-            mod_name = Str.concat(mod_name, ".dlt")
-        else:
+        # Check for bracket syntax: import std.[io, string]
+        if cur_kind() == TK_LBRACKET:
+            advance()
             symbols = mk_node_list(8)
-            sym_node: i64 = alloc_node(NODE_INT_LIT)
-            Memory.write_i64(sym_node + 8, sym_name as i64)
-            nl_add(symbols, sym_node)
+            while cur_kind() != TK_RBRACKET:
+                bsym_name: str = cur_val()
+                if cur_kind() == TK_IDENT or cur_kind() == TK_TYPE:
+                    advance()
+                else:
+                    eat(TK_IDENT)
+                bsym_node: i64 = alloc_node(NODE_INT_LIT)
+                Memory.write_i64(bsym_node + 8, bsym_name as i64)
+                nl_add(symbols, bsym_node)
+                if cur_kind() == TK_COMMA:
+                    advance()
+            eat(TK_RBRACKET)
             imp_type = 2
+        else:
+            sym_name: str = cur_val()
+            eat(TK_IDENT)
+
+            # Check for .dlt extension
+            if str_eq(sym_name, "dlt") == 1:
+                mod_name = Str.concat(mod_name, ".dlt")
+            else:
+                symbols = mk_node_list(8)
+                sym_node: i64 = alloc_node(NODE_INT_LIT)
+                Memory.write_i64(sym_node + 8, sym_name as i64)
+                nl_add(symbols, sym_node)
+                imp_type = 2
 
     # Check for 'as' alias
     if cur_kind() == TK_AS:
@@ -456,6 +474,43 @@ fun parse_import_stmt() -> i64:
             imp_type = 3
 
     return mk_import(mod_name, alias, symbols, imp_type)
+
+# ==========================================
+# From Import Statement
+# from mod_name import sym1, sym2, ...
+# ==========================================
+fun parse_from_import() -> i64:
+    eat(TK_FROM)
+
+    mod_name: str = cur_val()
+    eat(TK_IDENT)
+
+    # Handle dotted module names: from std.io import print
+    while cur_kind() == TK_DOT:
+        advance()
+        mid: str = cur_val()
+        eat(TK_IDENT)
+        mod_name = Str.concat(Str.concat(mod_name, "."), mid)
+
+    eat(TK_IMPORT)
+
+    # Collect selected symbol names
+    symbols: i64 = mk_node_list(16)
+    sym1: str = cur_val()
+    eat(TK_IDENT)
+    sym1_node: i64 = alloc_node(NODE_INT_LIT)
+    Memory.write_i64(sym1_node + 8, sym1 as i64)
+    nl_add(symbols, sym1_node)
+
+    while cur_kind() == TK_COMMA:
+        advance()
+        symn: str = cur_val()
+        eat(TK_IDENT)
+        symn_node: i64 = alloc_node(NODE_INT_LIT)
+        Memory.write_i64(symn_node + 8, symn as i64)
+        nl_add(symbols, symn_node)
+
+    return mk_import(mod_name, "", symbols, 2)
 
 # ==========================================
 # Extern Block

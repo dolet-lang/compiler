@@ -113,6 +113,12 @@ NODE_FUN_PTR_TYPE: i32 = 143
 NODE_IS_NULL: i32 = 144
 NODE_IS_NOT_NULL: i32 = 145
 
+# Module System (new)
+NODE_MODULE_DECL: i32 = 160
+NODE_EXPORT: i32 = 161
+NODE_REQUIRES: i32 = 162
+NODE_USE_MODULE: i32 = 163
+
 # Helpers (not in Python AST but needed for Dolet representation)
 NODE_PARAM: i32 = 150
 NODE_FIELD_VAL: i32 = 151

@@ -54,6 +54,8 @@ for %%f in (
     test_mini_struct
     test_import_helper
     test_35_mut_imm
+    test_36_selective_import
+    test_37_selective_bracket
 ) do (
     echo [TEST] %%f
     if exist "%TESTS_DIR%\%%f.dlt" (

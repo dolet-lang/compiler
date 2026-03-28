@@ -317,8 +317,11 @@ fun collect_strings(node: i64):
     if nt == NODE_FUN_CALL or nt == NODE_BUILTIN_CALL:
         collect_strings_list(Memory.read_i64(node + 16))
         return
-    if nt == NODE_STATIC_METHOD or nt == NODE_NS_STATIC_METHOD or nt == NODE_NS_FUN_CALL:
+    if nt == NODE_STATIC_METHOD or nt == NODE_NS_FUN_CALL:
         collect_strings_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_NS_STATIC_METHOD:
+        collect_strings_list(Memory.read_i64(node + 32))
         return
     if nt == NODE_INST_METHOD:
         collect_strings_list(Memory.read_i64(node + 24))
