@@ -1,0 +1,10 @@
+import std
+
+struct Account:
+    name: str
+    password: str
+    balance: i32
+
+mut acc: Account = Account(name="Alice", password="secret123", balance=1000)
+print(acc.name)
+print(acc.password)

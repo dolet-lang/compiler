@@ -1,0 +1,6 @@
+import std
+import testmod
+
+fun main():
+    x: i32 = test_public_func()
+    print(Convert.i64_to_str(x as i64))

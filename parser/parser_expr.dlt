@@ -96,26 +96,38 @@ fun parse_primary() -> i64:
                 # Extract expression name and create appropriate node
                 if fi > expr_start:
                     expr_name: str = str_from_range(v4, expr_start, fi)
-                    # Check for self.field pattern
-                    # Find dot position
-                    di: i64 = 0
-                    dot_pos: i64 = -1
                     elen: i64 = Memory.strlen(expr_name)
-                    while di < elen:
-                        dc: i8 = Memory.read_i8((expr_name as i64) + di)
-                        if dc == 46:
-                            dot_pos = di
-                            break
-                        di = di + 1
-                    if dot_pos > 0:
-                        obj_part: str = str_from_range(expr_name, 0, dot_pos)
-                        field_part: str = str_from_range(expr_name, dot_pos + 1, elen)
-                        if str_eq(obj_part, "self") == 1:
-                            nl_add(parts, mk_self_field(field_part))
-                        else:
-                            nl_add(parts, mk_field_access(obj_part, field_part))
+                    # Check for function call pattern: name()
+                    has_parens: i32 = 0
+                    if elen >= 3:
+                        p1: i8 = Memory.read_i8((expr_name as i64) + elen - 2)
+                        p2: i8 = Memory.read_i8((expr_name as i64) + elen - 1)
+                        if p1 == 40 and p2 == 41:
+                            has_parens = 1
+                    if has_parens == 1:
+                        fn_name: str = str_from_range(expr_name, 0, elen - 2)
+                        empty_args: i64 = mk_node_list(0)
+                        nl_add(parts, mk_fun_call(fn_name, empty_args, 0))
                     else:
-                        nl_add(parts, mk_var_ref(expr_name))
+                        # Check for self.field pattern
+                        # Find dot position
+                        di: i64 = 0
+                        dot_pos: i64 = -1
+                        while di < elen:
+                            dc: i8 = Memory.read_i8((expr_name as i64) + di)
+                            if dc == 46:
+                                dot_pos = di
+                                break
+                            di = di + 1
+                        if dot_pos > 0:
+                            obj_part: str = str_from_range(expr_name, 0, dot_pos)
+                            field_part: str = str_from_range(expr_name, dot_pos + 1, elen)
+                            if str_eq(obj_part, "self") == 1:
+                                nl_add(parts, mk_self_field(field_part))
+                            else:
+                                nl_add(parts, mk_field_access(obj_part, field_part))
+                        else:
+                            nl_add(parts, mk_var_ref(expr_name))
                 if fi < flen:
                     fi = fi + 1
                 seg_start = fi

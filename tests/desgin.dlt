@@ -1,0 +1,658 @@
+
+#note some of these for design not works yet!
+########################################
+annotation serialize:
+    target: struct
+    param format: str
+        valid_values: ["json", "binary", "toml"]
+        default: "json"
+    param skip_null: bool
+        default: bool = false
+    
+    # ما يحصل لما يُطبَّق على struct
+    codegen:
+        inject_fn "serialize_to_{format}"
+        inject_fn "deserialize_from_{format}"
+
+#########################################
+@[serialize(format="json")]
+struct User:
+    @[rename(name="full_name")]
+    name: str
+    
+    @[clamp(min=0, max=150)]
+    age: i32
+    
+    @[skip]
+    password_hash: str
+#########################################
+annotation fast_fun:
+    target: fun
+    composes:
+        @[inline]
+        @[hot]
+        @[pure]
+
+annotation c_compat:
+    target: fun, struct
+    composes:
+        @[extern("c")]
+        @[repr(c)]
+        @[export("{fun_name}")]
+
+@[fast_fun]
+fun dot_product(a?: array<f32[4]>, b?: array<f32[4]>) -> f32:
+    ...
+@[inline, hot, pure]
+fun dot_product(a?: array<f32[4]>, b?: array<f32[4]>) -> f32:
+    ...
+
+
+
+@[repr: packed]
+@[transparent]
+
+
+x: i32 = 50
+myptr: ptr<i32> = Pointer.address(x)
+
+print(myptr)                 # →  0x7ffee4b3c8a4
+print(Pointer.value(myptr))  # →  50
+
+enum T = [I8, I16, I32, I64, I128]
+struct Integer<T>:
+    ...
+
+# Integers
+type i8   = Integer<I8>
+type i16  = Integer<I16>
+type i32  = Integer<I32>
+type i64  = Integer<I64>
+type i128 = Integer<I128>
+type u8   = Integer<U8>
+type u16  = Integer<U16>
+type u32  = Integer<U32>
+type u64  = Integer<U64>
+type u128 = Integer<U128>
+
+# Floats
+type f32 = Float<F32>
+type f64 = Float<F64>
+
+# Primitives
+type str  = String
+type char = Character
+type bool = Boolean
+
+# Collections
+type ptr<T>    = Pointer<T>
+type list<T>   = List<T>
+type array<T>  = Array<T>
+type map<K, V> = Map<K, V>
+
+
+myptr: ptr<i32> = Pointer.value(0x7ffee4b3c8a4)
+print(myptr) # for example its can print: 20
+# do not print store the
+
+
+
+x: i32 = 50
+
+myptr: ptr<i32> = Pointer.addr(x)
+myptr: ptr<i32> = Pointer.hex(0x7ffee4b3c8a4)
+myptr: ptr<i32> = Pointer.byte([0x32, 0x00, 0x00, 0x00])
+
+print(Pointer.to_value(myptr))  # → 50
+print(Pointer.to_hex(myptr))    # → 0x00000032
+print(Pointer.to_byte(myptr))   # → [0x32, 0x00, 0x00, 0x00]
+
+fun get_ptr(x: i32) -> ptr<i32>:
+    return Pointer.addr(x)
+
+import std.memory.[malloc, free]
+
+
+import std.string.[concat]
+type Math = std.math.[max, min]
+import Math
+
+import std
+
+import kubic.core    [App, SceneTree, Node]
+import kubic.node3d  [Node3D, Camera3D, Light3D]
+import kubic.node2d  [Node2D, Sprite2D]
+import kubic.physics [RigidBody3D, CollisionShape3D]
+import kubic.input   [Input, KeyCode]
+import kubic.render  [Vulkan, Window, Viewport]
+import aecs          [component, system, resource, query]
+
+#===============================================#
+# كل node بتعرّفها كـ struct وراثتها من node أساسي
+@[node]
+struct GameScene extends SceneTree:
+
+    # الـ root node
+    world = Node3D.new(name="World")
+
+    # Camera كـ child من World
+    camera = Camera3D.new(name="MainCamera")
+        .set_pos(x=0.0, y=5.0, z=10.0)
+        .look_at(0.0, 0.0, 0.0)
+        .set_fov(75.0)
+
+    # Player node
+    player = Node3D.new(name="Player")
+        .set_pos(x=0.0, y=0.0, z=0.0)
+        .add_child(
+            Sprite2D.new(name="PlayerSprite")
+                .set_texture("assets/player.png")
+        )
+        .add_child(
+            RigidBody3D.new(name="PlayerBody")
+                .set_mass(1.0)
+                .add_child(
+                    CollisionShape3D.new()
+                        .set_shape(BoxShape(1.0, 1.0, 1.0))
+                        .set_scale(1.0, 2.0, 1.0)
+                )
+        )
+
+    # Light
+    sun = Light3D.new(name="Sun")
+        .set_type("directional")
+        .set_color(1.0, 0.95, 0.8)
+        .set_intensity(1.2)
+        .set_rotation(x=-45.0, y=30.0, z=0.0)
+        .set_shadow(true)
+        .set_shadow_resolution(2048)
+        .set_shadow_bias(0.005)
+        .set_shadow_normal_bias(0.1)
+        .set_shadow_cascades(4)
+
+
+    # بناء الـ Tree
+    fun build() -> void:
+        world
+            .add_child(camera)
+            .add_child(player)
+            .add_child(sun)
+        
+        self.set_root(world)
+#===============================================#
+
+import kubic.core   [Node3D, delta_time]
+import kubic.input  [Input, KeyCode]
+import aecs         [component, system, query, resource]
+
+# === Components ===
+@[component]
+struct PlayerController:
+    speed: f32
+        default: 5.0
+    jump_force: f32
+        default=8.0
+
+@[component]
+struct Grounded:
+    value: bool
+        default: false
+
+# === Movement System ===
+@[system(stage="update")]
+fun player_movement(
+    node: @query<Node3D, has=PlayerController>,
+    ctrl: @query<PlayerController>,
+    grounded: @query<Grounded>,
+    dt: @res<DeltaTime>
+) -> void:
+
+    vel = Vec3(0.0, 0.0, 0.0)
+
+    if Input.held(KeyCode.W):
+        vel.z -= ctrl.speed * dt.value
+    if Input.held(KeyCode.S):
+        vel.z += ctrl.speed * dt.value
+    if Input.held(KeyCode.A):
+        vel.x -= ctrl.speed * dt.value
+    if Input.held(KeyCode.D):
+        vel.x += ctrl.speed * dt.value
+
+    if Input.pressed(KeyCode.Space) and grounded.value:
+        vel.y += ctrl.jump_force
+
+    node.translate(vel)
+
+# === Camera Follow System ===
+@[system(stage="update", after="player_movement")]
+fun camera_follow(
+    cam: @query<Camera3D>,
+    player: @query<Node3D, has=PlayerController>,
+    dt: @res<DeltaTime>
+) -> void:
+    target = player.get_pos() + Vec3(0.0, 5.0, 10.0)
+    cam.set_pos(
+        Vec3.lerp(cam.get_pos(), target, 5.0 * dt.value)
+    )
+#===============================================#
+
+import kubic.render [Vulkan, Window, RenderPipeline]
+
+@[resource]
+struct RenderConfig:
+    width: i32
+        default: 1920
+    height: i32
+        default: 1080
+    title: str
+        default: "Kubic Game"
+    vsync: bool
+        default: true
+    msaa: i32
+        valid_values: [1, 2, 4, 8]
+        default: 4
+
+@[system(stage="startup")]
+fun init_renderer(config: @res<RenderConfig>) -> void:
+
+    window = Window.new()
+        .set_size(config.width, config.height)
+        .set_title(config.title)
+        .set_vsync(config.vsync)
+        .build()
+
+    vulkan = Vulkan.new()
+        .set_window(window)
+        .set_msaa(config.msaa)
+        .enable_validation(debug=true)
+        .build()
+
+    pipeline = RenderPipeline.new()
+        .set_backend(vulkan)
+        .add_pass("geometry")
+        .add_pass("lighting")
+        .add_pass("post_process")
+        .build()
+#===============================================#
+
+@[plugin]
+struct KubicDefaultPlugins:
+    fun build(app: App) -> void:
+        app
+            .add_plugin(WindowPlugin)
+            .add_plugin(VulkanPlugin)
+            .add_plugin(PhysicsPlugin)
+            .add_plugin(InputPlugin)
+            .add_plugin(AudioPlugin)
+            .add_plugin(AECSPlugin)
+
+@[plugin]
+struct PhysicsPlugin:
+    gravity: Vec3
+        default: Vec3(0.0, -9.8, 0.0)
+    
+    fun build(app: App) -> void:
+        app
+            .add_resource(PhysicsWorld(gravity: self.gravity))
+            .add_system(physics_step)
+            .add_system(collision_detection)
+            .add_system(collision_response)
+#===============================================#
+
+import kubic.core   [App]
+import kubic.render [KubicDefaultPlugins]
+
+fun main() -> void:
+    App.new()
+        .set_config(RenderConfig(
+            width: 1920,
+            height: 1080,
+            title: "My Kubic Game",
+            msaa: 4
+        ))
+        .add_plugin(KubicDefaultPlugins)
+        .add_scene(GameScene)
+        .add_system(player_movement)
+        .add_system(camera_follow)
+        .add_system(enemy_ai_system)
+        .run()
+
+####################################################
+####################################################
+####################################################
+
+#=====================================================
+#  KUBIC DEMO — FPS Game "The Cube"
+#=====================================================
+
+import aecs         [component, system, resource, query]
+import kubic.core   [App, SceneTree]
+import kubic.node3d [Node3D, Camera3D, Light3D, MeshNode3D]
+import kubic.mesh   [CubeMesh, PlaneMesh]
+import kubic.physics [RigidBody3D, CollisionShape3D, BoxShape, CapsuleShape]
+import kubic.input  [Input, KeyCode, MouseButton, Mouse]
+import kubic.render [RenderConfig, KubicDefaultPlugins]
+import kubic.math   [Vec3, clamp]
+import kubic.ui     [HUD, Label, Crosshair]
+
+#=====================================================
+#  COMPONENTS — بس اللي ما عنده Node جاهز
+#=====================================================
+
+@[component]
+struct PlayerTag:
+    speed:       f32  = 5.0
+    sprint_mult: f32  = 1.8
+    jump_force:  f32  = 6.0
+    sensitivity: f32  = 0.15
+    health:      f32  = 100.0
+
+@[component]
+struct CubeTag:
+    hit_flash: f32 = 0.0
+
+#=====================================================
+#  RESOURCES
+#=====================================================
+
+@[resource]
+struct GameState:
+    score:     i32  = 0
+    ammo:      i32  = 30
+    is_paused: bool = false
+
+#=====================================================
+#  SCENE TREE — نظيفة لأن كل node عنده defaults
+#=====================================================
+
+@[node]
+struct GameScene extends SceneTree:
+
+    world = Node3D.new(name="World")
+
+    sun = Light3D.new(name="Sun")
+        .set_type("directional")
+        .set_rot(Vec3(-45.0, 30.0, 0.0))
+        # color, intensity, shadows → defaults مدمجة
+
+    floor = MeshNode3D.new( )
+        .set_name("Floor")
+        .set_mesh(PlaneMesh(50.0, 50.0))
+        .set_material("assets/concrete.mat")
+        # CollisionShape تلقائي من الـ mesh bounds
+
+    cube = MeshNode3D.new(name="TargetCube")
+        .set_mesh(CubeMesh(1.0))
+        .set_material("assets/red_cube.mat")
+        .set_pos(Vec3(0.0, 0.5, -8.0))
+        .set_physics("rigid", mass=1.0)
+        # set_physics() تضيف RigidBody + CollisionShape تلقائياً
+        .attach(CubeTag())
+
+    player = Node3D.new(name="Player")
+        .set_pos(Vec3(0.0, 1.0, 0.0))
+        .set_physics("character", mass=70.0)
+        # character physics = capsule collider + lock rotation تلقائي
+        .attach(PlayerTag())
+        .add_child(
+            Camera3D.new(name="FPSCamera")
+                .set_pos(Vec3(0.0, 0.8, 0.0))
+                .set_fov(90.0)
+                # near, far, projection → defaults
+        )
+
+    hud = HUD.new()
+        .add_child(Crosshair.new())
+        .add_child(Label.new(name="AmmoLabel",  anchor="bottom_right"))
+        .add_child(Label.new(name="ScoreLabel", anchor="top_left"))
+        .add_child(Label.new(name="HealthLabel",anchor="bottom_left"))
+
+    fun build() -> void:
+        world
+            .add_child(sun)
+            .add_child(floor)
+            .add_child(cube)
+            .add_child(player)
+            .add_child(hud)
+        self.set_root(world)
+
+#=====================================================
+#  SYSTEMS
+#=====================================================
+
+@[system(stage="startup")]
+fun init(game_state: @res<GameState>) -> void:
+    Mouse.capture()
+
+@[system(stage="update")]
+fun fps_look(
+    player: @query<Node3D,   has=PlayerTag>,
+    cam:    @query<Camera3D>
+) -> void:
+    delta = Mouse.get_delta()
+    player.rotate_y(-delta.x * 0.15)
+    cam.rotate_x(-delta.y * 0.15)
+    cam.clamp_pitch(-89.0, 89.0)
+    # clamp_pitch → built-in في Camera3D
+
+@[system(stage="update", after="fps_look")]
+fun fps_movement(
+    player: @query<Node3D,  has=PlayerTag>,
+    ctrl:   @query<PlayerTag>,
+    dt:     @res<DeltaTime>
+) -> void:
+    move  = Vec3.from_input(KeyCode.W, KeyCode.S, KeyCode.A, KeyCode.D)
+    # Vec3.from_input → built-in helper شائع جداً في engines
+
+    speed = ctrl.speed * (ctrl.sprint_mult if Input.held(KeyCode.Shift) else 1.0)
+
+    player.move_and_slide(move * speed, dt.value)
+    # move_and_slide → built-in في character physics
+
+    if Input.pressed(KeyCode.Space) and player.is_grounded():
+        player.jump(ctrl.jump_force)
+    # is_grounded(), jump() → built-in في character physics
+
+@[system(stage="update")]
+fun fps_shoot(
+    cam:        @query<Camera3D>,
+    game_state: @res<GameState>
+) -> void:
+    if not Input.pressed(MouseButton.Left): return
+    if game_state.ammo <= 0:               return
+
+    game_state.ammo -= 1
+
+    ray = cam.raycast(100.0)
+    # raycast() → built-in في Camera3D
+
+    if ray.hit(CubeTag):
+        ray.node.get(CubeTag).hit_flash = 0.15
+        ray.node.apply_impulse(ray.dir * 8.0)
+        game_state.score += 10
+
+@[system(stage="update")]
+fun cube_flash(
+    cube: @query<CubeTag>,
+    mesh: @query<MeshNode3D, has=CubeTag>,
+    dt:   @res<DeltaTime>
+) -> void:
+    if cube.hit_flash > 0.0:
+        mesh.set_emission(Vec3(1.0, 1.0, 0.0) * cube.hit_flash * 6.0)
+        cube.hit_flash -= dt.value
+    else:
+        mesh.clear_emission()
+
+@[system(stage="update")]
+fun cube_respawn(node: @query<Node3D, has=CubeTag>) -> void:
+    if node.pos.y < -10.0:
+        node.reset_to(Vec3(0.0, 0.5, -8.0))
+        # reset_to() → pos + velocity reset في نفس الوقت
+
+@[system(stage="post_update")]
+fun update_hud(
+    hud:        @query<HUD>,
+    ctrl:       @query<PlayerTag>,
+    game_state: @res<GameState>
+) -> void:
+    hud["AmmoLabel"].text   = "{game_state.ammo} / 30"
+    hud["ScoreLabel"].text  = "Score: {game_state.score}"
+    hud["HealthLabel"].text = "HP: {ctrl.health}"
+
+@[system(stage="update")]
+fun handle_pause(game_state: @res<GameState>) -> void:
+    if Input.pressed(KeyCode.Escape):
+        game_state.is_paused = not game_state.is_paused
+        Mouse.toggle_capture()
+        # toggle_capture() → built-in بدل if/else
+
+#=====================================================
+#  ENTRY POINT
+#=====================================================
+
+fun main() -> void:
+    App.new()
+        .config(RenderConfig(
+            title: "The Cube — Kubic",
+            width: 1920, height: 1080
+        ))
+        .add_plugin(KubicDefaultPlugins)
+        .add_scene(GameScene)
+        .run()
+
+
+struct MyData:
+    value: i32
+    
+@[heap]
+struct MyStruct:
+    value: i32
+
+var myNum?: i32 = 10
+const myNum: i32 = 42
+ptr: ptr<i32> = Pointer.addr(myNum)
+
+private mut y: i32 = 20
+ptr2: ptr<i32> = Pointer.addr(y)
+
+
+mut myNum?: i32 = 10
+const myNum: i32 = 42
+mylist: list<i32> = [1, 2, 3]
+myarray: array<i32[3]> = [4, 5, 6]
+const myarray: array<i32[3]> = [7, 8, 9]
+
+var mylist: list<i32> = []
+
+mylist: mut<i32> = []
+myarray: const<i32[3]> = [1, 2, 3]
+
+
+
+
+mut mylist: i32[..] = [1, 2, 3]
+imm myarray: i32[3] = [1, 2, 3]
+mymap: str -> i32 = {
+    "one": 1,
+    "two": 2
+}
+mut x: i32 = 10
+imm y: i32 = 20
+
+#بدل 
+mylist: list<i32> = [1, 2, 3]
+myarray: array<i32[3]> = [4, 5, 6]
+mymap: map<str, i32> = {
+    "one": 1,
+    "two": 2
+}
+x: i32 = 10
+const y: i32 = 20
+
+
+
+
+
+#قديم
+mymap: map<str, map<list<i32>, i32>> = {
+    "one": { [1, 2, 3]: 10 },
+    "two": { [4, 5, 6]: 20 }
+}
+const mymap: map<str, map<list<i32>, i32>> = {
+    "one": { [1, 2, 3]: 10 },
+    "two": { [4, 5, 6]: 20 }
+}
+# جديد
+mut mymap: <str, <list<i32>, i32>> = {
+    "one": { [1, 2, 3]: 10 },
+    "two": { [4, 5, 6]: 20 }
+}
+
+imm mymap: <str, <list<i32>, i32>> = {
+    "one": { [1, 2, 3]: 10 },
+    "two": { [4, 5, 6]: 20 }
+}
+
+
+# Nested Map
+mut database: {str: {str: i32[]}} = {
+    "ahmed": {
+        "scores": [90, 85, 95],
+        "grades": [1, 2, 3]
+    },
+    "ali": {
+        "scores": [70, 80, 75],
+        "grades": [2, 3, 1]
+    }
+}
+
+imm colors: str.3 = ["red", "green", "blue"]
+# Map — سهم يعبر عن key → value
+mut user: str->i32 = {
+    "age": 25,
+    "score": 100
+}
+
+# Nested
+mut database: str->{str->i32[..]} = {
+    "ahmed": {
+        "scores": [90, 85, 95]
+    }
+}
+
+type MyMap = str->{str->i32[3]}
+# Nested
+mut database:  = {
+    "ahmed": {
+        "scores": [90, 85, 95]
+    }
+}
+
+struct Player:
+    health: i32
+    x: f32
+    y: f32
+    name: str
+
+mut players: Player[..] = [
+    Player(health=100, x=1.0, y=2.0, name="ahmed"),
+    Player(health=80,  x=3.0, y=4.0, name="ali"),
+    Player(health=60,  x=5.0, y=6.0, name="sara"),
+]
+
+# عمليات عادية
+players[0].health -= 10
+print(players[0].name)
+print(players[1].health)
+
+# التحويل ل:
+health: [100, 80,  60 ]
+x:      [1.0, 3.0, 5.0]
+y:      [2.0, 4.0, 6.0]
+name:   ["ahmed", "ali", "sara"]
+
+
+mut health: i32[..] = [100, 80, 60]
+mut x: f32[..] = [1.0, 3.0, 5.0]
+
+

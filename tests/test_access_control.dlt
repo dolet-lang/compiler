@@ -1,0 +1,24 @@
+import std
+
+struct Account:
+    public name: str
+    private password: str
+    protect balance: i32
+
+impl Account:
+    fun get_name(self) -> str:
+        return self.name
+
+    fun get_password(self) -> str:
+        # Private access from inside impl — should work
+        return self.password
+
+    fun get_balance(self) -> i32:
+        # Protected access from inside impl — should work
+        return self.balance
+
+# Main code — outside any struct
+mut acc: Account = Account(name="Alice", password="secret123", balance=1000)
+
+# Public access — should work
+print(acc.name)

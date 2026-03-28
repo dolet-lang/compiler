@@ -137,8 +137,8 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
     skip_newlines()
 
     # Parse fields
-    fields: i64 = mk_node_list(32)
-    methods: i64 = mk_node_list(64)
+    fields: i64 = mk_node_list(64)
+    methods: i64 = mk_node_list(256)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
@@ -297,7 +297,7 @@ fun parse_trait_decl() -> i64:
         advance()
     skip_newlines()
 
-    methods: i64 = mk_node_list(64)
+    methods: i64 = mk_node_list(256)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
@@ -338,7 +338,7 @@ fun parse_impl_block() -> i64:
         advance()
     skip_newlines()
 
-    methods: i64 = mk_node_list(64)
+    methods: i64 = mk_node_list(256)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
@@ -381,7 +381,7 @@ fun parse_extend_block() -> i64:
         advance()
     skip_newlines()
 
-    methods: i64 = mk_node_list(64)
+    methods: i64 = mk_node_list(256)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
@@ -532,7 +532,7 @@ fun parse_extern_block() -> i64:
         advance()
     skip_newlines()
 
-    funs: i64 = mk_node_list(64)
+    funs: i64 = mk_node_list(256)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()

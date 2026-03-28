@@ -143,7 +143,7 @@ g_module_names: i64 = 0
 g_module_count: i32 = 0
 
 fun init_module_names():
-    g_module_names = Memory.malloc_zeroed(64 * 8)
+    g_module_names = Memory.malloc_zeroed(256 * 8)
     g_module_count = 0
 
 fun register_module_name(name: str):

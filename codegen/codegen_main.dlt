@@ -186,7 +186,9 @@ fun collect_declarations(ast: i64):
                         smname: str = Memory.read_i64(smnode + 8) as str
                         smret: str = Memory.read_i64(smnode + 24) as str
                         smangled: str = Str.concat(Str.concat(sname, "_"), smname)
-                        register_fun_sig(smangled, smret)
+                        sm_params: i64 = Memory.read_i64(smnode + 16)
+                        sm_pt: str = build_param_types_str_no_self(sm_params)
+                        register_fun_sig_with_params(smangled, smret, sm_pt)
                         register_impl_method(sname, smname, smnode)
                         sj = sj + 1
 
@@ -197,7 +199,7 @@ fun collect_declarations(ast: i64):
             fparams: i64 = Memory.read_i64(node + 16)
             fpt_str: str = build_param_types_str(fparams)
             mangled_fn: str = register_overload(fname, fpt_str)
-            register_fun_sig(mangled_fn, ret_type)
+            register_fun_sig_with_params(mangled_fn, ret_type, fpt_str)
 
         # Impl blocks — register method signatures
         if nt == NODE_IMPL_BLOCK:
@@ -211,7 +213,9 @@ fun collect_declarations(ast: i64):
                     mname: str = Memory.read_i64(mnode + 8) as str
                     mret: str = Memory.read_i64(mnode + 24) as str
                     mangled: str = Str.concat(Str.concat(isname, "_"), mname)
-                    register_fun_sig(mangled, mret)
+                    m_params: i64 = Memory.read_i64(mnode + 16)
+                    m_pt: str = build_param_types_str_no_self(m_params)
+                    register_fun_sig_with_params(mangled, mret, m_pt)
                     register_impl_method(isname, mname, mnode)
                     j2 = j2 + 1
 
@@ -244,7 +248,7 @@ fun collect_declarations(ast: i64):
                                     ept_str = eptype
                             epi = epi + 1
                     emangled: str = register_overload(emangled_base, ept_str)
-                    register_fun_sig(emangled, emret)
+                    register_fun_sig_with_params(emangled, emret, ept_str)
                     register_impl_method(etname, emname, enode)
                     j3 = j3 + 1
 
@@ -430,7 +434,7 @@ fun gen_global_var_decls():
         # Create unique mlir name
         mname: str = gname
         g_is_const: i32 = Memory.read_i64(gnode + 48) as i32
-        add_variable(gname, mname, vtype, 0, g_is_const)
+        add_variable(gname, mname, vtype, 2, g_is_const)
 
         # Emit global declaration
         emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", mname), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
@@ -471,9 +475,9 @@ fun gen_functions(ast: i64):
             s_sa: i64 = Memory.read_i64(node + 56)
             if s_sa != 2:
                 if ts_is_reachable(sdbg) == 1:
-                    IOOps.io_println(Str.concat("[gen_fn] struct: ", sdbg))
-                    gen_struct_inline_methods(node)
-                    IOOps.io_println("[gen_fn] struct methods done")
+                    if is_fn_emitted(sdbg) == 0:
+                        mark_fn_emitted(sdbg)
+                        gen_struct_inline_methods(node)
         elif nt == NODE_FUN_DEF:
             ts_fname: str = Memory.read_i64(node + 8) as str
             if ts_is_reachable(ts_fname) == 1:
@@ -607,12 +611,28 @@ fun generate(ast: i64) -> str:
     indent_dec()
     emit("}")
 
-    # Join all output lines
-    result: str = ""
+    # Join all output lines — O(n) bulk copy instead of O(n²) concat
+    total_len: i64 = 0
     i: i32 = 0
     while i < g_out_count:
+        total_len = total_len + Memory.strlen(get_output_line(i))
         if i > 0:
-            result = Str.concat(result, "\n")
-        result = Str.concat(result, get_output_line(i))
+            total_len = total_len + 1
         i = i + 1
-    return result
+    buf: i64 = Memory.malloc(total_len + 1)
+    pos: i64 = 0
+    i = 0
+    line: str = ""
+    llen: i64 = 0
+    while i < g_out_count:
+        if i > 0:
+            Memory.write_i8(buf + pos, 10 as i8)
+            pos = pos + 1
+        line = get_output_line(i)
+        llen = Memory.strlen(line)
+        if llen > 0:
+            Memory.copy(buf + pos, line as i64, llen)
+            pos = pos + llen
+        i = i + 1
+    Memory.write_i8(buf + pos, 0 as i8)
+    return buf as str

@@ -1,0 +1,5 @@
+import std
+
+fun main() -> i32:
+    IOOps.io_println("Hello from doletc2!")
+    return 0

@@ -1,0 +1,8 @@
+import std
+
+# Phase 5: use statement (symbol aliasing)
+use std.IOOps.io_println
+
+fun main():
+    # Regular call still works
+    IOOps.io_println("use statement parsed ok")

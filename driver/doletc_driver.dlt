@@ -40,8 +40,9 @@ fun replace_extension(path: str, new_ext: str) -> str:
     # Find last '.'
     dot_pos: i64 = -1
     i: i64 = slen - 1
+    c: i8 = 0 as i8
     while i >= 0:
-        c: i8 = Memory.read_i8((path as i64) + i)
+        c = Memory.read_i8((path as i64) + i)
         if c == 46:
             dot_pos = i
             break
@@ -51,7 +52,7 @@ fun replace_extension(path: str, new_ext: str) -> str:
 
     base: str = path
     if dot_pos >= 0:
-        base = str_from_range(path, 0, dot_pos)
+        base = str_from_range(path, 0 as i64, dot_pos)
     return Str.concat(base, new_ext)
 
 # ==========================================
@@ -65,8 +66,8 @@ g_lib_reg_paths: i64 = 0
 g_lib_reg_count: i32 = 0
 
 fun init_library_registry():
-    g_lib_reg_names = Memory.malloc_zeroed(64 * 8)
-    g_lib_reg_paths = Memory.malloc_zeroed(64 * 8)
+    g_lib_reg_names = Memory.malloc_zeroed(256 * 8)
+    g_lib_reg_paths = Memory.malloc_zeroed(256 * 8)
     g_lib_reg_count = 0
 
 fun load_library_registry(library_root: str):
@@ -140,12 +141,13 @@ fun load_library_registry(library_root: str):
                             reg_win_path: str = ""
                             rwi: i64 = 0
                             rwlen: i64 = Memory.strlen(reg_rel)
+                            rwc: i8 = 0 as i8
+                            rwbuf: i64 = Memory.malloc_zeroed(2)
                             while rwi < rwlen:
-                                rwc: i8 = Memory.read_i8((reg_rel as i64) + rwi)
+                                rwc = Memory.read_i8((reg_rel as i64) + rwi)
                                 if rwc == 47:
                                     reg_win_path = Str.concat(reg_win_path, "\\")
                                 else:
-                                    rwbuf: i64 = Memory.malloc_zeroed(2)
                                     Memory.write_i8(rwbuf, rwc)
                                     reg_win_path = Str.concat(reg_win_path, rwbuf as str)
                                 rwi = rwi + 1
@@ -177,7 +179,7 @@ g_loaded_files: i64 = 0
 g_loaded_file_count: i32 = 0
 
 fun init_loaded_files():
-    g_loaded_files = Memory.malloc_zeroed(256 * 8)
+    g_loaded_files = Memory.malloc_zeroed(1024 * 8)
     g_loaded_file_count = 0
 
 fun is_file_loaded(rel_path: str) -> i32:
@@ -205,12 +207,13 @@ fun load_file_with_deps(library_root: str, rel_path: str) -> str:
     win_path: str = ""
     wpi: i64 = 0
     wplen: i64 = Memory.strlen(rel_path)
+    wpc: i8 = 0 as i8
+    wpbuf: i64 = Memory.malloc_zeroed(2)
     while wpi < wplen:
-        wpc: i8 = Memory.read_i8((rel_path as i64) + wpi)
+        wpc = Memory.read_i8((rel_path as i64) + wpi)
         if wpc == 47:
             win_path = Str.concat(win_path, "\\")
         else:
-            wpbuf: i64 = Memory.malloc_zeroed(2)
             Memory.write_i8(wpbuf, wpc)
             win_path = Str.concat(win_path, wpbuf as str)
         wpi = wpi + 1
@@ -358,55 +361,87 @@ fun scan_selective_std_imports(user_src: str, library_root: str) -> str:
     si: i64 = 0
     s_line_start: i64 = 0
     mod_path: str = "std\\mod.dlt"
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    sc: i8 = 0 as i8
+    s_line_len: i64 = 0
+    si0: i8 = 0 as i8
+    si1: i8 = 0 as i8
+    si2: i8 = 0 as i8
+    si3: i8 = 0 as i8
+    si4: i8 = 0 as i8
+    si5: i8 = 0 as i8
+    si6: i8 = 0 as i8
+    si7: i8 = 0 as i8
+    si8: i8 = 0 as i8
+    si9: i8 = 0 as i8
+    si10: i8 = 0 as i8
+    after_dot: i64 = 0
+    next_ch: i8 = 0 as i8
+    bi: i64 = 0
+    name_start: i64 = 0
+    bc: i8 = 0 as i8
+    ns: i64 = 0
+    ne: i64 = 0
+    nsc: i8 = 0 as i8
+    nec: i8 = 0 as i8
+    sub_name: str = ""
+    exp_path: str = ""
+    dep_src: str = ""
+    sn_end: i64 = 0
+    snc: i8 = 0 as i8
+    sub_name2: str = ""
+    exp_path2: str = ""
+    dep_src2: str = ""
+    snr: i8 = 0 as i8
 
     while si <= slen:
-        sc: i8 = 0
+        sc = 0 as i8
         if si < slen:
             sc = Memory.read_i8((user_src as i64) + si)
         if sc == 10 or sc == 13 or si == slen:
-            s_line_len: i64 = si - s_line_start
+            s_line_len = si - s_line_start
             # Check "import std." (11 chars): i=105 m=109 p=112 o=111 r=114 t=116 ' '=32 s=115 t=116 d=100 .=46
             if s_line_len > 11:
-                si0: i8 = Memory.read_i8((user_src as i64) + s_line_start)
-                si1: i8 = Memory.read_i8((user_src as i64) + s_line_start + 1)
-                si2: i8 = Memory.read_i8((user_src as i64) + s_line_start + 2)
-                si3: i8 = Memory.read_i8((user_src as i64) + s_line_start + 3)
-                si4: i8 = Memory.read_i8((user_src as i64) + s_line_start + 4)
-                si5: i8 = Memory.read_i8((user_src as i64) + s_line_start + 5)
-                si6: i8 = Memory.read_i8((user_src as i64) + s_line_start + 6)
-                si7: i8 = Memory.read_i8((user_src as i64) + s_line_start + 7)
-                si8: i8 = Memory.read_i8((user_src as i64) + s_line_start + 8)
-                si9: i8 = Memory.read_i8((user_src as i64) + s_line_start + 9)
-                si10: i8 = Memory.read_i8((user_src as i64) + s_line_start + 10)
+                si0 = Memory.read_i8((user_src as i64) + s_line_start)
+                si1 = Memory.read_i8((user_src as i64) + s_line_start + 1)
+                si2 = Memory.read_i8((user_src as i64) + s_line_start + 2)
+                si3 = Memory.read_i8((user_src as i64) + s_line_start + 3)
+                si4 = Memory.read_i8((user_src as i64) + s_line_start + 4)
+                si5 = Memory.read_i8((user_src as i64) + s_line_start + 5)
+                si6 = Memory.read_i8((user_src as i64) + s_line_start + 6)
+                si7 = Memory.read_i8((user_src as i64) + s_line_start + 7)
+                si8 = Memory.read_i8((user_src as i64) + s_line_start + 8)
+                si9 = Memory.read_i8((user_src as i64) + s_line_start + 9)
+                si10 = Memory.read_i8((user_src as i64) + s_line_start + 10)
                 if si0 == 105 and si1 == 109 and si2 == 112 and si3 == 111 and si4 == 114 and si5 == 116 and si6 == 32 and si7 == 115 and si8 == 116 and si9 == 100 and si10 == 46:
                     # Found "import std." — extract what comes after
-                    after_dot: i64 = s_line_start + 11
-                    next_ch: i8 = Memory.read_i8((user_src as i64) + after_dot)
+                    after_dot = s_line_start + 11
+                    next_ch = Memory.read_i8((user_src as i64) + after_dot)
                     if next_ch == 91:
                         # Bracket syntax: import std.[name1, name2]
-                        bi: i64 = after_dot + 1
-                        name_start: i64 = bi
+                        bi = after_dot + 1
+                        name_start = bi
                         while bi < si:
-                            bc: i8 = Memory.read_i8((user_src as i64) + bi)
+                            bc = Memory.read_i8((user_src as i64) + bi)
                             if bc == 44 or bc == 93:
                                 # Trim name
-                                ns: i64 = name_start
-                                ne: i64 = bi
+                                ns = name_start
+                                ne = bi
                                 while ns < ne:
-                                    nsc: i8 = Memory.read_i8((user_src as i64) + ns)
+                                    nsc = Memory.read_i8((user_src as i64) + ns)
                                     if nsc != 32 and nsc != 9:
                                         break
                                     ns = ns + 1
                                 while ne > ns:
-                                    nec: i8 = Memory.read_i8((user_src as i64) + ne - 1)
+                                    nec = Memory.read_i8((user_src as i64) + ne - 1)
                                     if nec != 32 and nec != 9:
                                         break
                                     ne = ne - 1
                                 if ne > ns:
-                                    sub_name: str = str_from_range(user_src, ns, ne)
-                                    exp_path: str = resolve_expose_path(library_root, mod_path, sub_name)
+                                    sub_name = str_from_range(user_src, ns, ne)
+                                    exp_path = resolve_expose_path(library_root, mod_path, sub_name)
                                     if Memory.strlen(exp_path) > 0:
-                                        dep_src: str = load_file_with_deps(library_root, exp_path)
+                                        dep_src = load_file_with_deps(library_root, exp_path)
                                         if Memory.strlen(dep_src) > 0:
                                             result = Str.concat(result, Str.concat("\n", dep_src))
                                 name_start = bi + 1
@@ -415,21 +450,21 @@ fun scan_selective_std_imports(user_src: str, library_root: str) -> str:
                             bi = bi + 1
                     else:
                         # Single name: import std.name
-                        sn_end: i64 = si
+                        sn_end = si
                         while sn_end > after_dot:
-                            snc: i8 = Memory.read_i8((user_src as i64) + sn_end - 1)
+                            snc = Memory.read_i8((user_src as i64) + sn_end - 1)
                             if snc != 32 and snc != 13 and snc != 9:
                                 break
                             sn_end = sn_end - 1
                         if sn_end > after_dot:
-                            sub_name2: str = str_from_range(user_src, after_dot, sn_end)
-                            exp_path2: str = resolve_expose_path(library_root, mod_path, sub_name2)
+                            sub_name2 = str_from_range(user_src, after_dot, sn_end)
+                            exp_path2 = resolve_expose_path(library_root, mod_path, sub_name2)
                             if Memory.strlen(exp_path2) > 0:
-                                dep_src2: str = load_file_with_deps(library_root, exp_path2)
+                                dep_src2 = load_file_with_deps(library_root, exp_path2)
                                 if Memory.strlen(dep_src2) > 0:
                                     result = Str.concat(result, Str.concat("\n", dep_src2))
             if sc == 13 and (si + 1) < slen:
-                snr: i8 = Memory.read_i8((user_src as i64) + si + 1)
+                snr = Memory.read_i8((user_src as i64) + si + 1)
                 if snr == 10:
                     si = si + 1
             s_line_start = si + 1
@@ -444,7 +479,10 @@ fun get_exe_dir() -> str:
 
 fun load_runtime(exe_dir: str) -> str:
     library_root: str = Str.concat(exe_dir, "\\..\\library\\")
-    return load_module(library_root, "core\\mod.dlt")
+    core_rt: str = load_module(library_root, "core\\mod.dlt")
+    # Core types depend on std (Convert, Str, IOOps), always load std too
+    std_rt: str = load_module(library_root, "std\\mod.dlt")
+    return Str.concat(core_rt, Str.concat("\n", std_rt))
 
 fun load_std(exe_dir: str) -> str:
     library_root: str = Str.concat(exe_dir, "\\..\\library\\")
@@ -552,12 +590,13 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                             file_path: str = ""
                             pi: i64 = 0
                             plen: i64 = Memory.strlen(rel_path)
+                            pc: i8 = 0 as i8
+                            cbuf: i64 = Memory.malloc_zeroed(2)
                             while pi < plen:
-                                pc: i8 = Memory.read_i8((rel_path as i64) + pi)
+                                pc = Memory.read_i8((rel_path as i64) + pi)
                                 if pc == 47:
                                     file_path = Str.concat(file_path, "\\")
                                 else:
-                                    cbuf: i64 = Memory.malloc_zeroed(2)
                                     Memory.write_i8(cbuf, pc)
                                     file_path = Str.concat(file_path, cbuf as str)
                                 pi = pi + 1
@@ -595,14 +634,15 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                             req_path: str = ""
                             ri: i64 = 0
                             rlen: i64 = Memory.strlen(req_name)
+                            rc: i8 = 0 as i8
+                            rcbuf: i64 = Memory.malloc_zeroed(2)
                             while ri < rlen:
-                                rc: i8 = Memory.read_i8((req_name as i64) + ri)
+                                rc = Memory.read_i8((req_name as i64) + ri)
                                 if rc == 46:
                                     req_path = Str.concat(req_path, "\\")
                                 elif rc == 47:
                                     req_path = Str.concat(req_path, "\\")
                                 else:
-                                    rcbuf: i64 = Memory.malloc_zeroed(2)
                                     Memory.write_i8(rcbuf, rc)
                                     req_path = Str.concat(req_path, rcbuf as str)
                                 ri = ri + 1
@@ -625,33 +665,48 @@ fun has_import_std(src: str) -> i32:
     slen: i64 = Memory.strlen(src)
     i: i64 = 0
     line_start: i64 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    c: i8 = 0 as i8
+    line_len: i64 = 0
+    b0: i8 = 0 as i8
+    b1: i8 = 0 as i8
+    b2: i8 = 0 as i8
+    b3: i8 = 0 as i8
+    b4: i8 = 0 as i8
+    b5: i8 = 0 as i8
+    b6: i8 = 0 as i8
+    b7: i8 = 0 as i8
+    b8: i8 = 0 as i8
+    b9: i8 = 0 as i8
+    next_c: i8 = 0 as i8
+    nr: i8 = 0 as i8
     while i <= slen:
-        c: i8 = 0
+        c = 0 as i8
         if i < slen:
             c = Memory.read_i8((src as i64) + i)
         if c == 10 or c == 13 or i == slen:
-            line_len: i64 = i - line_start
+            line_len = i - line_start
             # "import std" = 10 chars (105,109,112,111,114,116,32,115,116,100)
             if line_len >= 10:
-                b0: i8 = Memory.read_i8((src as i64) + line_start)
-                b1: i8 = Memory.read_i8((src as i64) + line_start + 1)
-                b2: i8 = Memory.read_i8((src as i64) + line_start + 2)
-                b3: i8 = Memory.read_i8((src as i64) + line_start + 3)
-                b4: i8 = Memory.read_i8((src as i64) + line_start + 4)
-                b5: i8 = Memory.read_i8((src as i64) + line_start + 5)
-                b6: i8 = Memory.read_i8((src as i64) + line_start + 6)
-                b7: i8 = Memory.read_i8((src as i64) + line_start + 7)
-                b8: i8 = Memory.read_i8((src as i64) + line_start + 8)
-                b9: i8 = Memory.read_i8((src as i64) + line_start + 9)
+                b0 = Memory.read_i8((src as i64) + line_start)
+                b1 = Memory.read_i8((src as i64) + line_start + 1)
+                b2 = Memory.read_i8((src as i64) + line_start + 2)
+                b3 = Memory.read_i8((src as i64) + line_start + 3)
+                b4 = Memory.read_i8((src as i64) + line_start + 4)
+                b5 = Memory.read_i8((src as i64) + line_start + 5)
+                b6 = Memory.read_i8((src as i64) + line_start + 6)
+                b7 = Memory.read_i8((src as i64) + line_start + 7)
+                b8 = Memory.read_i8((src as i64) + line_start + 8)
+                b9 = Memory.read_i8((src as i64) + line_start + 9)
                 if b0 == 105 and b1 == 109 and b2 == 112 and b3 == 111 and b4 == 114 and b5 == 116 and b6 == 32 and b7 == 115 and b8 == 116 and b9 == 100:
                     # Check next char is NOT a dot (46) — that would be "import std.something"
                     if line_len == 10:
                         return 1
-                    next_c: i8 = Memory.read_i8((src as i64) + line_start + 10)
+                    next_c = Memory.read_i8((src as i64) + line_start + 10)
                     if next_c != 46:
                         return 1
             if c == 13 and (i + 1) < slen:
-                nr: i8 = Memory.read_i8((src as i64) + i + 1)
+                nr = Memory.read_i8((src as i64) + i + 1)
                 if nr == 10:
                     i = i + 1
             line_start = i + 1
@@ -684,13 +739,14 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
     mod_path: str = ""
     mlen: i64 = Memory.strlen(mod_name)
     mi: i64 = 0
+    mc: i8 = 0 as i8
+    cbuf: i64 = Memory.malloc_zeroed(2)
     while mi < mlen:
-        mc: i8 = Memory.read_i8((mod_name as i64) + mi)
+        mc = Memory.read_i8((mod_name as i64) + mi)
         if mc == 46:
             mod_path = Str.concat(mod_path, "\\")
         else:
             # Append single char
-            cbuf: i64 = Memory.malloc_zeroed(2)
             Memory.write_i8(cbuf, mc)
             mod_path = Str.concat(mod_path, cbuf as str)
         mi = mi + 1
@@ -737,52 +793,99 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
     slen: i64 = Memory.strlen(user_src)
     i: i64 = 0
     line_start: i64 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    c: i8 = 0 as i8
+    line_len: i64 = 0
+    i0: i8 = 0 as i8
+    i1: i8 = 0 as i8
+    i2: i8 = 0 as i8
+    i3: i8 = 0 as i8
+    i4: i8 = 0 as i8
+    i5: i8 = 0 as i8
+    i6: i8 = 0 as i8
+    name_start: i64 = 0
+    wc: i8 = 0 as i8
+    name_end: i64 = 0
+    nc: i8 = 0 as i8
+    mod_name: str = ""
+    skip_std: i32 = 0
+    mn_len: i64 = 0
+    ms0: i8 = 0 as i8
+    ms1: i8 = 0 as i8
+    ms2: i8 = 0 as i8
+    ms3: i8 = 0 as i8
+    already: i32 = 0
+    li: i32 = 0
+    ln: str = ""
+    resolved: str = ""
+    rlen: i64 = 0
+    is_mod: i32 = 0
+    m1: i8 = 0 as i8
+    m2: i8 = 0 as i8
+    m3: i8 = 0 as i8
+    m4: i8 = 0 as i8
+    m5: i8 = 0 as i8
+    m6: i8 = 0 as i8
+    m7: i8 = 0 as i8
+    mod_src: str = ""
+    mn_path: str = ""
+    mni: i64 = 0
+    mnc: i8 = 0 as i8
+    mnbuf: i64 = Memory.malloc_zeroed(2)
+    mod_rel: str = ""
+    mr_len: i64 = 0
+    lib_root: str = ""
+    first_comp: str = ""
+    fc_len: i64 = 0
+    fc_i: i64 = 0
+    fc_c: i8 = 0 as i8
+    nr: i8 = 0 as i8
 
     while i <= slen:
-        c: i8 = 0
+        c = 0 as i8
         if i < slen:
             c = Memory.read_i8((user_src as i64) + i)
         # End of line or end of string
         if c == 10 or c == 13 or i == slen:
             # Check if line starts with "import "
-            line_len: i64 = i - line_start
+            line_len = i - line_start
             if line_len > 7:
-                i0: i8 = Memory.read_i8((user_src as i64) + line_start)
-                i1: i8 = Memory.read_i8((user_src as i64) + line_start + 1)
-                i2: i8 = Memory.read_i8((user_src as i64) + line_start + 2)
-                i3: i8 = Memory.read_i8((user_src as i64) + line_start + 3)
-                i4: i8 = Memory.read_i8((user_src as i64) + line_start + 4)
-                i5: i8 = Memory.read_i8((user_src as i64) + line_start + 5)
-                i6: i8 = Memory.read_i8((user_src as i64) + line_start + 6)
+                i0 = Memory.read_i8((user_src as i64) + line_start)
+                i1 = Memory.read_i8((user_src as i64) + line_start + 1)
+                i2 = Memory.read_i8((user_src as i64) + line_start + 2)
+                i3 = Memory.read_i8((user_src as i64) + line_start + 3)
+                i4 = Memory.read_i8((user_src as i64) + line_start + 4)
+                i5 = Memory.read_i8((user_src as i64) + line_start + 5)
+                i6 = Memory.read_i8((user_src as i64) + line_start + 6)
                 if i0 == 105 and i1 == 109 and i2 == 112 and i3 == 111 and i4 == 114 and i5 == 116 and i6 == 32:
                     # Extract module name (after "import ", until space/newline/end)
-                    name_start: i64 = line_start + 7
+                    name_start = line_start + 7
                     # Skip leading whitespace
                     while name_start < i:
-                        wc: i8 = Memory.read_i8((user_src as i64) + name_start)
+                        wc = Memory.read_i8((user_src as i64) + name_start)
                         if wc != 32:
                             break
                         name_start = name_start + 1
                     # Find end of module name (stop at space, newline, or end)
-                    name_end: i64 = name_start
+                    name_end = name_start
                     while name_end < i:
-                        nc: i8 = Memory.read_i8((user_src as i64) + name_end)
+                        nc = Memory.read_i8((user_src as i64) + name_end)
                         if nc == 32 or nc == 10 or nc == 13:
                             break
                         name_end = name_end + 1
                     if name_end > name_start:
-                        mod_name: str = str_from_range(user_src, name_start, name_end)
+                        mod_name = str_from_range(user_src, name_start, name_end)
                         # Skip "import std" and "import std.X" — handled in main
-                        skip_std: i32 = 0
+                        skip_std = 0
                         if str_eq(mod_name, "std") == 1:
                             skip_std = 1
                         # Check if starts with "std." (s=115 t=116 d=100 .=46)
-                        mn_len: i64 = Memory.strlen(mod_name)
+                        mn_len = Memory.strlen(mod_name)
                         if mn_len > 4:
-                            ms0: i8 = Memory.read_i8((mod_name as i64))
-                            ms1: i8 = Memory.read_i8((mod_name as i64) + 1)
-                            ms2: i8 = Memory.read_i8((mod_name as i64) + 2)
-                            ms3: i8 = Memory.read_i8((mod_name as i64) + 3)
+                            ms0 = Memory.read_i8((mod_name as i64))
+                            ms1 = Memory.read_i8((mod_name as i64) + 1)
+                            ms2 = Memory.read_i8((mod_name as i64) + 2)
+                            ms3 = Memory.read_i8((mod_name as i64) + 3)
                             if ms0 == 115 and ms1 == 116 and ms2 == 100 and ms3 == 46:
                                 skip_std = 1
                         if skip_std == 1:
@@ -791,50 +894,50 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
                             i = i - 1
                         else:
                             # Check if already loaded
-                            already: i32 = 0
-                            li: i32 = 0
+                            already = 0
+                            li = 0
                             while li < loaded_count:
-                                ln: str = Memory.read_i64(loaded_names + ((li as i64) * 8)) as str
+                                ln = Memory.read_i64(loaded_names + ((li as i64) * 8)) as str
                                 if str_eq(ln, mod_name) == 1:
                                     already = 1
                                     break
                                 li = li + 1
                             if already == 0:
-                                resolved: str = try_resolve_module(mod_name, std_base, src_dir)
+                                resolved = try_resolve_module(mod_name, std_base, src_dir)
                                 if Memory.strlen(resolved) > 0:
                                     # Check if resolved is a mod.dlt — needs load_module processing
-                                    rlen: i64 = Memory.strlen(resolved)
-                                    is_mod: i32 = 0
+                                    rlen = Memory.strlen(resolved)
+                                    is_mod = 0
                                     if rlen > 7:
                                         # Check if ends with "mod.dlt" (7 chars)
-                                        m1: i8 = Memory.read_i8((resolved as i64) + rlen - 7)
-                                        m2: i8 = Memory.read_i8((resolved as i64) + rlen - 6)
-                                        m3: i8 = Memory.read_i8((resolved as i64) + rlen - 5)
-                                        m4: i8 = Memory.read_i8((resolved as i64) + rlen - 4)
-                                        m5: i8 = Memory.read_i8((resolved as i64) + rlen - 3)
-                                        m6: i8 = Memory.read_i8((resolved as i64) + rlen - 2)
-                                        m7: i8 = Memory.read_i8((resolved as i64) + rlen - 1)
+                                        m1 = Memory.read_i8((resolved as i64) + rlen - 7)
+                                        m2 = Memory.read_i8((resolved as i64) + rlen - 6)
+                                        m3 = Memory.read_i8((resolved as i64) + rlen - 5)
+                                        m4 = Memory.read_i8((resolved as i64) + rlen - 4)
+                                        m5 = Memory.read_i8((resolved as i64) + rlen - 3)
+                                        m6 = Memory.read_i8((resolved as i64) + rlen - 2)
+                                        m7 = Memory.read_i8((resolved as i64) + rlen - 1)
                                         if m1 == 109 and m2 == 111 and m3 == 100 and m4 == 46 and m5 == 100 and m6 == 108 and m7 == 116:
                                             is_mod = 1
-                                    mod_src: str = ""
+                                    mod_src = ""
                                     if is_mod == 1:
                                         # Compute library_root: resolved minus mod_name_path/mod.dlt
                                         # Build mod_name as path: dots -> backslashes
-                                        mn_path: str = ""
-                                        mni: i64 = 0
-                                        mn_len: i64 = Memory.strlen(mod_name)
+                                        mn_path = ""
+                                        mni = 0
+                                        mn_len = Memory.strlen(mod_name)
+                                        mnc = 0 as i8
                                         while mni < mn_len:
-                                            mnc: i8 = Memory.read_i8((mod_name as i64) + mni)
+                                            mnc = Memory.read_i8((mod_name as i64) + mni)
                                             if mnc == 46:
                                                 mn_path = Str.concat(mn_path, "\\")
                                             else:
-                                                mnbuf: i64 = Memory.malloc_zeroed(2)
                                                 Memory.write_i8(mnbuf, mnc)
                                                 mn_path = Str.concat(mn_path, mnbuf as str)
                                             mni = mni + 1
-                                        mod_rel: str = Str.concat(mn_path, "\\mod.dlt")
-                                        mr_len: i64 = Memory.strlen(mod_rel)
-                                        lib_root: str = str_from_range(resolved, 0, rlen - mr_len)
+                                        mod_rel = Str.concat(mn_path, "\\mod.dlt")
+                                        mr_len = Memory.strlen(mod_rel)
+                                        lib_root = str_from_range(resolved, 0, rlen - mr_len)
                                         mod_src = load_module(lib_root, mod_rel)
                                     else:
                                         mod_src = read_file_to_string(resolved)
@@ -845,11 +948,11 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
                                         Memory.write_i64(loaded_names + ((loaded_count as i64) * 8), mod_name as i64)
                                         loaded_count = loaded_count + 1
                                         # Register first component as module name for parser
-                                        first_comp: str = mod_name
-                                        fc_len: i64 = Memory.strlen(mod_name)
-                                        fc_i: i64 = 0
+                                        first_comp = mod_name
+                                        fc_len = Memory.strlen(mod_name)
+                                        fc_i = 0
                                         while fc_i < fc_len:
-                                            fc_c: i8 = Memory.read_i8((mod_name as i64) + fc_i)
+                                            fc_c = Memory.read_i8((mod_name as i64) + fc_i)
                                             if fc_c == 46:
                                                 first_comp = str_from_range(mod_name, 0, fc_i)
                                                 break
@@ -857,7 +960,7 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
                                         register_module_name(first_comp)
             # Move past newline chars
             if c == 13 and (i + 1) < slen:
-                nr: i8 = Memory.read_i8((user_src as i64) + i + 1)
+                nr = Memory.read_i8((user_src as i64) + i + 1)
                 if nr == 10:
                     i = i + 1
             line_start = i + 1
@@ -901,40 +1004,78 @@ fun extract_extern_libs(src: str) -> str:
     slen: i64 = Memory.strlen(src)
     result: str = ""
     i: i64 = 0
+    c0: i8 = 0 as i8
+    c1: i8 = 0 as i8
+    c2: i8 = 0 as i8
+    c3: i8 = 0 as i8
+    c4: i8 = 0 as i8
+    c5: i8 = 0 as i8
+    c6: i8 = 0 as i8
+    c7: i8 = 0 as i8
+    c8: i8 = 0 as i8
+    c9: i8 = 0 as i8
+    c10: i8 = 0 as i8
+    c11: i8 = 0 as i8
+    in_comment: i32 = 0
+    bk: i64 = 0
+    bc: i8 = 0 as i8
+    name_start: i64 = 0
+    name_end: i64 = 0
+    qc: i8 = 0 as i8
+    lib_name: str = ""
+    ln_len: i64 = 0
+    d1: i8 = 0 as i8
+    d2: i8 = 0 as i8
+    d3: i8 = 0 as i8
+    d4: i8 = 0 as i8
     # Scan for pattern: extern lib " (ASCII: 101,120,116,101,114,110,32,108,105,98,32,34)
     while i < slen - 14:
-        c0: i8 = Memory.read_i8((src as i64) + i)
+        c0 = Memory.read_i8((src as i64) + i)
         if c0 == 101:
-            c1: i8 = Memory.read_i8((src as i64) + i + 1)
-            c2: i8 = Memory.read_i8((src as i64) + i + 2)
-            c3: i8 = Memory.read_i8((src as i64) + i + 3)
-            c4: i8 = Memory.read_i8((src as i64) + i + 4)
-            c5: i8 = Memory.read_i8((src as i64) + i + 5)
-            c6: i8 = Memory.read_i8((src as i64) + i + 6)
-            c7: i8 = Memory.read_i8((src as i64) + i + 7)
-            c8: i8 = Memory.read_i8((src as i64) + i + 8)
-            c9: i8 = Memory.read_i8((src as i64) + i + 9)
-            c10: i8 = Memory.read_i8((src as i64) + i + 10)
-            c11: i8 = Memory.read_i8((src as i64) + i + 11)
+            c1 = Memory.read_i8((src as i64) + i + 1)
+            c2 = Memory.read_i8((src as i64) + i + 2)
+            c3 = Memory.read_i8((src as i64) + i + 3)
+            c4 = Memory.read_i8((src as i64) + i + 4)
+            c5 = Memory.read_i8((src as i64) + i + 5)
+            c6 = Memory.read_i8((src as i64) + i + 6)
+            c7 = Memory.read_i8((src as i64) + i + 7)
+            c8 = Memory.read_i8((src as i64) + i + 8)
+            c9 = Memory.read_i8((src as i64) + i + 9)
+            c10 = Memory.read_i8((src as i64) + i + 10)
+            c11 = Memory.read_i8((src as i64) + i + 11)
             # 'e'=101 'x'=120 't'=116 'e'=101 'r'=114 'n'=110 ' '=32 'l'=108 'i'=105 'b'=98 ' '=32 '"'=34
             if c1 == 120 and c2 == 116 and c3 == 101 and c4 == 114 and c5 == 110 and c6 == 32 and c7 == 108 and c8 == 105 and c9 == 98 and c10 == 32 and c11 == 34:
+                # Check if this is inside a comment (scan back for '#' on same line)
+                in_comment = 0
+                bk = i - 1
+                while bk >= 0:
+                    bc = Memory.read_i8((src as i64) + bk)
+                    if bc == 10:
+                        break
+                    if bc == 35:
+                        in_comment = 1
+                        break
+                    bk = bk - 1
+                if in_comment == 1:
+                    i = i + 1
+                    continue
                 # Found "extern lib \"", extract lib name from position after the quote
-                name_start: i64 = i + 12
-                name_end: i64 = name_start
+                name_start = i + 12
+                name_end = name_start
                 while name_end < slen:
-                    qc: i8 = Memory.read_i8((src as i64) + name_end)
+                    qc = Memory.read_i8((src as i64) + name_end)
                     if qc == 34:
                         break
                     name_end = name_end + 1
                 if name_end > name_start:
-                    lib_name: str = Str.substring(src, name_start, name_end)
+                    lib_name = Str.substring(src, name_start, name_end)
                     # Strip .dll extension if present ('.'=46 'd'=100 'l'=108 'l'=108)
-                    ln_len: i64 = Memory.strlen(lib_name)
+                    ln_len = Memory.strlen(lib_name)
                     if ln_len > 4:
-                        d1: i8 = Memory.read_i8((lib_name as i64) + ln_len - 4)
-                        d2: i8 = Memory.read_i8((lib_name as i64) + ln_len - 3)
-                        d3: i8 = Memory.read_i8((lib_name as i64) + ln_len - 2)
-                        d4: i8 = Memory.read_i8((lib_name as i64) + ln_len - 1)
+                        d1 = Memory.read_i8((lib_name as i64) + ln_len - 4)
+                        d2 = Memory.read_i8((lib_name as i64) + ln_len - 3)
+                        d3 = Memory.read_i8((lib_name as i64) + ln_len - 2)
+                        d4 = Memory.read_i8((lib_name as i64) + ln_len - 1)
                         if d1 == 46 and d2 == 100 and d3 == 108 and d4 == 108:
                             lib_name = Str.substring(lib_name, 0, ln_len - 4)
                     # Skip kernel32 (already included)
@@ -1039,28 +1180,23 @@ fun main() -> i32:
         mark_file_loaded("core/types/integers")
         mark_file_loaded("core/types/floats")
         mark_file_loaded("core/types/primitives")
+        # Runtime now always includes std
+        mark_file_loaded("sys/windows/kernel32")
+        mark_file_loaded("platform/alloc")
+        mark_file_loaded("platform/format")
+        mark_file_loaded("platform/str")
+        mark_file_loaded("platform/io")
+        mark_file_loaded("platform/file")
+        mark_file_loaded("platform/path")
+        mark_file_loaded("platform/args")
+        mark_file_loaded("platform/process")
+        mark_file_loaded("std/io")
+        mark_file_loaded("core/types/collections")
+        register_module_name("std")
 
-        # Check if user wants OS layer (import std)
+        # std is already loaded as part of runtime, no need for separate loading
         std_rt: str = ""
         sel_std: str = ""
-        if has_import_std(user_src) == 1:
-            std_rt = load_std(exe_dir)
-            IOOps.io_println("[import] std -> loaded OS layer")
-            register_module_name("std")
-            # Mark all std files as loaded
-            mark_file_loaded("sys/windows/kernel32")
-            mark_file_loaded("platform/alloc")
-            mark_file_loaded("platform/format")
-            mark_file_loaded("platform/str")
-            mark_file_loaded("platform/io")
-            mark_file_loaded("std/io")
-            mark_file_loaded("core/types/collections")
-        else:
-            # Check for selective std imports: import std.string, import std.[io, string]
-            sel_std = scan_selective_std_imports(user_src, library_root)
-            if Memory.strlen(sel_std) > 0:
-                register_module_name("std")
-                IOOps.io_println("[import] std.* -> selective import")
 
         std_len: i64 = Memory.strlen(std_rt)
         sel_len: i64 = Memory.strlen(sel_std)

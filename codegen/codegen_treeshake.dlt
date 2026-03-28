@@ -8,11 +8,11 @@ g_ts_names: i64 = 0
 g_ts_kinds: i64 = 0
 g_ts_processed: i64 = 0
 g_ts_count: i32 = 0
-g_ts_cap: i32 = 512
+g_ts_cap: i32 = 2048
 g_tree_shake_enabled: i32 = 0
 
 fun init_tree_shaking():
-    g_ts_cap = 512
+    g_ts_cap = 2048
     g_ts_names = Memory.malloc_zeroed((g_ts_cap as i64) * 8)
     g_ts_kinds = Memory.malloc_zeroed((g_ts_cap as i64) * 4)
     g_ts_processed = Memory.malloc_zeroed((g_ts_cap as i64) * 4)

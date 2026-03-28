@@ -1,0 +1,9 @@
+import std
+
+struct Box:
+    value: i32
+    private secret: i32
+
+mut b: Box = Box(value=10, secret=42)
+print(b.value)
+print(b.secret)

@@ -136,13 +136,16 @@ TK_CHAR_TYPE: i32 = 134
 # indents buffer: i32 array (4 bytes each)
 # ==========================================
 
-MAX_TOKENS: i32 = 32768
-out_kinds: i64 = Memory.malloc_zeroed(131072)
-out_values: i64 = Memory.malloc_zeroed(262144)
-out_indents: i64 = Memory.malloc_zeroed(131072)
+MAX_TOKENS: i32 = 131072
+out_kinds: i64 = Memory.malloc_zeroed(524288)
+out_values: i64 = Memory.malloc_zeroed(1048576)
+out_indents: i64 = Memory.malloc_zeroed(524288)
 out_count: i32 = 0
 
 fun emit_token(kind: i32, value: str, indent: i32):
+    if out_count >= MAX_TOKENS:
+        IOOps.io_println("[FATAL] Token buffer overflow - increase MAX_TOKENS")
+        return
     ko: i64 = (out_count as i64) * 4
     vo: i64 = (out_count as i64) * 8
     io: i64 = (out_count as i64) * 4
@@ -266,8 +269,9 @@ fun tok_advance():
 fun tok_count_indent() -> i32:
     tmp: i64 = tok_pos
     cnt: i32 = 0
+    tc: i8 = 0 as i8
     while tmp < tok_len:
-        tc: i8 = char_at(tok_code, tmp)
+        tc = char_at(tok_code, tmp)
         if tc == 32:
             cnt = cnt + 1
         elif tc == 9:
@@ -316,8 +320,9 @@ fun tok_collect_identifier() -> str:
 fun tok_collect_string() -> str:
     tok_advance()
     ss: i64 = tok_pos
+    sc: i8 = 0 as i8
     while tok_pos < tok_len:
-        sc: i8 = tok_char()
+        sc = tok_char()
         if sc == 34:
             break
         if sc == 92:
@@ -330,8 +335,9 @@ fun tok_collect_string() -> str:
 fun tok_collect_number() -> str:
     ns: i64 = tok_pos
     ndot: i32 = 0
+    nc: i8 = 0 as i8
     while tok_pos < tok_len:
-        nc: i8 = tok_char()
+        nc = tok_char()
         if is_digit(nc) == 1:
             tok_advance()
         elif nc == 46 and ndot == 0:
@@ -677,8 +683,20 @@ fun tokenize(code: str):
     tok_at_line_start = 1
     out_count = 0
 
+    c: i8 = 0 as i8
+    fs: i64 = 0
+    aname: str = ""
+    hs: i64 = 0
+    bs: i64 = 0
+    os: i64 = 0
+    nv: str = ""
+    hd: i32 = 0
+    ni: i64 = 0
+    nl: i64 = 0
+    id_val: str = ""
+
     while tok_pos < tok_len:
-        c: i8 = tok_char()
+        c = tok_char()
         if tok_at_line_start == 1 and c != 10:
             tok_indent = tok_count_indent()
         if is_space(c) == 1:
@@ -703,7 +721,7 @@ fun tokenize(code: str):
             if tok_peek(1) == 34:
                 tok_advance()
                 tok_advance()
-                fs: i64 = tok_pos
+                fs = tok_pos
                 while tok_pos < tok_len and tok_char() != 34:
                     if tok_char() == 92:
                         tok_advance()
@@ -713,7 +731,7 @@ fun tokenize(code: str):
             else:
                 tok_advance()
                 if tok_pos < tok_len and is_alpha(tok_char()) == 1:
-                    aname: str = tok_collect_identifier()
+                    aname = tok_collect_identifier()
                     if str_eq(aname, "CodeBlock") == 1:
                         emit_token(TK_CODE_BLOCK, "@CodeBlock", tok_indent)
                     elif tok_pos < tok_len and tok_char() == 40:
@@ -737,29 +755,29 @@ fun tokenize(code: str):
             if c == 48 and (tok_peek(1) == 120 or tok_peek(1) == 88):
                 tok_advance()
                 tok_advance()
-                hs: i64 = tok_pos
+                hs = tok_pos
                 while tok_pos < tok_len and is_hex_digit(tok_char()) == 1:
                     tok_advance()
                 emit_token(TK_HEX, str_from_range(tok_code, hs, tok_pos), tok_indent)
             elif c == 48 and (tok_peek(1) == 98 or tok_peek(1) == 66):
                 tok_advance()
                 tok_advance()
-                bs: i64 = tok_pos
+                bs = tok_pos
                 while tok_pos < tok_len and (tok_char() == 48 or tok_char() == 49):
                     tok_advance()
                 emit_token(TK_BINARY, str_from_range(tok_code, bs, tok_pos), tok_indent)
             elif c == 48 and (tok_peek(1) == 111 or tok_peek(1) == 79):
                 tok_advance()
                 tok_advance()
-                os: i64 = tok_pos
+                os = tok_pos
                 while tok_pos < tok_len and tok_char() >= 48 and tok_char() <= 55:
                     tok_advance()
                 emit_token(TK_OCTAL, str_from_range(tok_code, os, tok_pos), tok_indent)
             else:
-                nv: str = tok_collect_number()
-                hd: i32 = 0
-                ni: i64 = 0
-                nl: i64 = Memory.strlen(nv as i64)
+                nv = tok_collect_number()
+                hd = 0
+                ni = 0
+                nl = Memory.strlen(nv as i64)
                 while ni < nl:
                     if char_at(nv, ni) == 46:
                         hd = 1
@@ -771,7 +789,7 @@ fun tokenize(code: str):
             tok_at_line_start = 0
             continue
         if is_alpha(c) == 1:
-            id_val: str = tok_collect_identifier()
+            id_val = tok_collect_identifier()
             emit_token(resolve_keyword(id_val), id_val, tok_indent)
             tok_at_line_start = 0
             continue

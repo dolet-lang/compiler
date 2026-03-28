@@ -1,0 +1,11 @@
+import std
+
+fun unused_function():
+    print("This should be dead code")
+
+fun helper() -> i32:
+    return 42
+
+fun main():
+    x: i32 = helper()
+    print(Convert.i32_to_str(x))

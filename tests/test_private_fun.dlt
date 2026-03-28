@@ -1,0 +1,12 @@
+import std
+
+# Phase 7: private/public fun
+private fun secret_helper() -> i32:
+    return 42
+
+public fun visible_func() -> i32:
+    return secret_helper()
+
+fun main():
+    x: i32 = visible_func()
+    print(Convert.i64_to_str(x as i64))

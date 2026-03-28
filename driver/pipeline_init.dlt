@@ -109,10 +109,10 @@ fun init_tokenizer_constants():
     TK_ARRAY = 114
 
 fun init_tokenizer_buffers():
-    MAX_TOKENS = 32768
-    out_kinds = Memory.malloc_zeroed(131072)
-    out_values = Memory.malloc_zeroed(262144)
-    out_indents = Memory.malloc_zeroed(131072)
+    MAX_TOKENS = 131072
+    out_kinds = Memory.malloc_zeroed(524288)
+    out_values = Memory.malloc_zeroed(1048576)
+    out_indents = Memory.malloc_zeroed(524288)
     out_count = 0
     tok_pos = 0
     tok_len = 0

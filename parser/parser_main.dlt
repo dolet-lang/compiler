@@ -8,7 +8,7 @@
 # Indented Block Parser
 # ==========================================
 fun parse_indented_block(base_indent: i32) -> i64:
-    body: i64 = mk_node_list(32)
+    body: i64 = mk_node_list(128)
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
         if ci <= base_indent:
@@ -312,7 +312,7 @@ fun parse_statement() -> i64:
 # Main Parse Loop
 # ==========================================
 fun parse() -> i64:
-    stmts: i64 = mk_node_list(256)
+    stmts: i64 = mk_node_list(2048)
     while cur_kind() != TK_EOF:
         skip_newlines()
         if cur_kind() == TK_EOF:

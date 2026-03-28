@@ -1,0 +1,4 @@
+module testmod
+load testmod/public
+load testmod/secret
+private secret

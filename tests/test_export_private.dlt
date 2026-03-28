@@ -1,0 +1,7 @@
+import std
+import testmod
+
+fun main():
+    # This should fail — secret module is private
+    y: i32 = test_private_func()
+    print(Convert.i64_to_str(y as i64))

@@ -1,0 +1,7 @@
+import std
+
+# Phase 6: from import
+from std import IOOps, Convert
+
+fun main():
+    IOOps.io_println("from import parsed ok")

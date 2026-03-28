@@ -1,0 +1,7 @@
+import std
+
+fun main():
+    # Namespace-qualified static method call: ns.Struct.method(args)
+    std.IOOps.io_println("hello from qualified call")
+    # Original still works
+    IOOps.io_println("normal still works")

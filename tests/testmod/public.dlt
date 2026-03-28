@@ -1,0 +1,2 @@
+fun test_public_func() -> i32:
+    return 42

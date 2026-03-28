@@ -1,0 +1,24 @@
+TEST RESULTS FOR ./tests/features/run_all_tests.bat
+====================================================
+
+Testing: test_01_data_types.dlt ... [PASS] ✓
+Testing: test_02_variables.dlt ... [PASS] ✓
+Testing: test_03_operators.dlt ... [PASS] ✓
+Testing: test_04_control_flow.dlt ... [PASS] ✓
+Testing: test_05_loops.dlt ... [PASS] ✓
+Testing: test_06_functions.dlt ... [PASS] ✓
+Testing: test_07_structs.dlt ... [PASS] ✓
+Testing: test_08_enums.dlt ... [PASS] ✓
+Testing: test_09_strings.dlt ... [PASS] ✓
+Testing: test_10_ffi.dlt ... [FAIL]  ✗
+Testing: test_11_memory.dlt ... [PASS] ✓
+Testing: test_11_mini.dlt ... [PASS] ✓
+Testing: test_11_tiny.dlt ... [PASS] ✓
+Testing: test_11_tiny2.dlt ... [PASS] ✓
+Testing: test_12_extend.dlt ... [PASS] ✓
+Testing: test_13_traits.dlt ... [PASS] ✓
+Testing: test_14_silicon.dlt ... [PASS] ✓
+Testing: test_15_inheritance.dlt ... [PASS] ✓
+Testing: test_16_import.dlt ... [FAIL] error: expected SSA operand ✗
+Testing: test_import_helper.dlt ... [PASS] ✓
+Testing: test_mini_struct.dlt ... [PASS] ✓

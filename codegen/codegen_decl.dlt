@@ -20,6 +20,11 @@ fun gen_fun_def(node: i64):
     fpt_str: str = build_param_types_str(params)
     mlir_fname: str = resolve_overload(fname, fpt_str)
 
+    # Skip if already emitted (dedup for runtime vs user duplicates)
+    if is_fn_emitted(mlir_fname) == 1:
+        return
+    mark_fn_emitted(mlir_fname)
+
     # Reset tmp counter for each function
     g_tmp_counter = 0
 

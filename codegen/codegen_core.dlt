@@ -139,10 +139,10 @@ fun init_ast_constants():
 # ==========================================
 g_out: i64 = 0
 g_out_count: i32 = 0
-g_out_cap: i32 = 65536
+g_out_cap: i32 = 524288
 
 fun init_codegen():
-    g_out_cap = 65536
+    g_out_cap = 524288
     g_out = Memory.malloc_zeroed((g_out_cap as i64) * 8)
     g_out_count = 0
     g_tmp_counter = 0
@@ -165,6 +165,9 @@ fun init_codegen():
     g_continue_label = ""
 
 fun emit(line: str):
+    if g_out_count >= g_out_cap:
+        IOOps.io_println("[FATAL] MLIR output buffer overflow - increase g_out_cap")
+        return
     off: i64 = (g_out_count as i64) * 8
     Memory.write_i64(g_out + off, line as i64)
     g_out_count = g_out_count + 1
@@ -240,10 +243,10 @@ g_str_labels: i64 = 0
 g_str_texts: i64 = 0
 g_str_lens: i64 = 0
 g_str_count: i32 = 0
-g_str_cap: i32 = 1024
+g_str_cap: i32 = 4096
 
 fun init_str_pool():
-    g_str_cap = 1024
+    g_str_cap = 4096
     g_str_labels = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_texts = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_lens = Memory.malloc_zeroed((g_str_cap as i64) * 4)
@@ -305,10 +308,10 @@ g_var_types: i64 = 0
 g_var_is_param: i64 = 0
 g_var_is_const: i64 = 0
 g_var_count: i32 = 0
-g_var_cap: i32 = 512
+g_var_cap: i32 = 2048
 
 fun init_var_registry():
-    g_var_cap = 512
+    g_var_cap = 2048
     g_var_names = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_mlir = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_types = Memory.malloc_zeroed((g_var_cap as i64) * 8)
@@ -375,7 +378,7 @@ g_scope_marks: i64 = 0
 g_scope_depth: i32 = 0
 
 fun init_scopes():
-    g_scope_marks = Memory.malloc_zeroed(256 * 4)
+    g_scope_marks = Memory.malloc_zeroed(1024 * 4)
     g_scope_depth = 0
 
 fun push_var_scope():
@@ -397,9 +400,9 @@ g_fun_sig_ret: i64 = 0
 g_fun_sig_count: i32 = 0
 
 fun init_fun_sigs():
-    g_fun_sig_names = Memory.malloc_zeroed(512 * 8)
-    g_fun_sig_ret = Memory.malloc_zeroed(512 * 8)
-    g_fun_sig_params = Memory.malloc_zeroed(512 * 8)
+    g_fun_sig_names = Memory.malloc_zeroed(2048 * 8)
+    g_fun_sig_ret = Memory.malloc_zeroed(2048 * 8)
+    g_fun_sig_params = Memory.malloc_zeroed(2048 * 8)
     g_fun_sig_count = 0
 
 g_fun_sig_params: i64 = 0
@@ -464,8 +467,8 @@ g_struct_field_lists: i64 = 0
 g_struct_count: i32 = 0
 
 fun init_struct_registry():
-    g_struct_names = Memory.malloc_zeroed(256 * 8)
-    g_struct_field_lists = Memory.malloc_zeroed(256 * 8)
+    g_struct_names = Memory.malloc_zeroed(1024 * 8)
+    g_struct_field_lists = Memory.malloc_zeroed(1024 * 8)
     g_struct_count = 0
 
 fun register_struct(name: str, fields: i64):
@@ -503,8 +506,8 @@ g_trans_inner: i64 = 0
 g_trans_count: i32 = 0
 
 fun init_transparent_registry():
-    g_trans_names = Memory.malloc_zeroed(128 * 8)
-    g_trans_inner = Memory.malloc_zeroed(128 * 8)
+    g_trans_names = Memory.malloc_zeroed(512 * 8)
+    g_trans_inner = Memory.malloc_zeroed(512 * 8)
     g_trans_count = 0
 
 fun register_transparent(name: str, inner_type: str):
@@ -542,7 +545,7 @@ g_heap_names: i64 = 0
 g_heap_count: i32 = 0
 
 fun init_stack_registry():
-    g_heap_names = Memory.malloc_zeroed(128 * 8)
+    g_heap_names = Memory.malloc_zeroed(512 * 8)
     g_heap_count = 0
 
 fun register_heap_struct(name: str):
@@ -568,8 +571,8 @@ g_parent_struct_targets: i64 = 0
 g_parent_struct_count: i32 = 0
 
 fun init_parent_registry():
-    g_parent_struct_names = Memory.malloc_zeroed(128 * 8)
-    g_parent_struct_targets = Memory.malloc_zeroed(128 * 8)
+    g_parent_struct_names = Memory.malloc_zeroed(512 * 8)
+    g_parent_struct_targets = Memory.malloc_zeroed(512 * 8)
     g_parent_struct_count = 0
 
 fun register_parent_struct(child: str, parent: str):
@@ -597,8 +600,8 @@ g_alias_targets: i64 = 0
 g_alias_count: i32 = 0
 
 fun init_alias_registry():
-    g_alias_names = Memory.malloc_zeroed(128 * 8)
-    g_alias_targets = Memory.malloc_zeroed(128 * 8)
+    g_alias_names = Memory.malloc_zeroed(512 * 8)
+    g_alias_targets = Memory.malloc_zeroed(512 * 8)
     g_alias_count = 0
 
 fun register_alias(name: str, target: str):
@@ -640,8 +643,8 @@ g_enum_value_lists: i64 = 0
 g_enum_count: i32 = 0
 
 fun init_enum_registry():
-    g_enum_names = Memory.malloc_zeroed(256 * 8)
-    g_enum_value_lists = Memory.malloc_zeroed(256 * 8)
+    g_enum_names = Memory.malloc_zeroed(1024 * 8)
+    g_enum_value_lists = Memory.malloc_zeroed(1024 * 8)
     g_enum_count = 0
 
 fun register_enum(name: str, values: i64):
@@ -687,8 +690,8 @@ g_global_var_nodes: i64 = 0
 g_global_var_count: i32 = 0
 
 fun init_global_vars():
-    g_global_var_names = Memory.malloc_zeroed(256 * 8)
-    g_global_var_nodes = Memory.malloc_zeroed(256 * 8)
+    g_global_var_names = Memory.malloc_zeroed(1024 * 8)
+    g_global_var_nodes = Memory.malloc_zeroed(1024 * 8)
     g_global_var_count = 0
 
 fun register_global_var(name: str, node: i64):
@@ -715,8 +718,8 @@ g_sf_types: i64 = 0
 g_static_field_count: i32 = 0
 
 fun init_static_fields():
-    g_sf_names = Memory.malloc_zeroed(256 * 8)
-    g_sf_types = Memory.malloc_zeroed(256 * 8)
+    g_sf_names = Memory.malloc_zeroed(1024 * 8)
+    g_sf_types = Memory.malloc_zeroed(1024 * 8)
     g_static_field_count = 0
 
 fun register_static_field(full_name: str, ftype: str):
@@ -734,9 +737,9 @@ g_impl_method_node: i64 = 0
 g_impl_count: i32 = 0
 
 fun init_impl_registry():
-    g_impl_struct = Memory.malloc_zeroed(512 * 8)
-    g_impl_method_name = Memory.malloc_zeroed(512 * 8)
-    g_impl_method_node = Memory.malloc_zeroed(512 * 8)
+    g_impl_struct = Memory.malloc_zeroed(2048 * 8)
+    g_impl_method_name = Memory.malloc_zeroed(2048 * 8)
+    g_impl_method_node = Memory.malloc_zeroed(2048 * 8)
     g_impl_count = 0
 
 fun register_impl_method(sname: str, mname: str, mnode: i64):
@@ -1025,9 +1028,9 @@ g_ovl_mangled: i64 = 0
 g_ovl_count: i32 = 0
 
 fun init_overload_registry():
-    g_ovl_orig = Memory.malloc_zeroed(1024 * 8)
-    g_ovl_params = Memory.malloc_zeroed(1024 * 8)
-    g_ovl_mangled = Memory.malloc_zeroed(1024 * 8)
+    g_ovl_orig = Memory.malloc_zeroed(4096 * 8)
+    g_ovl_params = Memory.malloc_zeroed(4096 * 8)
+    g_ovl_mangled = Memory.malloc_zeroed(4096 * 8)
     g_ovl_count = 0
 
 fun normalize_type(t: str) -> str:
@@ -1054,6 +1057,24 @@ fun build_param_types_str(params: i64) -> str:
         if i > 0:
             result = Str.concat(result, ",")
         result = Str.concat(result, ptype)
+        i = i + 1
+    return result
+
+fun build_param_types_str_no_self(params: i64) -> str:
+    if params == 0:
+        return ""
+    pc: i32 = nl_count(params)
+    result: str = ""
+    i: i32 = 0
+    while i < pc:
+        pnode: i64 = nl_get(params, i)
+        pname: str = Memory.read_i64(pnode + 8) as str
+        if str_eq(pname, "self") == 0:
+            ptype: str = Memory.read_i64(pnode + 16) as str
+            ptype = normalize_type(ptype)
+            if Memory.strlen(result) > 0:
+                result = Str.concat(result, ",")
+            result = Str.concat(result, ptype)
         i = i + 1
     return result
 
@@ -1129,8 +1150,8 @@ g_generic_params: i64 = 0
 g_generic_count: i32 = 0
 
 fun init_generic_registry():
-    g_generic_names = Memory.malloc_zeroed(128 * 8)
-    g_generic_params = Memory.malloc_zeroed(128 * 8)
+    g_generic_names = Memory.malloc_zeroed(512 * 8)
+    g_generic_params = Memory.malloc_zeroed(512 * 8)
     g_generic_count = 0
 
 fun register_generic(name: str, params: i64):
@@ -1168,9 +1189,9 @@ g_mod_sym_kind: i64 = 0
 g_mod_sym_count: i32 = 0
 
 fun init_module_registry():
-    g_mod_sym_module = Memory.malloc_zeroed(512 * 8)
-    g_mod_sym_name = Memory.malloc_zeroed(512 * 8)
-    g_mod_sym_kind = Memory.malloc_zeroed(512 * 4)
+    g_mod_sym_module = Memory.malloc_zeroed(2048 * 8)
+    g_mod_sym_name = Memory.malloc_zeroed(2048 * 8)
+    g_mod_sym_kind = Memory.malloc_zeroed(2048 * 4)
     g_mod_sym_count = 0
 
 fun register_module_symbol(mod_name: str, sym_name: str, kind: i32):
@@ -1216,9 +1237,37 @@ fun init_all_registries():
     init_generic_registry()
     init_module_registry()
     init_tree_shaking()
+    init_emitted_fns()
     # Pre-register common strings
     gen_string_const("%s\n")
     gen_string_const("null")
     gen_string_const("")
     gen_string_const("true")
     gen_string_const("false")
+
+# ==========================================
+# Function Deduplication (prevent duplicate MLIR emissions)
+# ==========================================
+g_emitted_fn_names: i64 = 0
+g_emitted_fn_count: i32 = 0
+
+fun init_emitted_fns():
+    g_emitted_fn_names = Memory.malloc_zeroed(4096 * 8)
+    g_emitted_fn_count = 0
+
+fun is_fn_emitted(name: str) -> i32:
+    i: i32 = 0
+    while i < g_emitted_fn_count:
+        off: i64 = (i as i64) * 8
+        existing: str = Memory.read_i64(g_emitted_fn_names + off) as str
+        if str_eq(existing, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+fun mark_fn_emitted(name: str):
+    if g_emitted_fn_count >= 4096:
+        return
+    off: i64 = (g_emitted_fn_count as i64) * 8
+    Memory.write_i64(g_emitted_fn_names + off, name as i64)
+    g_emitted_fn_count = g_emitted_fn_count + 1
