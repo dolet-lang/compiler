@@ -1215,6 +1215,7 @@ fun init_all_registries():
     init_overload_registry()
     init_generic_registry()
     init_module_registry()
+    init_tree_shaking()
     # Pre-register common strings
     gen_string_const("%s\n")
     gen_string_const("null")

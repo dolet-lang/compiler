@@ -5929,12 +5929,421 @@ fun init_all_registries():
     init_overload_registry()
     init_generic_registry()
     init_module_registry()
+    init_tree_shaking()
     # Pre-register common strings
     gen_string_const("%s\n")
     gen_string_const("null")
     gen_string_const("")
     gen_string_const("true")
     gen_string_const("false")
+
+##############################
+# Tree Shaking — Dead Code Elimination
+# Opt-in via --tree-shake flag
+##############################
+
+# Reachable symbols tracking
+g_ts_names: i64 = 0
+g_ts_kinds: i64 = 0
+g_ts_processed: i64 = 0
+g_ts_count: i32 = 0
+g_ts_cap: i32 = 512
+g_tree_shake_enabled: i32 = 0
+
+fun init_tree_shaking():
+    g_ts_cap = 512
+    g_ts_names = Memory.malloc_zeroed((g_ts_cap as i64) * 8)
+    g_ts_kinds = Memory.malloc_zeroed((g_ts_cap as i64) * 4)
+    g_ts_processed = Memory.malloc_zeroed((g_ts_cap as i64) * 4)
+    g_ts_count = 0
+
+fun ts_mark_reachable(name: str, kind: i32):
+    if (name as i64) == 0:
+        return
+    if Memory.strlen(name) == 0:
+        return
+    i: i32 = 0
+    while i < g_ts_count:
+        off8: i64 = (i as i64) * 8
+        existing: str = Memory.read_i64(g_ts_names + off8) as str
+        if str_eq(existing, name) == 1:
+            return
+        i = i + 1
+    if g_ts_count < g_ts_cap:
+        off8: i64 = (g_ts_count as i64) * 8
+        off4: i64 = (g_ts_count as i64) * 4
+        Memory.write_i64(g_ts_names + off8, name as i64)
+        Memory.write_i32(g_ts_kinds + off4, kind)
+        Memory.write_i32(g_ts_processed + off4, 0)
+        g_ts_count = g_ts_count + 1
+
+fun ts_mark_fun(name: str):
+    if is_struct_type(name) == 1:
+        ts_mark_struct(name)
+        return
+    ts_mark_reachable(name, 0)
+
+fun ts_mark_struct(name: str):
+    ts_mark_reachable(name, 1)
+    parent: str = get_parent_struct(name)
+    if Memory.strlen(parent) > 0:
+        ts_mark_struct(parent)
+
+fun ts_is_reachable(name: str) -> i32:
+    if g_tree_shake_enabled == 0:
+        return 1
+    i: i32 = 0
+    while i < g_ts_count:
+        off8: i64 = (i as i64) * 8
+        existing: str = Memory.read_i64(g_ts_names + off8) as str
+        if str_eq(existing, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+fun ts_is_extern_fun_reachable(name: str) -> i32:
+    if g_tree_shake_enabled == 0:
+        return 1
+    i: i32 = 0
+    while i < g_ts_count:
+        off8: i64 = (i as i64) * 8
+        existing: str = Memory.read_i64(g_ts_names + off8) as str
+        if str_eq(existing, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+fun ts_mark_method_by_name(method_name: str):
+    i: i32 = 0
+    while i < g_impl_count:
+        off8: i64 = (i as i64) * 8
+        mname: str = Memory.read_i64(g_impl_method_name + off8) as str
+        if (mname as i64) != 0:
+            if str_eq(mname, method_name) == 1:
+                sname: str = Memory.read_i64(g_impl_struct + off8) as str
+                ts_mark_struct(sname)
+        i = i + 1
+
+fun ts_walk_list(nlist: i64):
+    if nlist == 0:
+        return
+    c: i32 = nl_count(nlist)
+    i: i32 = 0
+    while i < c:
+        ts_walk_node(nl_get(nlist, i))
+        i = i + 1
+
+fun ts_walk_node(node: i64):
+    if node == 0:
+        return
+    nt: i32 = nd_type(node)
+
+    if nt == NODE_FUN_CALL:
+        fname: str = Memory.read_i64(node + 8) as str
+        ts_mark_fun(fname)
+        ts_walk_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_STATIC_METHOD:
+        sname: str = Memory.read_i64(node + 8) as str
+        ts_mark_struct(sname)
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_INST_METHOD:
+        mname: str = Memory.read_i64(node + 16) as str
+        ts_mark_method_by_name(mname)
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_NS_FUN_CALL:
+        fname2: str = Memory.read_i64(node + 16) as str
+        ts_mark_fun(fname2)
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_NS_STATIC_METHOD:
+        sname2: str = Memory.read_i64(node + 16) as str
+        ts_mark_struct(sname2)
+        ts_walk_list(Memory.read_i64(node + 32))
+        return
+    if nt == NODE_STRUCT_INST:
+        sname3: str = Memory.read_i64(node + 8) as str
+        ts_mark_struct(sname3)
+        fvl: i64 = Memory.read_i64(node + 16)
+        if fvl != 0:
+            fvc: i32 = nl_count(fvl)
+            fi: i32 = 0
+            while fi < fvc:
+                fv: i64 = nl_get(fvl, fi)
+                ts_walk_node(Memory.read_i64(fv + 16))
+                fi = fi + 1
+        return
+    if nt == NODE_NS_STRUCT_INST:
+        sname4: str = Memory.read_i64(node + 16) as str
+        ts_mark_struct(sname4)
+        fvl2: i64 = Memory.read_i64(node + 24)
+        if fvl2 != 0:
+            fvc2: i32 = nl_count(fvl2)
+            fi2: i32 = 0
+            while fi2 < fvc2:
+                fv2: i64 = nl_get(fvl2, fi2)
+                ts_walk_node(Memory.read_i64(fv2 + 16))
+                fi2 = fi2 + 1
+        return
+    if nt == NODE_FUN_REF:
+        fname3: str = Memory.read_i64(node + 8) as str
+        ts_mark_fun(fname3)
+        return
+    if nt == NODE_SUPER_METHOD:
+        ts_walk_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_BUILTIN_CALL:
+        ts_walk_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_ENUM_ACCESS:
+        ename: str = Memory.read_i64(node + 8) as str
+        ts_mark_reachable(ename, 2)
+        return
+    if nt == NODE_VAR_DECL:
+        vtype: str = Memory.read_i64(node + 8) as str
+        if (vtype as i64) != 0:
+            if Memory.strlen(vtype) > 0:
+                if is_struct_type(vtype) == 1:
+                    ts_mark_struct(vtype)
+        ts_walk_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_ASSIGN:
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_FIELD_ASSIGN:
+        ts_walk_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_STATIC_FIELD_ASSIGN:
+        sname5: str = Memory.read_i64(node + 8) as str
+        if (sname5 as i64) != 0:
+            if is_struct_type(sname5) == 1:
+                ts_mark_struct(sname5)
+        ts_walk_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_STATIC_FIELD:
+        sname6: str = Memory.read_i64(node + 8) as str
+        if (sname6 as i64) != 0:
+            if is_struct_type(sname6) == 1:
+                ts_mark_struct(sname6)
+        return
+    if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
+        ts_walk_node(Memory.read_i64(node + 16))
+        ts_walk_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_UNARY_OP:
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_CAST:
+        ts_walk_node(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_PAREN:
+        ts_walk_node(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_TERNARY:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_node(Memory.read_i64(node + 16))
+        ts_walk_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_RETURN:
+        ts_walk_node(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_IF:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_list(Memory.read_i64(node + 16))
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_WHILE:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_FOR:
+        ts_walk_node(Memory.read_i64(node + 16))
+        ts_walk_node(Memory.read_i64(node + 24))
+        ts_walk_list(Memory.read_i64(node + 32))
+        return
+    if nt == NODE_FOR_EACH:
+        ts_walk_node(Memory.read_i64(node + 32))
+        ts_walk_list(Memory.read_i64(node + 40))
+        return
+    if nt == NODE_BLOCK:
+        ts_walk_list(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_MATCH:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_list(Memory.read_i64(node + 16))
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_CASE:
+        ts_walk_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_ARRAY_LIT or nt == NODE_LIST_LIT:
+        ts_walk_list(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_ARRAY_ACCESS:
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_LIST_METHOD:
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_FSTRING:
+        ts_walk_list(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_STR_CONCAT:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_FIELD_ACCESS:
+        return
+    if nt == NODE_NESTED_FIELD:
+        ts_walk_node(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_NESTED_METHOD:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_CONTEXT_BLOCK:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_IS_NULL or nt == NODE_IS_NOT_NULL:
+        ts_walk_node(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_FIELD_VAL:
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_MAP_ENTRY:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_MAP_LIT:
+        ts_walk_list(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_STRUCT_FIELD:
+        ts_walk_node(Memory.read_i64(node + 24))
+        return
+    return
+
+fun ts_seed(ast: i64):
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+        if nt != NODE_FUN_DEF and nt != NODE_STRUCT_DECL and nt != NODE_ENUM_DECL and nt != NODE_IMPL_BLOCK and nt != NODE_EXTEND_BLOCK and nt != NODE_EXTERN_BLOCK and nt != NODE_TRAIT_DECL and nt != NODE_TYPE_ALIAS and nt != NODE_IMPORT and nt != NODE_MODULE_DECL and nt != NODE_EXPORT and nt != NODE_REQUIRES and nt != NODE_USE_MODULE:
+            ts_walk_node(node)
+        i = i + 1
+    ts_mark_fun("main")
+
+fun ts_process_function(ast: i64, fname: str):
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+        if nt == NODE_FUN_DEF:
+            n_name: str = Memory.read_i64(node + 8) as str
+            if str_eq(n_name, fname) == 1:
+                ts_walk_list(Memory.read_i64(node + 32))
+                return
+        i = i + 1
+
+fun ts_process_struct(ast: i64, sname: str):
+    sc: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < sc:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+        if nt == NODE_STRUCT_DECL:
+            n_name: str = Memory.read_i64(node + 8) as str
+            if str_eq(n_name, sname) == 1:
+                ts_walk_list(Memory.read_i64(node + 40))
+                base: str = Memory.read_i64(node + 32) as str
+                if (base as i64) != 0:
+                    if Memory.strlen(base) > 0:
+                        ts_mark_struct(base)
+        elif nt == NODE_IMPL_BLOCK:
+            n_name2: str = Memory.read_i64(node + 8) as str
+            if str_eq(n_name2, sname) == 1:
+                mlist: i64 = Memory.read_i64(node + 16)
+                if mlist != 0:
+                    mc: i32 = nl_count(mlist)
+                    mi: i32 = 0
+                    while mi < mc:
+                        mnode: i64 = nl_get(mlist, mi)
+                        ts_walk_list(Memory.read_i64(mnode + 32))
+                        mi = mi + 1
+        elif nt == NODE_EXTEND_BLOCK:
+            n_name3: str = Memory.read_i64(node + 8) as str
+            if str_eq(n_name3, sname) == 1:
+                mlist2: i64 = Memory.read_i64(node + 16)
+                if mlist2 != 0:
+                    mc2: i32 = nl_count(mlist2)
+                    mi2: i32 = 0
+                    while mi2 < mc2:
+                        mnode2: i64 = nl_get(mlist2, mi2)
+                        ts_walk_list(Memory.read_i64(mnode2 + 32))
+                        mi2 = mi2 + 1
+        i = i + 1
+
+fun ts_process_all(ast: i64):
+    changed: i32 = 1
+    while changed == 1:
+        changed = 0
+        i: i32 = 0
+        while i < g_ts_count:
+            off4: i64 = (i as i64) * 4
+            if Memory.read_i32(g_ts_processed + off4) == 0:
+                Memory.write_i32(g_ts_processed + off4, 1)
+                changed = 1
+                off8: i64 = (i as i64) * 8
+                name: str = Memory.read_i64(g_ts_names + off8) as str
+                kind: i32 = Memory.read_i32(g_ts_kinds + off4)
+                if kind == 0:
+                    ts_process_function(ast, name)
+                elif kind == 1:
+                    ts_process_struct(ast, name)
+            i = i + 1
+
+fun run_tree_shaking(ast: i64):
+    if g_tree_shake_enabled == 0:
+        return
+    # Mark codegen-internal calls (emitted by codegen, not visible in AST)
+    ts_mark_struct("Memory")
+    ts_mark_struct("Str")
+    ts_mark_struct("Convert")
+    ts_mark_reachable("Str_concat", 0)
+    ts_mark_reachable("dsl_str_concat", 0)
+    ts_mark_reachable("strcmp", 0)
+    ts_mark_reachable("Memory_malloc", 0)
+    ts_mark_reachable("Memory_malloc_zeroed", 0)
+    ts_mark_reachable("Convert_i32_to_str", 0)
+    ts_mark_reachable("Convert_i64_to_str", 0)
+    ts_mark_reachable("Convert_f64_to_str", 0)
+    ts_mark_reachable("Convert_bool_to_str", 0)
+    ts_mark_reachable("dsl_hash_i32", 0)
+    ts_mark_reachable("dsl_hash_i64", 0)
+    ts_mark_reachable("dsl_hash_string", 0)
+    ts_seed(ast)
+    ts_process_all(ast)
+    IOOps.io_println(Str.concat("[tree-shake] reachable: ", Convert.i64_to_str(g_ts_count as i64)))
+
+fun ts_extern_block_has_reachable(node: i64) -> i32:
+    if g_tree_shake_enabled == 0:
+        return 1
+    flist: i64 = Memory.read_i64(node + 16)
+    if flist == 0:
+        return 0
+    fc: i32 = nl_count(flist)
+    fi: i32 = 0
+    while fi < fc:
+        fnode: i64 = nl_get(flist, fi)
+        fname: str = Memory.read_i64(fnode + 8) as str
+        if ts_is_extern_fun_reachable(fname) == 1:
+            return 1
+        fi = fi + 1
+    return 0
 
 ##############################
 # MLIR Codegen Types
@@ -9641,22 +10050,30 @@ fun gen_functions(ast: i64):
 
         IOOps.io_println(Str.concat(Str.concat("[gen_fn] node ", Convert.i64_to_str(i as i64)), Str.concat(" type=", Convert.i64_to_str(nt as i64))))
         if nt == NODE_EXTERN_BLOCK:
-            gen_extern_block(node)
-            IOOps.io_println("[gen_fn] extern done")
+            if ts_extern_block_has_reachable(node) == 1:
+                gen_extern_block(node)
+                IOOps.io_println("[gen_fn] extern done")
         elif nt == NODE_STRUCT_DECL:
             sdbg: str = Memory.read_i64(node + 8) as str
             # Skip @transparent structs — they have no MLIR representation
             s_sa: i64 = Memory.read_i64(node + 56)
             if s_sa != 2:
-                IOOps.io_println(Str.concat("[gen_fn] struct: ", sdbg))
-                gen_struct_inline_methods(node)
-                IOOps.io_println("[gen_fn] struct methods done")
+                if ts_is_reachable(sdbg) == 1:
+                    IOOps.io_println(Str.concat("[gen_fn] struct: ", sdbg))
+                    gen_struct_inline_methods(node)
+                    IOOps.io_println("[gen_fn] struct methods done")
         elif nt == NODE_FUN_DEF:
-            gen_fun_def(node)
+            ts_fname: str = Memory.read_i64(node + 8) as str
+            if ts_is_reachable(ts_fname) == 1:
+                gen_fun_def(node)
         elif nt == NODE_IMPL_BLOCK:
-            gen_impl_block(node)
+            ts_sname: str = Memory.read_i64(node + 8) as str
+            if ts_is_reachable(ts_sname) == 1:
+                gen_impl_block(node)
         elif nt == NODE_EXTEND_BLOCK:
-            gen_extend_block(node)
+            ts_tname: str = Memory.read_i64(node + 8) as str
+            if ts_is_reachable(ts_tname) == 1:
+                gen_extend_block(node)
         i = i + 1
 
 # ==========================================
@@ -9719,6 +10136,9 @@ fun generate(ast: i64) -> str:
     # Phase 1: Collect declarations
     collect_declarations(ast)
     IOOps.io_println("[gen] collect_declarations done")
+
+    # Phase 1.5: Tree shaking (opt-in)
+    run_tree_shaking(ast)
 
     # Phase 2: Collect string literals
     collect_all_strings(ast)
@@ -10871,6 +11291,8 @@ fun main() -> i32:
             keep_mlir = 1
         elif str_eq(arg, "--keep-llvm") == 1:
             keep_llvm = 1
+        elif str_eq(arg, "--tree-shake") == 1:
+            g_tree_shake_enabled = 1
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:

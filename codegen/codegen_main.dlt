@@ -462,22 +462,30 @@ fun gen_functions(ast: i64):
 
         IOOps.io_println(Str.concat(Str.concat("[gen_fn] node ", Convert.i64_to_str(i as i64)), Str.concat(" type=", Convert.i64_to_str(nt as i64))))
         if nt == NODE_EXTERN_BLOCK:
-            gen_extern_block(node)
-            IOOps.io_println("[gen_fn] extern done")
+            if ts_extern_block_has_reachable(node) == 1:
+                gen_extern_block(node)
+                IOOps.io_println("[gen_fn] extern done")
         elif nt == NODE_STRUCT_DECL:
             sdbg: str = Memory.read_i64(node + 8) as str
             # Skip @transparent structs — they have no MLIR representation
             s_sa: i64 = Memory.read_i64(node + 56)
             if s_sa != 2:
-                IOOps.io_println(Str.concat("[gen_fn] struct: ", sdbg))
-                gen_struct_inline_methods(node)
-                IOOps.io_println("[gen_fn] struct methods done")
+                if ts_is_reachable(sdbg) == 1:
+                    IOOps.io_println(Str.concat("[gen_fn] struct: ", sdbg))
+                    gen_struct_inline_methods(node)
+                    IOOps.io_println("[gen_fn] struct methods done")
         elif nt == NODE_FUN_DEF:
-            gen_fun_def(node)
+            ts_fname: str = Memory.read_i64(node + 8) as str
+            if ts_is_reachable(ts_fname) == 1:
+                gen_fun_def(node)
         elif nt == NODE_IMPL_BLOCK:
-            gen_impl_block(node)
+            ts_sname: str = Memory.read_i64(node + 8) as str
+            if ts_is_reachable(ts_sname) == 1:
+                gen_impl_block(node)
         elif nt == NODE_EXTEND_BLOCK:
-            gen_extend_block(node)
+            ts_tname: str = Memory.read_i64(node + 8) as str
+            if ts_is_reachable(ts_tname) == 1:
+                gen_extend_block(node)
         i = i + 1
 
 # ==========================================
@@ -540,6 +548,9 @@ fun generate(ast: i64) -> str:
     # Phase 1: Collect declarations
     collect_declarations(ast)
     IOOps.io_println("[gen] collect_declarations done")
+
+    # Phase 1.5: Tree shaking (opt-in)
+    run_tree_shaking(ast)
 
     # Phase 2: Collect string literals
     collect_all_strings(ast)

@@ -982,6 +982,8 @@ fun main() -> i32:
             keep_mlir = 1
         elif str_eq(arg, "--keep-llvm") == 1:
             keep_llvm = 1
+        elif str_eq(arg, "--tree-shake") == 1:
+            g_tree_shake_enabled = 1
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:
