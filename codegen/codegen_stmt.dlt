@@ -80,6 +80,9 @@ fun gen_field_assignment(node: i64):
         fp: str = new_tmp()
         emit_ind(Str.concat(Str.concat(fp, " = llvm.getelementptr %self[0, "), Str.concat(Str.concat(Convert.i64_to_str(fidx as i64), "] : (!llvm.ptr) -> !llvm.ptr, "), struct_mlir)))
         val: str = gen_expr(val_node, ftype)
+        actual_type: str = infer_expr_type(val_node)
+        if str_eq(actual_type, ftype) == 0:
+            val = implicit_cast(val, actual_type, ftype)
         emit_store(val, fp, mt)
         return
 
@@ -137,6 +140,9 @@ fun gen_field_assignment(node: i64):
 
     # Generate and store value
     val3: str = gen_expr(val_node, ftype2)
+    actual_type3: str = infer_expr_type(val_node)
+    if str_eq(actual_type3, ftype2) == 0:
+        val3 = implicit_cast(val3, actual_type3, ftype2)
     emit_store(val3, fp2, mt2)
 
 # ==========================================
@@ -684,6 +690,31 @@ fun gen_match_expr(node: i64, expected: str) -> str:
 # Variable Declaration
 # (moved here from codegen_decl.dlt to avoid forward-ref bug)
 # ==========================================
+# Deep-copy a struct from src ptr to a new local alloca, returns dest ptr
+fun copy_struct_local(src_ptr: str, sname: str) -> str:
+    smtype: str = get_struct_mlir_type(sname)
+    dest: str = emit_alloca(smtype)
+    fields: i64 = get_struct_fields(sname)
+    if fields == 0:
+        return dest
+    fc: i32 = nl_count(fields)
+    fi: i32 = 0
+    while fi < fc:
+        fnode: i64 = nl_get(fields, fi)
+        ftype: str = Memory.read_i64(fnode + 16) as str
+        fmt: str = mlir_type(ftype)
+        idx_str: str = Convert.i64_to_str(fi as i64)
+        # Load from source
+        sgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(sgep, " = llvm.getelementptr "), src_ptr), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+        sval: str = emit_load(sgep, fmt)
+        # Store to dest
+        dgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(dgep, " = llvm.getelementptr "), dest), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+        emit_store(sval, dgep, fmt)
+        fi = fi + 1
+    return dest
+
 fun gen_var_decl(node: i64):
     vtype: str = Memory.read_i64(node + 8) as str
     name: str = Memory.read_i64(node + 16) as str
@@ -700,8 +731,14 @@ fun gen_var_decl(node: i64):
             gval: str = gen_expr(val_node, vt)
             if str_eq(actual_t, vt) == 0 and str_eq(actual_t, "unknown") == 0:
                 gval = implicit_cast(gval, actual_t, vt)
-            ga: str = emit_addr_of(mn)
-            emit_store(gval, ga, mt2)
+            # Struct deep-copy for globals
+            if is_struct_type(vt) == 1 and is_heap_struct(vt) == 0:
+                local_copy: str = copy_struct_local(gval, vt)
+                ga: str = emit_addr_of(mn)
+                emit_store(local_copy, ga, mt2)
+            else:
+                ga2: str = emit_addr_of(mn)
+                emit_store(gval, ga2, mt2)
         return
 
     # Fix: parser stores "type" for bool/int/float/string keywords — use inferred type
@@ -712,20 +749,29 @@ fun gen_var_decl(node: i64):
     mt: str = mlir_type(vtype)
 
     if val_node != 0:
-        # Allocate and store value
-        alloc: str = emit_alloca(mt)
-        alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
-        add_variable(name, alloc_name, vtype, 0, is_const)
+        # Struct deep-copy: allocate local struct and copy fields
+        if is_struct_type(vtype) == 1 and is_heap_struct(vtype) == 0:
+            src_ptr: str = gen_expr(val_node, vtype)
+            local_copy2: str = copy_struct_local(src_ptr, vtype)
+            alloc_lc: str = emit_alloca(mt)
+            alloc_lc_name: str = str_from_range(alloc_lc, 1, Memory.strlen(alloc_lc))
+            add_variable(name, alloc_lc_name, vtype, 0, is_const)
+            emit_store(local_copy2, alloc_lc, mt)
+        else:
+            # Allocate and store value
+            alloc: str = emit_alloca(mt)
+            alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
+            add_variable(name, alloc_name, vtype, 0, is_const)
 
-        # Infer actual type and generate expression
-        actual_type: str = infer_expr_type(val_node)
-        value_result: str = gen_expr(val_node, vtype)
+            # Infer actual type and generate expression
+            actual_type: str = infer_expr_type(val_node)
+            value_result: str = gen_expr(val_node, vtype)
 
-        # Implicit cast if needed
-        if str_eq(actual_type, vtype) == 0 and str_eq(actual_type, "unknown") == 0:
-            value_result = implicit_cast(value_result, actual_type, vtype)
+            # Implicit cast if needed
+            if str_eq(actual_type, vtype) == 0 and str_eq(actual_type, "unknown") == 0:
+                value_result = implicit_cast(value_result, actual_type, vtype)
 
-        emit_store(value_result, alloc, mt)
+            emit_store(value_result, alloc, mt)
     else:
         # No initial value — alloca + zero initialize
         alloc2: str = emit_alloca(mt)

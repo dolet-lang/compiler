@@ -766,6 +766,17 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
     if file_exists(p2) == 1:
         return p2
 
+    # 2c. Try external packages: <root>/bootstrap/tools/dolet/lib/external-modules/<mod_path>/mod.dlt
+    ext_base: str = Str.concat(std_base, "..\\bootstrap\\tools\\dolet\\lib\\external-modules\\")
+    pe: str = Str.concat(Str.concat(ext_base, mod_path), "\\mod.dlt")
+    if file_exists(pe) == 1:
+        return pe
+
+    # 2d. Try external packages: <ext_base>/<mod_path>.dlt (single-file module)
+    pe2: str = Str.concat(Str.concat(ext_base, mod_path), ".dlt")
+    if file_exists(pe2) == 1:
+        return pe2
+
     # 3. Try <src_dir>/<mod_path>.dlt
     p3: str = Str.concat(Str.concat(Str.concat(src_dir, "\\"), mod_path), ".dlt")
     if file_exists(p3) == 1:
@@ -1204,7 +1215,7 @@ fun main() -> i32:
         if total_rt > 0:
             rt_combined: str = Str.concat(rt, Str.concat("\n", std_rt))
             rt_combined = Str.concat(rt_combined, Str.concat("\n", sel_std))
-            source = Str.concat(rt_combined, Str.concat("\n", user_src))
+            source = rt_combined
             IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(total_rt), " chars")))
 
     # Resolve and load user imports
@@ -1214,8 +1225,11 @@ fun main() -> i32:
         src_dir = "."
     imp_src: str = resolve_and_load_imports(user_src, std_base, src_dir)
     imp_len: i64 = Memory.strlen(imp_src)
+    # Append imported module source BEFORE user source so module
+    # constants are initialized before user code runs in @main
     if imp_len > 0:
-        source = Str.concat(Str.concat(source, "\n"), imp_src)
+        source = Str.concat(source, Str.concat("\n", imp_src))
+    source = Str.concat(source, Str.concat("\n", user_src))
 
     src_len: i64 = Memory.strlen(source)
     IOOps.io_println(Str.concat("Source: ", Str.concat(Convert.i64_to_str(src_len), " chars (total)")))

@@ -358,12 +358,18 @@ fun gen_extern_block(node: i64):
         if str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
             ret_mt = mlir_type(ret_type)
 
+        # Skip if already emitted (dedup across modules)
+        if is_fn_emitted(fname) == 1:
+            i = i + 1
+            continue
+
         # Emit extern function declaration
         if str_eq(ret_mt, "") == 1:
             emit_ind(Str.concat(Str.concat(Str.concat("llvm.func @", fname), "("), Str.concat(param_str, ")")))
         else:
             emit_ind(Str.concat(Str.concat(Str.concat("llvm.func @", fname), "("), Str.concat(param_str, Str.concat(") -> ", ret_mt))))
 
+        mark_fn_emitted(fname)
         i = i + 1
 
 # ==========================================

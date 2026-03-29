@@ -394,6 +394,8 @@ fun resolve_keyword(name: str) -> i32:
         return TK_TRAIT
     if str_eq(name, "impl") == 1:
         return TK_IMPL
+    if str_eq(name, "imple") == 1:
+        return TK_IMPL
     if str_eq(name, "extends") == 1:
         return TK_EXTENDS
     if str_eq(name, "self") == 1:

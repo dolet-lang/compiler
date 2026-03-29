@@ -395,6 +395,8 @@ fun resolve_keyword(name: str) -> i32:
         return TK_TRAIT
     if str_eq(name, "impl") == 1:
         return TK_IMPL
+    if str_eq(name, "imple") == 1:
+        return TK_IMPL
     if str_eq(name, "extends") == 1:
         return TK_EXTENDS
     if str_eq(name, "self") == 1:
@@ -7086,6 +7088,16 @@ fun gen_char_lit(node: i64, expected: str) -> str:
 fun gen_var_load(name: str, expected: str) -> str:
     mn: str = get_mlir_name(name)
     if str_eq(mn, "") == 1:
+        # Fallback: check if it's a function name (for function pointers)
+        frt: str = get_fun_ret_type(name)
+        if str_eq(frt, "unknown") == 0:
+            # Emit addressof for the function and convert to i64 immediately
+            tmp: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.addressof @"), name), " : !llvm.ptr"))
+            # Always convert function pointers to i64
+            tmp2: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(tmp2, " = llvm.ptrtoint "), tmp), " : !llvm.ptr to i64"))
+            return tmp2
         panic(Str.concat("Variable not declared: ", name))
 
     vt: str = get_var_type(name)
@@ -7960,6 +7972,9 @@ fun gen_field_assignment(node: i64):
         fp: str = new_tmp()
         emit_ind(Str.concat(Str.concat(fp, " = llvm.getelementptr %self[0, "), Str.concat(Str.concat(Convert.i64_to_str(fidx as i64), "] : (!llvm.ptr) -> !llvm.ptr, "), struct_mlir)))
         val: str = gen_expr(val_node, ftype)
+        actual_type: str = infer_expr_type(val_node)
+        if str_eq(actual_type, ftype) == 0:
+            val = implicit_cast(val, actual_type, ftype)
         emit_store(val, fp, mt)
         return
 
@@ -8017,6 +8032,9 @@ fun gen_field_assignment(node: i64):
 
     # Generate and store value
     val3: str = gen_expr(val_node, ftype2)
+    actual_type3: str = infer_expr_type(val_node)
+    if str_eq(actual_type3, ftype2) == 0:
+        val3 = implicit_cast(val3, actual_type3, ftype2)
     emit_store(val3, fp2, mt2)
 
 # ==========================================
@@ -8564,6 +8582,31 @@ fun gen_match_expr(node: i64, expected: str) -> str:
 # Variable Declaration
 # (moved here from codegen_decl.dlt to avoid forward-ref bug)
 # ==========================================
+# Deep-copy a struct from src ptr to a new local alloca, returns dest ptr
+fun copy_struct_local(src_ptr: str, sname: str) -> str:
+    smtype: str = get_struct_mlir_type(sname)
+    dest: str = emit_alloca(smtype)
+    fields: i64 = get_struct_fields(sname)
+    if fields == 0:
+        return dest
+    fc: i32 = nl_count(fields)
+    fi: i32 = 0
+    while fi < fc:
+        fnode: i64 = nl_get(fields, fi)
+        ftype: str = Memory.read_i64(fnode + 16) as str
+        fmt: str = mlir_type(ftype)
+        idx_str: str = Convert.i64_to_str(fi as i64)
+        # Load from source
+        sgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(sgep, " = llvm.getelementptr "), src_ptr), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+        sval: str = emit_load(sgep, fmt)
+        # Store to dest
+        dgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(dgep, " = llvm.getelementptr "), dest), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+        emit_store(sval, dgep, fmt)
+        fi = fi + 1
+    return dest
+
 fun gen_var_decl(node: i64):
     vtype: str = Memory.read_i64(node + 8) as str
     name: str = Memory.read_i64(node + 16) as str
@@ -8580,8 +8623,14 @@ fun gen_var_decl(node: i64):
             gval: str = gen_expr(val_node, vt)
             if str_eq(actual_t, vt) == 0 and str_eq(actual_t, "unknown") == 0:
                 gval = implicit_cast(gval, actual_t, vt)
-            ga: str = emit_addr_of(mn)
-            emit_store(gval, ga, mt2)
+            # Struct deep-copy for globals
+            if is_struct_type(vt) == 1 and is_heap_struct(vt) == 0:
+                local_copy: str = copy_struct_local(gval, vt)
+                ga: str = emit_addr_of(mn)
+                emit_store(local_copy, ga, mt2)
+            else:
+                ga2: str = emit_addr_of(mn)
+                emit_store(gval, ga2, mt2)
         return
 
     # Fix: parser stores "type" for bool/int/float/string keywords — use inferred type
@@ -8592,20 +8641,29 @@ fun gen_var_decl(node: i64):
     mt: str = mlir_type(vtype)
 
     if val_node != 0:
-        # Allocate and store value
-        alloc: str = emit_alloca(mt)
-        alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
-        add_variable(name, alloc_name, vtype, 0, is_const)
+        # Struct deep-copy: allocate local struct and copy fields
+        if is_struct_type(vtype) == 1 and is_heap_struct(vtype) == 0:
+            src_ptr: str = gen_expr(val_node, vtype)
+            local_copy2: str = copy_struct_local(src_ptr, vtype)
+            alloc_lc: str = emit_alloca(mt)
+            alloc_lc_name: str = str_from_range(alloc_lc, 1, Memory.strlen(alloc_lc))
+            add_variable(name, alloc_lc_name, vtype, 0, is_const)
+            emit_store(local_copy2, alloc_lc, mt)
+        else:
+            # Allocate and store value
+            alloc: str = emit_alloca(mt)
+            alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
+            add_variable(name, alloc_name, vtype, 0, is_const)
 
-        # Infer actual type and generate expression
-        actual_type: str = infer_expr_type(val_node)
-        value_result: str = gen_expr(val_node, vtype)
+            # Infer actual type and generate expression
+            actual_type: str = infer_expr_type(val_node)
+            value_result: str = gen_expr(val_node, vtype)
 
-        # Implicit cast if needed
-        if str_eq(actual_type, vtype) == 0 and str_eq(actual_type, "unknown") == 0:
-            value_result = implicit_cast(value_result, actual_type, vtype)
+            # Implicit cast if needed
+            if str_eq(actual_type, vtype) == 0 and str_eq(actual_type, "unknown") == 0:
+                value_result = implicit_cast(value_result, actual_type, vtype)
 
-        emit_store(value_result, alloc, mt)
+            emit_store(value_result, alloc, mt)
     else:
         # No initial value — alloca + zero initialize
         alloc2: str = emit_alloca(mt)
@@ -9054,12 +9112,18 @@ fun gen_extern_block(node: i64):
         if str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
             ret_mt = mlir_type(ret_type)
 
+        # Skip if already emitted (dedup across modules)
+        if is_fn_emitted(fname) == 1:
+            i = i + 1
+            continue
+
         # Emit extern function declaration
         if str_eq(ret_mt, "") == 1:
             emit_ind(Str.concat(Str.concat(Str.concat("llvm.func @", fname), "("), Str.concat(param_str, ")")))
         else:
             emit_ind(Str.concat(Str.concat(Str.concat("llvm.func @", fname), "("), Str.concat(param_str, Str.concat(") -> ", ret_mt))))
 
+        mark_fn_emitted(fname)
         i = i + 1
 
 # ==========================================
@@ -11159,6 +11223,17 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
     if file_exists(p2) == 1:
         return p2
 
+    # 2c. Try external packages: <root>/bootstrap/tools/dolet/lib/external-modules/<mod_path>/mod.dlt
+    ext_base: str = Str.concat(std_base, "..\\bootstrap\\tools\\dolet\\lib\\external-modules\\")
+    pe: str = Str.concat(Str.concat(ext_base, mod_path), "\\mod.dlt")
+    if file_exists(pe) == 1:
+        return pe
+
+    # 2d. Try external packages: <ext_base>/<mod_path>.dlt (single-file module)
+    pe2: str = Str.concat(Str.concat(ext_base, mod_path), ".dlt")
+    if file_exists(pe2) == 1:
+        return pe2
+
     # 3. Try <src_dir>/<mod_path>.dlt
     p3: str = Str.concat(Str.concat(Str.concat(src_dir, "\\"), mod_path), ".dlt")
     if file_exists(p3) == 1:
@@ -11592,7 +11667,7 @@ fun main() -> i32:
         if total_rt > 0:
             rt_combined: str = Str.concat(rt, Str.concat("\n", std_rt))
             rt_combined = Str.concat(rt_combined, Str.concat("\n", sel_std))
-            source = Str.concat(rt_combined, Str.concat("\n", user_src))
+            source = rt_combined
             IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(total_rt), " chars")))
 
     # Resolve and load user imports
@@ -11602,8 +11677,11 @@ fun main() -> i32:
         src_dir = "."
     imp_src: str = resolve_and_load_imports(user_src, std_base, src_dir)
     imp_len: i64 = Memory.strlen(imp_src)
+    # Append imported module source BEFORE user source so module
+    # constants are initialized before user code runs in @main
     if imp_len > 0:
-        source = Str.concat(Str.concat(source, "\n"), imp_src)
+        source = Str.concat(source, Str.concat("\n", imp_src))
+    source = Str.concat(source, Str.concat("\n", user_src))
 
     src_len: i64 = Memory.strlen(source)
     IOOps.io_println(Str.concat("Source: ", Str.concat(Convert.i64_to_str(src_len), " chars (total)")))

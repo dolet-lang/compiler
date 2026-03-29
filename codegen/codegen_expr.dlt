@@ -246,6 +246,16 @@ fun gen_char_lit(node: i64, expected: str) -> str:
 fun gen_var_load(name: str, expected: str) -> str:
     mn: str = get_mlir_name(name)
     if str_eq(mn, "") == 1:
+        # Fallback: check if it's a function name (for function pointers)
+        frt: str = get_fun_ret_type(name)
+        if str_eq(frt, "unknown") == 0:
+            # Emit addressof for the function and convert to i64 immediately
+            tmp: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(tmp, " = llvm.mlir.addressof @"), name), " : !llvm.ptr"))
+            # Always convert function pointers to i64
+            tmp2: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(tmp2, " = llvm.ptrtoint "), tmp), " : !llvm.ptr to i64"))
+            return tmp2
         panic(Str.concat("Variable not declared: ", name))
 
     vt: str = get_var_type(name)
