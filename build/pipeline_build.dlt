@@ -11223,13 +11223,24 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
     if file_exists(p2) == 1:
         return p2
 
-    # 2c. Try external packages: <root>/bootstrap/tools/dolet/lib/external-modules/<mod_path>/mod.dlt
+    # 2c. Try packages dir (dist layout): <exe_dir>/../packages/<mod_path>/mod.dlt
+    pkg_base: str = Str.concat(std_base, "..\\packages\\")
+    pp: str = Str.concat(Str.concat(pkg_base, mod_path), "\\mod.dlt")
+    if file_exists(pp) == 1:
+        return pp
+
+    # 2d. Try packages dir single-file: <pkg_base>/<mod_path>.dlt
+    pp2: str = Str.concat(Str.concat(pkg_base, mod_path), ".dlt")
+    if file_exists(pp2) == 1:
+        return pp2
+
+    # 2e. Try external packages: <root>/bootstrap/tools/dolet/lib/external-modules/<mod_path>/mod.dlt
     ext_base: str = Str.concat(std_base, "..\\bootstrap\\tools\\dolet\\lib\\external-modules\\")
     pe: str = Str.concat(Str.concat(ext_base, mod_path), "\\mod.dlt")
     if file_exists(pe) == 1:
         return pe
 
-    # 2d. Try external packages: <ext_base>/<mod_path>.dlt (single-file module)
+    # 2f. Try external packages: <ext_base>/<mod_path>.dlt (single-file module)
     pe2: str = Str.concat(Str.concat(ext_base, mod_path), ".dlt")
     if file_exists(pe2) == 1:
         return pe2
