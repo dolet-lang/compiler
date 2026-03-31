@@ -1,27 +1,17 @@
-# Test: custom annotation system (new syntax)
+# Test: custom annotation system (expression-based syntax)
 import std
 
-# Define a custom annotation with composes — new @[name] style
-annot fast_fun:
-    target: fun
-    composes:
-        @[inline]
-        @[hot]
+# Define a custom annotation with composes
+annot fast_fun = Annot(target = fun, composes = [inline, hot])
 
 # Define a deprecated annotation with emit message
-annot obsolete:
-    target: fun
-    emit: warning
-        message: "this function is obsolete"
+annot obsolete = Annot(target = fun, emit = warning("this function is obsolete"))
 
-# Define annotation with params in parens (new syntax)
-annot align(value: i32 = 8):
-    target: fun, struct
+# Define annotation with params in parens
+annot align(value: i32 = 8) = Annot(target = fun | struct)
 
-# Define annotation with conflicts (replaces mutually_exclusive)
-annot noinline_custom:
-    target: fun
-    conflicts: [inline]
+# Define annotation with conflicts
+annot noinline_custom = Annot(target = fun, conflicts = [inline])
 
 # Use built-in @inline on function
 @inline
