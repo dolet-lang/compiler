@@ -911,20 +911,9 @@ fun target_allows(targets: str, kind: str) -> i32:
     return 0
 
 fun init_builtin_annots():
-    # Struct allocation annotations (legacy compat)
-    register_annot("transparent", "struct", "", "", "", "", "")
-    register_annot("stack", "struct", "", "", "", "", "")
-    register_annot("heap", "struct", "", "", "", "", "")
-    # LLVM function attributes
-    register_annot("inline", "fun", "llvm:alwaysinline", "", "", "", "")
-    register_annot("noinline", "fun", "llvm:noinline", "", "", "inline", "")
-    register_annot("hot", "fun", "llvm:hot", "", "", "", "")
-    register_annot("cold", "fun", "llvm:cold", "", "", "hot", "")
-    register_annot("pure", "fun", "llvm:readnone", "", "", "", "")
-    register_annot("noreturn", "fun", "llvm:noreturn", "", "", "", "")
-    # Compiler messages
-    register_annot("deprecated", "fun, struct", "", "warning", "this symbol is deprecated", "", "")
-    register_annot("must_use", "fun", "", "error", "return value must be used", "", "")
+    # Built-in annotations now defined in library/prelude/annotations.dlt
+    # and loaded automatically by load_prelude() in the driver.
+    return
 
 # Check if a node has a specific annotation in its +80 annotation list
 fun node_has_annot(node: i64, annot_name: str) -> i32:

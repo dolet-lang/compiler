@@ -488,6 +488,11 @@ fun load_std(exe_dir: str) -> str:
     library_root: str = Str.concat(exe_dir, "\\..\\library\\")
     return load_module(library_root, "std\\mod.dlt")
 
+fun load_prelude(exe_dir: str) -> str:
+    prelude_path: str = Str.concat(exe_dir, "\\..\\library\\prelude\\annotations.dlt")
+    src: str = read_file_to_string(prelude_path)
+    return src
+
 fun load_module(library_root: str, mod_rel_path: str) -> str:
     mod_path: str = Str.concat(library_root, mod_rel_path)
     mod_content: str = read_file_to_string(mod_path)
@@ -1344,7 +1349,7 @@ fun main() -> i32:
         return 1
 
     # Auto-import runtime (unless --no-runtime)
-    source: str = user_src
+    source: str = ""
     exe_dir: str = get_exe_dir()
 
     # Load library module registry
@@ -1352,6 +1357,14 @@ fun main() -> i32:
     init_library_registry()
     load_library_registry(library_root)
     init_loaded_files()
+
+    # Load prelude (always — annotations are compiler features, not runtime)
+    prelude_src: str = load_prelude(exe_dir)
+    prelude_len: i64 = Memory.strlen(prelude_src)
+    if prelude_len > 0:
+        source = prelude_src
+        mark_file_loaded("prelude/annotations")
+        IOOps.io_println(Str.concat("Prelude: ", Str.concat(Convert.i64_to_str(prelude_len), " chars")))
 
     if no_runtime == 0:
         rt: str = load_runtime(exe_dir)
@@ -1376,18 +1389,9 @@ fun main() -> i32:
         mark_file_loaded("std/fileIO")
         register_module_name("std")
 
-        # std is already loaded as part of runtime, no need for separate loading
-        std_rt: str = ""
-        sel_std: str = ""
-
-        std_len: i64 = Memory.strlen(std_rt)
-        sel_len: i64 = Memory.strlen(sel_std)
-        total_rt: i64 = rt_len + std_len + sel_len
-        if total_rt > 0:
-            rt_combined: str = Str.concat(rt, Str.concat("\n", std_rt))
-            rt_combined = Str.concat(rt_combined, Str.concat("\n", sel_std))
-            source = rt_combined
-            IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(total_rt), " chars")))
+        if rt_len > 0:
+            source = Str.concat(source, Str.concat("\n", rt))
+            IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(rt_len), " chars")))
 
     # Resolve and load user imports
     std_base: str = Str.concat(exe_dir, "\\..\\library\\")

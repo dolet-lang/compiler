@@ -209,7 +209,7 @@ fun parse_annot_def() -> i64:
     eat(TK_ANNOT)
 
     aname: str = cur_val()
-    eat(TK_IDENT)
+    advance()  # Accept any token as annotation name (keywords like 'stack' too)
 
     # Defaults
     targets: str = ""
