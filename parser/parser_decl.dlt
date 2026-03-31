@@ -196,6 +196,304 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
 
     return mk_struct_decl(name, fields, type_params, base_class, methods, is_abstract, 0, parents)
 
+# ==========================================
+# Annotation Definition
+# annot name:
+#     target: fun, struct
+#     param msg: str
+#     effect: llvm
+#         attribute: "noinline"
+# ==========================================
+fun parse_annot_def() -> i64:
+    si: i32 = cur_indent()
+    eat(TK_ANNOT)
+
+    aname: str = cur_val()
+    eat(TK_IDENT)
+
+    # Defaults
+    targets: str = ""
+    effect_type: str = ""
+    effect_data: str = ""
+    emit_kind: str = ""
+    emit_msg: str = ""
+    emit_when: str = ""
+    exclusive: str = ""
+    composes: str = ""
+    params_nl: i64 = 0
+
+    # NEW: Parse optional params in parentheses — annot name(p1: type = default):
+    if cur_kind() == TK_LPAREN:
+        advance()
+        params_nl = mk_node_list(8)
+        while cur_kind() != TK_RPAREN and cur_kind() != TK_EOF:
+            # Check for variadic "..."
+            is_variadic: i32 = 0
+            if cur_kind() == TK_ELLIPSIS:
+                is_variadic = 1
+                advance()
+            pname: str = cur_val()
+            eat(TK_IDENT)
+            if cur_kind() == TK_COLON:
+                advance()
+            ptype: str = cur_val()
+            advance()
+            # Check for default value: = value
+            def_val: str = ""
+            if cur_kind() == TK_ASSIGN:
+                advance()
+                def_val = cur_val()
+                advance()
+            pnode: i64 = mk_annot_param(pname, ptype)
+            if str_eq(def_val, "") == 0:
+                Memory.write_i64(pnode + 24, def_val as i64)
+            if is_variadic == 1:
+                Memory.write_i64(pnode + 32, 1)
+            nl_add(params_nl, pnode)
+            if cur_kind() == TK_COMMA:
+                advance()
+        if cur_kind() == TK_RPAREN:
+            advance()
+
+    if cur_kind() == TK_COLON:
+        advance()
+
+    skip_newlines()
+
+    # Parse indented body
+    while cur_kind() != TK_EOF:
+        ci: i32 = cur_indent()
+        if ci <= si:
+            break
+        if cur_kind() == TK_NEWLINE:
+            skip_newlines()
+        elif cur_kind() == TK_EOF:
+            break
+        else:
+            ci2: i32 = cur_indent()
+            if ci2 <= si:
+                break
+
+            field_name: str = cur_val()
+            advance()
+
+            # target: fun, struct
+            if str_eq(field_name, "target") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                targets = cur_val()
+                advance()
+                while cur_kind() == TK_COMMA:
+                    advance()
+                    targets = Str.concat(targets, Str.concat(", ", cur_val()))
+                    advance()
+                skip_newlines()
+
+            # conflicts: [name1, name2] or conflicts: name
+            elif str_eq(field_name, "conflicts") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                if cur_kind() == TK_LBRACKET:
+                    advance()
+                    exclusive = cur_val()
+                    advance()
+                    while cur_kind() == TK_COMMA:
+                        advance()
+                        exclusive = Str.concat(exclusive, Str.concat(",", cur_val()))
+                        advance()
+                    if cur_kind() == TK_RBRACKET:
+                        advance()
+                else:
+                    exclusive = cur_val()
+                    advance()
+                skip_newlines()
+
+            # mutually_exclusive: name (backward compat alias for conflicts)
+            elif str_eq(field_name, "mutually_exclusive") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                exclusive = cur_val()
+                advance()
+                skip_newlines()
+
+            # needs: name (parent required — consume for now)
+            elif str_eq(field_name, "needs") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                advance()
+                skip_newlines()
+
+            # on: type1, type2 (type constraint — consume for now)
+            elif str_eq(field_name, "on") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                advance()
+                while cur_kind() == TK_COMMA:
+                    advance()
+                    advance()
+                skip_newlines()
+
+            # values param_name: ["a", "b"] (per-param valid values)
+            elif str_eq(field_name, "values") == 1:
+                advance()
+                if cur_kind() == TK_COLON:
+                    advance()
+                if cur_kind() == TK_LBRACKET:
+                    advance()
+                while cur_kind() != TK_RBRACKET and cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    advance()
+                    if cur_kind() == TK_COMMA:
+                        advance()
+                if cur_kind() == TK_RBRACKET:
+                    advance()
+                skip_newlines()
+
+            # check param_name: expr (per-param validation — consume for now)
+            elif str_eq(field_name, "check") == 1:
+                while cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    advance()
+                skip_newlines()
+
+            # effect: llvm / codegen / mlir
+            elif str_eq(field_name, "effect") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                effect_type = cur_val()
+                advance()
+                skip_newlines()
+
+                # Parse sub-fields: attribute:, inject_fun:, etc.
+                esi: i32 = ci2
+                while cur_kind() != TK_EOF:
+                    eci: i32 = cur_indent()
+                    if eci <= esi:
+                        break
+                    if cur_kind() == TK_NEWLINE:
+                        skip_newlines()
+                    else:
+                        eci2: i32 = cur_indent()
+                        if eci2 <= esi:
+                            break
+                        esf: str = cur_val()
+                        advance()
+                        if cur_kind() == TK_COLON:
+                            advance()
+                        if str_eq(esf, "attribute") == 1:
+                            effect_data = cur_val()
+                            advance()
+                        else:
+                            while cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                                advance()
+                        skip_newlines()
+
+            # emit: warning / error — with optional indented when: and message:
+            elif str_eq(field_name, "emit") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                emit_kind = cur_val()
+                advance()
+                skip_newlines()
+
+                # Parse optional sub-fields: when:, message:
+                emsi: i32 = ci2
+                while cur_kind() != TK_EOF:
+                    emci: i32 = cur_indent()
+                    if emci <= emsi:
+                        break
+                    if cur_kind() == TK_NEWLINE:
+                        skip_newlines()
+                    else:
+                        emci2: i32 = cur_indent()
+                        if emci2 <= emsi:
+                            break
+                        emsf: str = cur_val()
+                        advance()
+                        if cur_kind() == TK_COLON:
+                            advance()
+                        if str_eq(emsf, "message") == 1:
+                            emit_msg = cur_val()
+                            advance()
+                        elif str_eq(emsf, "when") == 1:
+                            emit_when = cur_val()
+                            advance()
+                        else:
+                            advance()
+                        skip_newlines()
+
+            # composes: with @[name] entries on indented lines
+            elif str_eq(field_name, "composes") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                # Check if values on same line (legacy: composes: inline, hot)
+                if cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    composes = cur_val()
+                    advance()
+                    while cur_kind() == TK_COMMA:
+                        advance()
+                        composes = Str.concat(composes, Str.concat(",", cur_val()))
+                        advance()
+                skip_newlines()
+
+                # Indented list: @[name] on each line
+                csi: i32 = ci2
+                while cur_kind() != TK_EOF:
+                    cci: i32 = cur_indent()
+                    if cci <= csi:
+                        break
+                    if cur_kind() == TK_NEWLINE:
+                        skip_newlines()
+                    elif cur_kind() == TK_AT:
+                        advance()
+                        if cur_kind() == TK_LBRACKET:
+                            advance()
+                        cname: str = cur_val()
+                        advance()
+                        # Skip optional params inside composes: @[extern("c")]
+                        if cur_kind() == TK_LPAREN:
+                            advance()
+                            while cur_kind() != TK_RPAREN and cur_kind() != TK_EOF:
+                                advance()
+                            if cur_kind() == TK_RPAREN:
+                                advance()
+                        if cur_kind() == TK_RBRACKET:
+                            advance()
+                        if str_eq(composes, "") == 1:
+                            composes = cname
+                        else:
+                            composes = Str.concat(composes, Str.concat(",", cname))
+                        skip_newlines()
+                    else:
+                        break
+
+            else:
+                # Skip unknown field
+                if cur_kind() == TK_COLON:
+                    advance()
+                while cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    advance()
+                skip_newlines()
+
+    # Build effect string: "llvm:attribute_name"
+    full_effect: str = ""
+    if str_eq(effect_type, "") == 0:
+        full_effect = Str.concat(effect_type, Str.concat(":", effect_data))
+
+    # Register the annotation
+    aidx: i32 = register_annot(aname, targets, full_effect, emit_kind, emit_msg, exclusive, composes)
+    if params_nl != 0 and aidx >= 0:
+        register_annot_params(aidx, params_nl)
+
+    # Create and return the AST node
+    node: i64 = mk_annot_def(aname, targets)
+    Memory.write_i64(node + 24, params_nl)
+    Memory.write_i64(node + 32, effect_type as i64)
+    Memory.write_i64(node + 40, effect_data as i64)
+    Memory.write_i64(node + 48, composes as i64)
+    Memory.write_i64(node + 56, exclusive as i64)
+    Memory.write_i64(node + 64, emit_kind as i64)
+    Memory.write_i64(node + 72, emit_msg as i64)
+    return node
+
 # @transparent struct — parse normally then set flag=2 in stack_alloc field
 fun parse_struct_decl_transparent() -> i64:
     node: i64 = parse_struct_decl(0)
@@ -532,7 +830,7 @@ fun parse_extern_block() -> i64:
         advance()
     skip_newlines()
 
-    funs: i64 = mk_node_list(256)
+    funs: i64 = mk_node_list(1024)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()

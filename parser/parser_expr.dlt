@@ -20,11 +20,15 @@ fun parse_one_arg() -> i64:
 fun parse_arg_list() -> i64:
     args: i64 = mk_node_list(16)
     eat(TK_LPAREN)
+    skip_newlines()
     if cur_kind() != TK_RPAREN:
         nl_add(args, parse_one_arg())
+        skip_newlines()
         while cur_kind() == TK_COMMA:
             advance()
+            skip_newlines()
             nl_add(args, parse_one_arg())
+            skip_newlines()
     eat(TK_RPAREN)
     return args
 
@@ -342,6 +346,7 @@ fun parse_chained_dot(base: i64) -> i64:
 # ==========================================
 fun parse_bracket_literal() -> i64:
     eat(TK_LBRACKET)
+    skip_newlines()
 
     # Empty list/array
     if cur_kind() == TK_RBRACKET:
@@ -351,6 +356,7 @@ fun parse_bracket_literal() -> i64:
 
     # Parse first element
     first_elem: i64 = parse_expression()
+    skip_newlines()
 
     # Check if map literal: [key : value, ...]
     if cur_kind() == TK_COLON:
@@ -358,25 +364,30 @@ fun parse_bracket_literal() -> i64:
         first_val: i64 = parse_expression()
         entries: i64 = mk_node_list(16)
         nl_add(entries, mk_map_entry(first_elem, first_val))
+        skip_newlines()
         while cur_kind() == TK_COMMA:
             advance()
+            skip_newlines()
             if cur_kind() == TK_RBRACKET:
                 break
             mk: i64 = parse_expression()
             eat(TK_COLON)
             mv: i64 = parse_expression()
             nl_add(entries, mk_map_entry(mk, mv))
+            skip_newlines()
         eat(TK_RBRACKET)
         return mk_map_lit(entries)
 
     # Array/list literal: [elem, ...]
-    aelems: i64 = mk_node_list(32)
+    aelems: i64 = mk_node_list(1024)
     nl_add(aelems, first_elem)
     while cur_kind() == TK_COMMA:
         advance()
+        skip_newlines()
         if cur_kind() == TK_RBRACKET:
             break
         nl_add(aelems, parse_expression())
+        skip_newlines()
     eat(TK_RBRACKET)
     return mk_array_lit(aelems)
 

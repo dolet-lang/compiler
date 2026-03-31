@@ -346,7 +346,22 @@ fun infer_expr_type(node: i64) -> str:
         sf_class: str = Memory.read_i64(node + 8) as str
         if is_enum_type(sf_class) == 1:
             return "i32"
-        return "unknown"
+        sf_fname: str = Memory.read_i64(node + 16) as str
+        sf_full: str = Str.concat(Str.concat(sf_class, "__"), sf_fname)
+        sf_looked: str = lookup_static_field_type(sf_full)
+        return sf_looked
+
+    # Builtin intrinsics (@sin, @cos, @sqrt, @pow, @fabs, etc.) return float type
+    if ntype == NODE_BUILTIN_CALL:
+        bi_args: i64 = Memory.read_i64(node + 16)
+        if bi_args != 0:
+            bi_ac: i32 = nl_count(bi_args)
+            if bi_ac > 0:
+                bi_arg0: i64 = nl_get(bi_args, 0)
+                bi_at: str = infer_expr_type(bi_arg0)
+                if str_eq(bi_at, "f32") == 1:
+                    return "f32"
+        return "f64"
 
     return "unknown"
 

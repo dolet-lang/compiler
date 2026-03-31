@@ -113,6 +113,7 @@ TK_ARRAY: i32 = 114
 TK_MODULE: i32 = 116
 TK_EXPORT: i32 = 117
 TK_REQUIRES: i32 = 118
+TK_ANNOT: i32 = 135
 TK_I8: i32 = 120
 TK_I16: i32 = 121
 TK_I32: i32 = 122
@@ -471,6 +472,8 @@ fun resolve_keyword(name: str) -> i32:
         return TK_NOT
     if str_eq(name, "stack") == 1:
         return TK_STACK
+    if str_eq(name, "annot") == 1:
+        return TK_ANNOT
     if str_eq(name, "int") == 1:
         return TK_TYPE
     if str_eq(name, "float") == 1:
@@ -1053,6 +1056,11 @@ NODE_EXPORT: i32 = 161
 NODE_REQUIRES: i32 = 162
 NODE_USE_MODULE: i32 = 163
 
+# Annotation System
+NODE_ANNOT_DEF: i32 = 170
+NODE_ANNOT_PARAM: i32 = 171
+NODE_ANNOT_USE: i32 = 172
+
 # Helpers (not in Python AST but needed for Dolet representation)
 NODE_PARAM: i32 = 150
 NODE_FIELD_VAL: i32 = 151
@@ -1068,7 +1076,7 @@ IMPORT_SELECTIVE_ALIASED: i32 = 4
 # Core Infrastructure
 # ==========================================
 
-NODE_SIZE: i32 = 80
+NODE_SIZE: i32 = 88
 
 fun alloc_node(ntype: i32) -> i64:
     n: i64 = Memory.malloc_zeroed(NODE_SIZE as i64)
@@ -1091,6 +1099,10 @@ fun mk_node_list(cap: i32) -> i64:
 
 fun nl_add(nl: i64, item: i64):
     count: i32 = Memory.read_i32(nl)
+    cap: i32 = Memory.read_i32(nl + 4)
+    if count >= cap:
+        IOOps.io_println(Str.concat("[FATAL] nl_add overflow: count=", Str.concat(Convert.i32_to_str(count), Str.concat(" cap=", Convert.i32_to_str(cap)))))
+        ExitProcess(1)
     off: i64 = 8 + ((count as i64) * 8)
     Memory.write_i64(nl + off, item)
     Memory.write_i32(nl, count + 1)
@@ -2366,6 +2378,27 @@ fun mk_is_not_null(value: i64) -> i64:
 fun isnotnull_value(n: i64) -> i64:
     return Memory.read_i64(n + 8)
 
+# AnnotDefNode: +8=name, +16=targets, +24=params, +32=effect_type, +40=effect_data, +48=composes, +56=exclusive, +64=emit_level, +72=emit_msg
+fun mk_annot_def(name: str, targets: str) -> i64:
+    n: i64 = alloc_node(NODE_ANNOT_DEF)
+    Memory.write_i64(n + 8, name as i64)
+    Memory.write_i64(n + 16, targets as i64)
+    return n
+
+# AnnotParamNode: +8=name, +16=ptype, +24=default_val, +32=is_optional, +40=valid_values
+fun mk_annot_param(name: str, ptype: str) -> i64:
+    n: i64 = alloc_node(NODE_ANNOT_PARAM)
+    Memory.write_i64(n + 8, name as i64)
+    Memory.write_i64(n + 16, ptype as i64)
+    return n
+
+# AnnotUseNode: +8=name, +16=args(nl)
+fun mk_annot_use(name: str, args: i64) -> i64:
+    n: i64 = alloc_node(NODE_ANNOT_USE)
+    Memory.write_i64(n + 8, name as i64)
+    Memory.write_i64(n + 16, args)
+    return n
+
 ##############################
 # Parser Core
 # State, navigation, error handling, token constants, string helpers
@@ -2706,11 +2739,15 @@ fun parse_one_arg() -> i64:
 fun parse_arg_list() -> i64:
     args: i64 = mk_node_list(16)
     eat(TK_LPAREN)
+    skip_newlines()
     if cur_kind() != TK_RPAREN:
         nl_add(args, parse_one_arg())
+        skip_newlines()
         while cur_kind() == TK_COMMA:
             advance()
+            skip_newlines()
             nl_add(args, parse_one_arg())
+            skip_newlines()
     eat(TK_RPAREN)
     return args
 
@@ -3024,6 +3061,7 @@ fun parse_chained_dot(base: i64) -> i64:
 # ==========================================
 fun parse_bracket_literal() -> i64:
     eat(TK_LBRACKET)
+    skip_newlines()
 
     # Empty list/array
     if cur_kind() == TK_RBRACKET:
@@ -3033,6 +3071,7 @@ fun parse_bracket_literal() -> i64:
 
     # Parse first element
     first_elem: i64 = parse_expression()
+    skip_newlines()
 
     # Check if map literal: [key : value, ...]
     if cur_kind() == TK_COLON:
@@ -3040,25 +3079,30 @@ fun parse_bracket_literal() -> i64:
         first_val: i64 = parse_expression()
         entries: i64 = mk_node_list(16)
         nl_add(entries, mk_map_entry(first_elem, first_val))
+        skip_newlines()
         while cur_kind() == TK_COMMA:
             advance()
+            skip_newlines()
             if cur_kind() == TK_RBRACKET:
                 break
             mk: i64 = parse_expression()
             eat(TK_COLON)
             mv: i64 = parse_expression()
             nl_add(entries, mk_map_entry(mk, mv))
+            skip_newlines()
         eat(TK_RBRACKET)
         return mk_map_lit(entries)
 
     # Array/list literal: [elem, ...]
-    aelems: i64 = mk_node_list(32)
+    aelems: i64 = mk_node_list(1024)
     nl_add(aelems, first_elem)
     while cur_kind() == TK_COMMA:
         advance()
+        skip_newlines()
         if cur_kind() == TK_RBRACKET:
             break
         nl_add(aelems, parse_expression())
+        skip_newlines()
     eat(TK_RBRACKET)
     return mk_array_lit(aelems)
 
@@ -4030,6 +4074,312 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
     return mk_struct_decl(name, fields, type_params, base_class, methods, is_abstract, 0, parents)
 
 # @transparent struct — parse normally then set flag=2 in stack_alloc field
+# ==========================================
+# Annotation Definition Parser
+# annot name:
+#     target: fun, struct
+#     param message: str
+#         default: "..."
+#     effect: llvm
+#         attribute: "hot"
+#     emit: warning
+#     composes: inline, hot
+#     mutually_exclusive: noinline
+# ==========================================
+fun parse_annot_def() -> i64:
+    si: i32 = cur_indent()
+    eat(TK_ANNOT)
+
+    aname: str = cur_val()
+    eat(TK_IDENT)
+
+    # Defaults
+    targets: str = ""
+    effect_type: str = ""
+    effect_data: str = ""
+    emit_kind: str = ""
+    emit_msg: str = ""
+    emit_when: str = ""
+    exclusive: str = ""
+    composes: str = ""
+    params_nl: i64 = 0
+
+    # NEW: Parse optional params in parentheses — annot name(p1: type = default):
+    if cur_kind() == TK_LPAREN:
+        advance()
+        params_nl = mk_node_list(8)
+        while cur_kind() != TK_RPAREN and cur_kind() != TK_EOF:
+            # Check for variadic "..."
+            is_variadic: i32 = 0
+            if cur_kind() == TK_ELLIPSIS:
+                is_variadic = 1
+                advance()
+            pname: str = cur_val()
+            eat(TK_IDENT)
+            if cur_kind() == TK_COLON:
+                advance()
+            ptype: str = cur_val()
+            advance()
+            # Check for default value: = value
+            def_val: str = ""
+            if cur_kind() == TK_ASSIGN:
+                advance()
+                def_val = cur_val()
+                advance()
+            pnode: i64 = mk_annot_param(pname, ptype)
+            if str_eq(def_val, "") == 0:
+                Memory.write_i64(pnode + 24, def_val as i64)
+            if is_variadic == 1:
+                Memory.write_i64(pnode + 32, 1)
+            nl_add(params_nl, pnode)
+            if cur_kind() == TK_COMMA:
+                advance()
+        if cur_kind() == TK_RPAREN:
+            advance()
+
+    if cur_kind() == TK_COLON:
+        advance()
+
+    skip_newlines()
+
+    # Parse indented body
+    while cur_kind() != TK_EOF:
+        ci: i32 = cur_indent()
+        if ci <= si:
+            break
+        if cur_kind() == TK_NEWLINE:
+            skip_newlines()
+        elif cur_kind() == TK_EOF:
+            break
+        else:
+            ci2: i32 = cur_indent()
+            if ci2 <= si:
+                break
+
+            field_name: str = cur_val()
+            advance()
+
+            # target: fun, struct
+            if str_eq(field_name, "target") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                targets = cur_val()
+                advance()
+                while cur_kind() == TK_COMMA:
+                    advance()
+                    targets = Str.concat(targets, Str.concat(", ", cur_val()))
+                    advance()
+                skip_newlines()
+
+            # conflicts: [name1, name2] or conflicts: name
+            elif str_eq(field_name, "conflicts") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                if cur_kind() == TK_LBRACKET:
+                    advance()
+                    exclusive = cur_val()
+                    advance()
+                    while cur_kind() == TK_COMMA:
+                        advance()
+                        exclusive = Str.concat(exclusive, Str.concat(",", cur_val()))
+                        advance()
+                    if cur_kind() == TK_RBRACKET:
+                        advance()
+                else:
+                    exclusive = cur_val()
+                    advance()
+                skip_newlines()
+
+            # mutually_exclusive: name (backward compat alias for conflicts)
+            elif str_eq(field_name, "mutually_exclusive") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                exclusive = cur_val()
+                advance()
+                skip_newlines()
+
+            # needs: name (parent required — consume for now)
+            elif str_eq(field_name, "needs") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                # Consume the value (stored for future use)
+                advance()
+                skip_newlines()
+
+            # on: type1, type2 (type constraint — consume for now)
+            elif str_eq(field_name, "on") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                advance()
+                while cur_kind() == TK_COMMA:
+                    advance()
+                    advance()
+                skip_newlines()
+
+            # values param_name: ["a", "b"] (per-param valid values)
+            elif str_eq(field_name, "values") == 1:
+                # values name: [v1, v2, ...]
+                advance()
+                if cur_kind() == TK_COLON:
+                    advance()
+                if cur_kind() == TK_LBRACKET:
+                    advance()
+                while cur_kind() != TK_RBRACKET and cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    advance()
+                    if cur_kind() == TK_COMMA:
+                        advance()
+                if cur_kind() == TK_RBRACKET:
+                    advance()
+                skip_newlines()
+
+            # check param_name: expr (per-param validation — consume for now)
+            elif str_eq(field_name, "check") == 1:
+                # Skip everything until newline
+                while cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    advance()
+                skip_newlines()
+
+            # effect: llvm / codegen / mlir
+            elif str_eq(field_name, "effect") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                effect_type = cur_val()
+                advance()
+                skip_newlines()
+
+                # Parse sub-fields: attribute:, inject_fun:, etc.
+                esi: i32 = ci2
+                while cur_kind() != TK_EOF:
+                    eci: i32 = cur_indent()
+                    if eci <= esi:
+                        break
+                    if cur_kind() == TK_NEWLINE:
+                        skip_newlines()
+                    else:
+                        eci2: i32 = cur_indent()
+                        if eci2 <= esi:
+                            break
+                        esf: str = cur_val()
+                        advance()
+                        if cur_kind() == TK_COLON:
+                            advance()
+                        if str_eq(esf, "attribute") == 1:
+                            effect_data = cur_val()
+                            advance()
+                        else:
+                            # Consume unknown sub-field value
+                            while cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                                advance()
+                        skip_newlines()
+
+            # emit: warning / error — with optional indented when: and message:
+            elif str_eq(field_name, "emit") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                emit_kind = cur_val()
+                advance()
+                skip_newlines()
+
+                # Parse optional sub-fields: when:, message:
+                emsi: i32 = ci2
+                while cur_kind() != TK_EOF:
+                    emci: i32 = cur_indent()
+                    if emci <= emsi:
+                        break
+                    if cur_kind() == TK_NEWLINE:
+                        skip_newlines()
+                    else:
+                        emci2: i32 = cur_indent()
+                        if emci2 <= emsi:
+                            break
+                        emsf: str = cur_val()
+                        advance()
+                        if cur_kind() == TK_COLON:
+                            advance()
+                        if str_eq(emsf, "message") == 1:
+                            emit_msg = cur_val()
+                            advance()
+                        elif str_eq(emsf, "when") == 1:
+                            emit_when = cur_val()
+                            advance()
+                        else:
+                            advance()
+                        skip_newlines()
+
+            # composes: with @[name] entries on indented lines
+            elif str_eq(field_name, "composes") == 1:
+                if cur_kind() == TK_COLON:
+                    advance()
+                # Check if values on same line (legacy: composes: inline, hot)
+                if cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    composes = cur_val()
+                    advance()
+                    while cur_kind() == TK_COMMA:
+                        advance()
+                        composes = Str.concat(composes, Str.concat(",", cur_val()))
+                        advance()
+                skip_newlines()
+
+                # Indented list: @[name] on each line
+                csi: i32 = ci2
+                while cur_kind() != TK_EOF:
+                    cci: i32 = cur_indent()
+                    if cci <= csi:
+                        break
+                    if cur_kind() == TK_NEWLINE:
+                        skip_newlines()
+                    elif cur_kind() == TK_AT:
+                        advance()
+                        if cur_kind() == TK_LBRACKET:
+                            advance()
+                        cname: str = cur_val()
+                        advance()
+                        # Skip optional params inside composes: @[extern("c")]
+                        if cur_kind() == TK_LPAREN:
+                            advance()
+                            while cur_kind() != TK_RPAREN and cur_kind() != TK_EOF:
+                                advance()
+                            if cur_kind() == TK_RPAREN:
+                                advance()
+                        if cur_kind() == TK_RBRACKET:
+                            advance()
+                        if str_eq(composes, "") == 1:
+                            composes = cname
+                        else:
+                            composes = Str.concat(composes, Str.concat(",", cname))
+                        skip_newlines()
+                    else:
+                        break
+
+            else:
+                # Skip unknown field
+                if cur_kind() == TK_COLON:
+                    advance()
+                while cur_kind() != TK_NEWLINE and cur_kind() != TK_EOF:
+                    advance()
+                skip_newlines()
+
+    # Build effect string: "llvm:attribute_name"
+    full_effect: str = ""
+    if str_eq(effect_type, "") == 0:
+        full_effect = Str.concat(effect_type, Str.concat(":", effect_data))
+
+    # Register the annotation
+    aidx: i32 = register_annot(aname, targets, full_effect, emit_kind, emit_msg, exclusive, composes)
+    if params_nl != 0 and aidx >= 0:
+        register_annot_params(aidx, params_nl)
+
+    # Create and return the AST node
+    node: i64 = mk_annot_def(aname, targets)
+    Memory.write_i64(node + 24, params_nl)
+    Memory.write_i64(node + 32, effect_type as i64)
+    Memory.write_i64(node + 40, effect_data as i64)
+    Memory.write_i64(node + 48, composes as i64)
+    Memory.write_i64(node + 56, exclusive as i64)
+    Memory.write_i64(node + 64, emit_kind as i64)
+    Memory.write_i64(node + 72, emit_msg as i64)
+    return node
+
 fun parse_struct_decl_transparent() -> i64:
     node: i64 = parse_struct_decl(0)
     # Set stack_alloc (offset +56) to 2 = transparent marker
@@ -4365,7 +4715,7 @@ fun parse_extern_block() -> i64:
         advance()
     skip_newlines()
 
-    funs: i64 = mk_node_list(256)
+    funs: i64 = mk_node_list(1024)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
@@ -4427,7 +4777,7 @@ fun parse_type_alias_stmt() -> i64:
 # Indented Block Parser
 # ==========================================
 fun parse_indented_block(base_indent: i32) -> i64:
-    body: i64 = mk_node_list(128)
+    body: i64 = mk_node_list(512)
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
         if ci <= base_indent:
@@ -4660,68 +5010,155 @@ fun parse_statement() -> i64:
             return mk_self_field(sfname)
         return mk_self()
 
-    # Annotation: @stack, @heap, @transparent, @inline, etc.
+    # Annotation definition: annot name:
+    if k == TK_ANNOT:
+        return parse_annot_def()
+
+    # Annotation: @stack, @heap, @transparent, @inline, @[deprecated(msg="...")] etc.
     if k == TK_AT:
-        advance()
-        ann_name: str = ""
-        if cur_kind() == TK_IDENT:
-            ann_name = cur_val()
+        # Collect all stacked annotations
+        annot_nodes: i64 = mk_node_list(8)
+        while cur_kind() == TK_AT:
             advance()
-        elif cur_kind() == TK_STACK:
-            ann_name = "stack"
+
+            # Check for @[name(k=v, ...)] bracket syntax
+            use_bracket: i32 = 0
+            if cur_kind() == TK_LBRACKET:
+                use_bracket = 1
+                advance()
+
+            ann_name: str = ""
+            if cur_kind() == TK_IDENT:
+                ann_name = cur_val()
+                advance()
+            elif cur_kind() == TK_STACK:
+                ann_name = "stack"
+                advance()
+
+            # Parse optional arguments: (k=v, k2=v2)
+            ann_args: i64 = 0
+            if cur_kind() == TK_LPAREN:
+                advance()
+                ann_args = mk_node_list(4)
+                while cur_kind() != TK_RPAREN and cur_kind() != TK_EOF:
+                    ak: str = cur_val()
+                    advance()
+                    if cur_kind() == TK_ASSIGN:
+                        advance()
+                        av: str = cur_val()
+                        advance()
+                        # Store as field_val node: +8=key, +16=value
+                        kv_node: i64 = alloc_node(NODE_FIELD_VAL)
+                        Memory.write_i64(kv_node + 8, ak as i64)
+                        Memory.write_i64(kv_node + 16, av as i64)
+                        nl_add(ann_args, kv_node)
+                    if cur_kind() == TK_COMMA:
+                        advance()
+                if cur_kind() == TK_RPAREN:
+                    advance()
+
+            if use_bracket == 1:
+                if cur_kind() == TK_RBRACKET:
+                    advance()
+
+            ann_use: i64 = mk_annot_use(ann_name, ann_args)
+            nl_add(annot_nodes, ann_use)
+
+            # Validate annotation exists in registry
+            aidx: i32 = find_annot(ann_name)
+            if aidx >= 0:
+                # Check mutual exclusivity
+                excl: str = get_annot_exclusive(aidx)
+                if str_eq(excl, "") == 0:
+                    ec: i32 = Memory.read_i32(annot_nodes)
+                    ei: i32 = 0
+                    while ei < ec:
+                        en: i64 = Memory.read_i64(annot_nodes + 8 + (ei * 8) as i64)
+                        ename: str = Memory.read_i64(en + 8) as str
+                        if str_eq(ename, excl) == 1:
+                            IOOps.io_println(Str.concat("[ERROR] @", Str.concat(ann_name, Str.concat(" is mutually exclusive with @", excl))))
+                        ei = ei + 1
+
+            skip_newlines()
+
+        # Now parse the target declaration
+        # Legacy: @transparent/@stack/@heap + struct → keep +56 flag AND attach +80
+        ann_count: i32 = Memory.read_i32(annot_nodes)
+        first_ann_name: str = ""
+        if ann_count > 0:
+            first_ann: i64 = Memory.read_i64(annot_nodes + 8)
+            first_ann_name = Memory.read_i64(first_ann + 8) as str
+
+        if cur_kind() == TK_STRUCT:
+            target_node: i64 = 0
+            # Legacy struct annotations
+            if str_eq(first_ann_name, "transparent") == 1:
+                target_node = parse_struct_decl_transparent()
+            elif str_eq(first_ann_name, "stack") == 1:
+                target_node = parse_struct_decl_stack()
+            elif str_eq(first_ann_name, "heap") == 1:
+                target_node = parse_struct_decl_heap()
+            else:
+                target_node = parse_struct_decl(0)
+            # Attach annotations at +80
+            Memory.write_i64(target_node + 80, annot_nodes)
+            return target_node
+
+        if cur_kind() == TK_FUN:
+            target_node2: i64 = parse_fun_def(0)
+            Memory.write_i64(target_node2 + 80, annot_nodes)
+            return target_node2
+
+        if cur_kind() == TK_ASYNC:
             advance()
-        # @transparent struct → pass flag=2 via stack_alloc field
-        if str_eq(ann_name, "transparent") == 1:
-            if cur_kind() == TK_STRUCT:
-                return parse_struct_decl_transparent()
-        # @stack struct → pass flag=1 (alias for default, stack is the default)
-        if str_eq(ann_name, "stack") == 1:
-            if cur_kind() == TK_STRUCT:
-                return parse_struct_decl_stack()
-        # @heap struct → pass flag=3 via stack_alloc field (explicit heap allocation)
-        if str_eq(ann_name, "heap") == 1:
-            if cur_kind() == TK_STRUCT:
-                return parse_struct_decl_heap()
+            if cur_kind() == TK_FUN:
+                target_node3: i64 = parse_fun_def(1)
+                Memory.write_i64(target_node3 + 80, annot_nodes)
+                return target_node3
+
+        # Annotation on something else — fallthrough, just parse next statement
         return parse_statement()
 
     # Identifier: var decl, assignment, function call, method call
     if k == TK_IDENT:
+        # Context-sensitive list/array/map declarations
+        # "list NAME : TYPE = [...]" — only when followed by another identifier
+        ident_v: str = cur_val()
+        if str_eq(ident_v, "list") == 1:
+            if peek_kind(1) == TK_IDENT:
+                advance()
+                lname: str = cur_val()
+                eat(TK_IDENT)
+                ltype: str = ""
+                if cur_kind() == TK_COLON:
+                    advance()
+                    ltype = parse_type_name()
+                eat(TK_ASSIGN)
+                lval: i64 = parse_expression()
+                return mk_list_decl(lname, lval, ltype, 0)
+        if str_eq(ident_v, "array") == 1:
+            if peek_kind(1) == TK_IDENT:
+                advance()
+                aname: str = cur_val()
+                eat(TK_IDENT)
+                atype: str = ""
+                if cur_kind() == TK_COLON:
+                    advance()
+                    atype = parse_type_name()
+                eat(TK_ASSIGN)
+                aval: i64 = parse_expression()
+                return mk_array_decl(aname, 0, atype, 0)
+        if str_eq(ident_v, "map") == 1:
+            if peek_kind(1) == TK_IDENT:
+                advance()
+                mname: str = cur_val()
+                eat(TK_IDENT)
+                eat(TK_ASSIGN)
+                mval: i64 = parse_expression()
+                return mk_map_decl(mname, 0, "", "", 0)
         # Check if it's a variable declaration: Name : type
         # or assignment, function call, etc.
         return parse_var_decl_ident()
-
-    # List/Array/Map declarations
-    if k == TK_LIST:
-        advance()
-        lname: str = cur_val()
-        eat(TK_IDENT)
-        ltype: str = ""
-        if cur_kind() == TK_COLON:
-            advance()
-            ltype = parse_type_name()
-        eat(TK_ASSIGN)
-        lval: i64 = parse_expression()
-        return mk_list_decl(lname, 0, ltype, 0)
-
-    if k == TK_ARRAY:
-        advance()
-        aname: str = cur_val()
-        eat(TK_IDENT)
-        atype: str = ""
-        if cur_kind() == TK_COLON:
-            advance()
-            atype = parse_type_name()
-        eat(TK_ASSIGN)
-        aval: i64 = parse_expression()
-        return mk_array_decl(aname, 0, atype, 0)
-
-    if k == TK_MAP:
-        advance()
-        mname: str = cur_val()
-        eat(TK_IDENT)
-        eat(TK_ASSIGN)
-        mval: i64 = parse_expression()
-        return mk_map_decl(mname, 0, "", "", 0)
 
     panic(@"Unknown statement: kind={k} val='{cur_val()}'")
     return 0
@@ -4842,10 +5279,13 @@ fun init_ast_constants():
     NODE_EXPORT = 161
     NODE_REQUIRES = 162
     NODE_USE_MODULE = 163
+    NODE_ANNOT_DEF = 170
+    NODE_ANNOT_PARAM = 171
+    NODE_ANNOT_USE = 172
     NODE_PARAM = 150
     NODE_FIELD_VAL = 151
     NODE_MAP_ENTRY = 152
-    NODE_SIZE = 80
+    NODE_SIZE = 88
     IMPORT_FULL = 1
     IMPORT_FROM = 2
     IMPORT_AS = 3
@@ -4879,6 +5319,7 @@ fun init_codegen():
     g_cur_method_struct = ""
     g_break_label = ""
     g_continue_label = ""
+    init_fn_annot_registry()
 
 fun emit(line: str):
     if g_out_count >= g_out_cap:
@@ -4995,6 +5436,9 @@ fun gen_string_const(text: str) -> str:
             return Memory.read_i64(g_str_labels + off) as str
         i = i + 1
     # Register new
+    if g_str_count >= g_str_cap:
+        IOOps.io_println("[ERROR] String pool overflow!")
+        return ""
     label: str = new_str_label()
     slen: i64 = escaped_byte_len(text) + 1
     off2: i64 = (g_str_count as i64) * 8
@@ -5116,9 +5560,9 @@ g_fun_sig_ret: i64 = 0
 g_fun_sig_count: i32 = 0
 
 fun init_fun_sigs():
-    g_fun_sig_names = Memory.malloc_zeroed(2048 * 8)
-    g_fun_sig_ret = Memory.malloc_zeroed(2048 * 8)
-    g_fun_sig_params = Memory.malloc_zeroed(2048 * 8)
+    g_fun_sig_names = Memory.malloc_zeroed(8192 * 8)
+    g_fun_sig_ret = Memory.malloc_zeroed(8192 * 8)
+    g_fun_sig_params = Memory.malloc_zeroed(8192 * 8)
     g_fun_sig_count = 0
 
 g_fun_sig_params: i64 = 0
@@ -5131,6 +5575,9 @@ fun register_fun_sig(name: str, ret_type: str):
     g_fun_sig_count = g_fun_sig_count + 1
 
 fun register_fun_sig_with_params(name: str, ret_type: str, param_types: str):
+    if g_fun_sig_count >= 8192:
+        IOOps.io_println("[FATAL] Function signature registry overflow!")
+        return
     off: i64 = (g_fun_sig_count as i64) * 8
     Memory.write_i64(g_fun_sig_names + off, name as i64)
     Memory.write_i64(g_fun_sig_ret + off, ret_type as i64)
@@ -5426,23 +5873,69 @@ fun is_global_var(name: str) -> i32:
         i = i + 1
     return 0
 
+# Global List Variables (list declarations at top level)
+g_global_list_names: i64 = 0
+g_global_list_nodes: i64 = 0
+g_global_list_count: i32 = 0
+
+fun init_global_lists():
+    g_global_list_names = Memory.malloc_zeroed(256 * 8)
+    g_global_list_nodes = Memory.malloc_zeroed(256 * 8)
+    g_global_list_count = 0
+
+fun register_global_list(name: str, node: i64):
+    off: i64 = (g_global_list_count as i64) * 8
+    Memory.write_i64(g_global_list_names + off, name as i64)
+    Memory.write_i64(g_global_list_nodes + off, node)
+    g_global_list_count = g_global_list_count + 1
+
+fun is_global_list(name: str) -> i32:
+    i: i32 = 0
+    while i < g_global_list_count:
+        off: i64 = (i as i64) * 8
+        gn: str = Memory.read_i64(g_global_list_names + off) as str
+        if str_eq(gn, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
 # ==========================================
 # Static Fields Tracking
 # ==========================================
 g_sf_names: i64 = 0
 g_sf_types: i64 = 0
+g_sf_defaults: i64 = 0
 g_static_field_count: i32 = 0
 
 fun init_static_fields():
     g_sf_names = Memory.malloc_zeroed(1024 * 8)
     g_sf_types = Memory.malloc_zeroed(1024 * 8)
+    g_sf_defaults = Memory.malloc_zeroed(1024 * 8)
     g_static_field_count = 0
 
 fun register_static_field(full_name: str, ftype: str):
     off: i64 = (g_static_field_count as i64) * 8
     Memory.write_i64(g_sf_names + off, full_name as i64)
     Memory.write_i64(g_sf_types + off, ftype as i64)
+    Memory.write_i64(g_sf_defaults + off, 0)
     g_static_field_count = g_static_field_count + 1
+
+fun register_static_field_with_default(full_name: str, ftype: str, def_node: i64):
+    off: i64 = (g_static_field_count as i64) * 8
+    Memory.write_i64(g_sf_names + off, full_name as i64)
+    Memory.write_i64(g_sf_types + off, ftype as i64)
+    Memory.write_i64(g_sf_defaults + off, def_node)
+    g_static_field_count = g_static_field_count + 1
+
+fun lookup_static_field_type(full_name: str) -> str:
+    i: i32 = 0
+    while i < g_static_field_count:
+        off: i64 = (i as i64) * 8
+        n: str = Memory.read_i64(g_sf_names + off) as str
+        if str_eq(n, full_name) == 1:
+            return Memory.read_i64(g_sf_types + off) as str
+        i = i + 1
+    return "i64"
 
 # ==========================================
 # Impl Method Registry
@@ -5459,6 +5952,9 @@ fun init_impl_registry():
     g_impl_count = 0
 
 fun register_impl_method(sname: str, mname: str, mnode: i64):
+    if g_impl_count >= 2048:
+        IOOps.io_println("[FATAL] Impl method registry overflow!")
+        return
     off: i64 = (g_impl_count as i64) * 8
     Memory.write_i64(g_impl_struct + off, sname as i64)
     Memory.write_i64(g_impl_method_name + off, mname as i64)
@@ -5485,6 +5981,279 @@ g_cur_fn_name: str = ""
 g_cur_method_struct: str = ""
 g_break_label: str = ""
 g_continue_label: str = ""
+
+# ==========================================
+# Annotation Registry
+# Parallel arrays storing custom annotation definitions
+g_annot_names: i64 = 0
+g_annot_targets: i64 = 0
+g_annot_effects: i64 = 0
+g_annot_emit_kinds: i64 = 0
+g_annot_emit_msgs: i64 = 0
+g_annot_exclusives: i64 = 0
+g_annot_composes_list: i64 = 0
+g_annot_param_lists: i64 = 0
+g_annot_count: i32 = 0
+MAX_ANNOTS: i32 = 256
+
+fun init_annot_registry():
+    MAX_ANNOTS = 256
+    g_annot_names = Memory.malloc_zeroed(2048)
+    g_annot_targets = Memory.malloc_zeroed(2048)
+    g_annot_effects = Memory.malloc_zeroed(2048)
+    g_annot_emit_kinds = Memory.malloc_zeroed(2048)
+    g_annot_emit_msgs = Memory.malloc_zeroed(2048)
+    g_annot_exclusives = Memory.malloc_zeroed(2048)
+    g_annot_composes_list = Memory.malloc_zeroed(2048)
+    g_annot_param_lists = Memory.malloc_zeroed(2048)
+    g_annot_count = 0
+
+fun register_annot(name: str, targets: str, effect: str, emit_kind: str, emit_msg: str, exclusive: str, composes: str) -> i32:
+    idx: i32 = g_annot_count
+    if idx >= MAX_ANNOTS:
+        IOOps.io_println("[ERROR] Annotation registry overflow")
+        return -1
+    Memory.write_i64(g_annot_names + (idx * 8) as i64, name as i64)
+    Memory.write_i64(g_annot_targets + (idx * 8) as i64, targets as i64)
+    Memory.write_i64(g_annot_effects + (idx * 8) as i64, effect as i64)
+    Memory.write_i64(g_annot_emit_kinds + (idx * 8) as i64, emit_kind as i64)
+    Memory.write_i64(g_annot_emit_msgs + (idx * 8) as i64, emit_msg as i64)
+    Memory.write_i64(g_annot_exclusives + (idx * 8) as i64, exclusive as i64)
+    Memory.write_i64(g_annot_composes_list + (idx * 8) as i64, composes as i64)
+    Memory.write_i64(g_annot_param_lists + (idx * 8) as i64, 0)
+    g_annot_count = idx + 1
+    return idx
+
+fun register_annot_params(annot_idx: i32, params_nl: i64):
+    if annot_idx >= 0 and annot_idx < g_annot_count:
+        Memory.write_i64(g_annot_param_lists + (annot_idx * 8) as i64, params_nl)
+
+fun find_annot(name: str) -> i32:
+    i: i32 = 0
+    while i < g_annot_count:
+        aname: str = Memory.read_i64(g_annot_names + (i * 8) as i64) as str
+        if str_eq(aname, name) == 1:
+            return i
+        i = i + 1
+    return -1
+
+fun get_annot_target(idx: i32) -> str:
+    return Memory.read_i64(g_annot_targets + (idx * 8) as i64) as str
+
+fun get_annot_effect(idx: i32) -> str:
+    return Memory.read_i64(g_annot_effects + (idx * 8) as i64) as str
+
+fun get_annot_emit_kind(idx: i32) -> str:
+    return Memory.read_i64(g_annot_emit_kinds + (idx * 8) as i64) as str
+
+fun get_annot_emit_msg(idx: i32) -> str:
+    return Memory.read_i64(g_annot_emit_msgs + (idx * 8) as i64) as str
+
+fun get_annot_exclusive(idx: i32) -> str:
+    return Memory.read_i64(g_annot_exclusives + (idx * 8) as i64) as str
+
+fun get_annot_composes(idx: i32) -> str:
+    return Memory.read_i64(g_annot_composes_list + (idx * 8) as i64) as str
+
+fun get_annot_params(idx: i32) -> i64:
+    return Memory.read_i64(g_annot_param_lists + (idx * 8) as i64)
+
+fun target_allows(targets: str, kind: str) -> i32:
+    # Check if 'kind' is in comma-separated 'targets' string
+    # Simple: check if targets contains the kind substring
+    if str_eq(targets, kind) == 1:
+        return 1
+    # Check for "fun, struct" style — look for ",kind" or "kind,"
+    tlen: i32 = Memory.strlen(targets as i64)
+    klen: i32 = Memory.strlen(kind as i64)
+    pos: i32 = 0
+    while pos <= (tlen - klen):
+        matched: i32 = 1
+        j: i32 = 0
+        while j < klen:
+            tc: i32 = Memory.read_i8((targets as i64) + (pos + j) as i64) as i32
+            kc: i32 = Memory.read_i8((kind as i64) + j as i64) as i32
+            if tc != kc:
+                matched = 0
+                j = klen
+            j = j + 1
+        if matched == 1:
+            # Verify word boundary: before must be start or comma/space, after must be end or comma/space
+            ok_before: i32 = 0
+            if pos == 0:
+                ok_before = 1
+            else:
+                cb: i32 = Memory.read_i8((targets as i64) + (pos - 1) as i64) as i32
+                if cb == 44 or cb == 32:
+                    ok_before = 1
+            ok_after: i32 = 0
+            if (pos + klen) >= tlen:
+                ok_after = 1
+            else:
+                ca: i32 = Memory.read_i8((targets as i64) + (pos + klen) as i64) as i32
+                if ca == 44 or ca == 32:
+                    ok_after = 1
+            if ok_before == 1 and ok_after == 1:
+                return 1
+        pos = pos + 1
+    return 0
+
+fun init_builtin_annots():
+    # Struct allocation annotations (legacy compat)
+    register_annot("transparent", "struct", "", "", "", "", "")
+    register_annot("stack", "struct", "", "", "", "", "")
+    register_annot("heap", "struct", "", "", "", "", "")
+    # LLVM function attributes
+    register_annot("inline", "fun", "llvm:alwaysinline", "", "", "", "")
+    register_annot("noinline", "fun", "llvm:noinline", "", "", "inline", "")
+    register_annot("hot", "fun", "llvm:hot", "", "", "", "")
+    register_annot("cold", "fun", "llvm:cold", "", "", "hot", "")
+    register_annot("pure", "fun", "llvm:readnone", "", "", "", "")
+    register_annot("noreturn", "fun", "llvm:noreturn", "", "", "", "")
+    # Compiler messages
+    register_annot("deprecated", "fun, struct", "", "warning", "this symbol is deprecated", "", "")
+    register_annot("must_use", "fun", "", "error", "return value must be used", "", "")
+
+# Check if a node has a specific annotation in its +80 annotation list
+fun node_has_annot(node: i64, annot_name: str) -> i32:
+    annot_list: i64 = Memory.read_i64(node + 80)
+    if annot_list == 0:
+        return 0
+    count: i32 = Memory.read_i32(annot_list)
+    i: i32 = 0
+    while i < count:
+        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        aname: str = Memory.read_i64(anode + 8) as str
+        if str_eq(aname, annot_name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+# Get annotation use node from a declaration node's +80 list
+fun get_annot_use(node: i64, annot_name: str) -> i64:
+    annot_list: i64 = Memory.read_i64(node + 80)
+    if annot_list == 0:
+        return 0
+    count: i32 = Memory.read_i32(annot_list)
+    i: i32 = 0
+    while i < count:
+        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        aname: str = Memory.read_i64(anode + 8) as str
+        if str_eq(aname, annot_name) == 1:
+            return anode
+        i = i + 1
+    return 0
+
+# Function annotation tracking (by mangled name)
+# Records which functions have specific annotations for call-site checks
+g_fn_annot_names: i64 = 0
+g_fn_annot_flags: i64 = 0
+g_fn_annot_msgs: i64 = 0
+g_fn_annot_count: i32 = 0
+MAX_FN_ANNOTS: i32 = 1024
+
+fun init_fn_annot_registry():
+    MAX_FN_ANNOTS = 1024
+    g_fn_annot_names = Memory.malloc_zeroed(8192)
+    g_fn_annot_flags = Memory.malloc_zeroed(8192)
+    g_fn_annot_msgs = Memory.malloc_zeroed(8192)
+    g_fn_annot_count = 0
+
+# flags: 1=deprecated, 2=must_use
+fun register_fn_annot(fname: str, flags: i32, msg: str):
+    idx: i32 = g_fn_annot_count
+    if idx >= MAX_FN_ANNOTS:
+        return
+    Memory.write_i64(g_fn_annot_names + (idx * 8) as i64, fname as i64)
+    Memory.write_i32(g_fn_annot_flags + (idx * 4) as i64, flags)
+    Memory.write_i64(g_fn_annot_msgs + (idx * 8) as i64, msg as i64)
+    g_fn_annot_count = idx + 1
+
+fun get_fn_annot_flags(fname: str) -> i32:
+    i: i32 = 0
+    while i < g_fn_annot_count:
+        fn: str = Memory.read_i64(g_fn_annot_names + (i * 8) as i64) as str
+        if str_eq(fn, fname) == 1:
+            return Memory.read_i32(g_fn_annot_flags + (i * 4) as i64)
+        i = i + 1
+    return 0
+
+fun get_fn_annot_msg(fname: str) -> str:
+    i: i32 = 0
+    while i < g_fn_annot_count:
+        fn: str = Memory.read_i64(g_fn_annot_names + (i * 8) as i64) as str
+        if str_eq(fn, fname) == 1:
+            return Memory.read_i64(g_fn_annot_msgs + (i * 8) as i64) as str
+        i = i + 1
+    return ""
+
+# Check if string starts with "llvm:" (5 chars: l=108, l=108, v=118, m=109, :=58)
+fun starts_with_llvm(s: str) -> i32:
+    if Memory.strlen(s as i64) < 6:
+        return 0
+    c0: i32 = Memory.read_i8((s as i64) + 0) as i32
+    c1: i32 = Memory.read_i8((s as i64) + 1) as i32
+    c2: i32 = Memory.read_i8((s as i64) + 2) as i32
+    c3: i32 = Memory.read_i8((s as i64) + 3) as i32
+    c4: i32 = Memory.read_i8((s as i64) + 4) as i32
+    if c0 == 108 and c1 == 108 and c2 == 118 and c3 == 109 and c4 == 58:
+        return 1
+    return 0
+
+# Collect all LLVM passthrough attributes from an annotation name, expanding composes
+fun collect_llvm_attrs_for_annot(aname: str, acc: str) -> str:
+    aidx: i32 = find_annot(aname)
+    if aidx < 0:
+        return acc
+    out: str = acc
+    # Direct effect
+    aeff: str = get_annot_effect(aidx)
+    if starts_with_llvm(aeff) == 1:
+        attr_name: str = Str.substring(aeff, 5, Memory.strlen(aeff as i64))
+        if str_eq(out, "") == 1:
+            out = Str.concat("\"", Str.concat(attr_name, "\""))
+        else:
+            out = Str.concat(out, Str.concat(", \"", Str.concat(attr_name, "\"")))
+    # Composed annotations (comma-separated names)
+    comp: str = get_annot_composes(aidx)
+    if str_eq(comp, "") == 0:
+        # Parse comma-separated composed annotation names
+        clen: i32 = Memory.strlen(comp as i64)
+        cstart: i32 = 0
+        cpos: i32 = 0
+        while cpos <= clen:
+            ch: i32 = 0
+            if cpos < clen:
+                ch = Memory.read_i8((comp as i64) + cpos as i64) as i32
+            if cpos == clen or ch == 44:
+                # Extract name from cstart to cpos
+                cname: str = Str.substring(comp, cstart, cpos)
+                # Skip leading spaces
+                while Memory.strlen(cname as i64) > 0:
+                    fc: i32 = Memory.read_i8(cname as i64) as i32
+                    if fc == 32:
+                        cname = Str.substring(cname, 1, Memory.strlen(cname as i64))
+                    else:
+                        break
+                if str_eq(cname, "") == 0:
+                    out = collect_llvm_attrs_for_annot(cname, out)
+                cstart = cpos + 1
+            cpos = cpos + 1
+    return out
+
+# Collect LLVM attrs from annotation node list at +80
+fun collect_llvm_attrs_from_list(annot_list: i64) -> str:
+    if annot_list == 0:
+        return ""
+    acc2: str = ""
+    ac: i32 = Memory.read_i32(annot_list)
+    ai: i32 = 0
+    while ai < ac:
+        an: i64 = Memory.read_i64(annot_list + 8 + (ai * 8) as i64)
+        aname: str = Memory.read_i64(an + 8) as str
+        acc2 = collect_llvm_attrs_for_annot(aname, acc2)
+        ai = ai + 1
+    return acc2
 
 # ==========================================
 # MLIR Type Mapping
@@ -5945,6 +6714,7 @@ fun init_all_registries():
     init_alias_registry()
     init_enum_registry()
     init_global_vars()
+    init_global_lists()
     init_static_fields()
     init_impl_registry()
     init_overload_registry()
@@ -6669,6 +7439,16 @@ fun infer_expr_type(node: i64) -> str:
                 return fa_ft
         return "unknown"
 
+    if ntype == NODE_NESTED_FIELD:
+        nf_base: i64 = Memory.read_i64(node + 8)
+        nf_fname: str = Memory.read_i64(node + 16) as str
+        nf_base_type: str = infer_expr_type(nf_base)
+        if str_eq(nf_base_type, "") == 0 and str_eq(nf_base_type, "unknown") == 0:
+            nf_ft: str = get_field_type(nf_base_type, nf_fname)
+            if str_eq(nf_ft, "") == 0 and str_eq(nf_ft, "unknown") == 0:
+                return nf_ft
+        return "unknown"
+
     if ntype == NODE_SELF_FIELD:
         sf_field: str = Memory.read_i64(node + 8) as str
         sf_struct: str = g_cur_method_struct
@@ -6715,11 +7495,24 @@ fun infer_expr_type(node: i64) -> str:
         sf_class: str = Memory.read_i64(node + 8) as str
         if is_enum_type(sf_class) == 1:
             return "i32"
-        return "unknown"
+        sf_fname: str = Memory.read_i64(node + 16) as str
+        sf_full: str = Str.concat(Str.concat(sf_class, "__"), sf_fname)
+        sf_looked: str = lookup_static_field_type(sf_full)
+        return sf_looked
+
+    # Builtin intrinsics (@sin, @cos, @sqrt, @pow, @fabs, etc.) return float type
+    if ntype == NODE_BUILTIN_CALL:
+        bi_args: i64 = Memory.read_i64(node + 16)
+        if bi_args != 0:
+            bi_ac: i32 = nl_count(bi_args)
+            if bi_ac > 0:
+                bi_arg0: i64 = nl_get(bi_args, 0)
+                bi_at: str = infer_expr_type(bi_arg0)
+                if str_eq(bi_at, "f32") == 1:
+                    return "f32"
+        return "f64"
 
     return "unknown"
-
-# ==========================================
 # Struct Field Index / Size
 # ==========================================
 fun get_field_index(struct_name: str, field_name: str) -> i32:
@@ -6946,6 +7739,10 @@ fun gen_expr(node: i64, expected: str) -> str:
     # Field access
     if nt == NODE_FIELD_ACCESS:
         return gen_field_access(node)
+
+    # Nested field access (e.g., state.Gamepad.bLeftTrigger)
+    if nt == NODE_NESTED_FIELD:
+        return gen_nested_field_access(node, expected)
 
     # Self field access
     if nt == NODE_SELF_FIELD:
@@ -8047,9 +8844,12 @@ fun gen_static_field_assignment(node: i64):
 
     full: str = Str.concat(Str.concat(sname, "__"), fname)
     ga: str = emit_addr_of(full)
-    # Infer type (TODO: look up from static fields registry)
-    val: str = gen_expr(val_node, "i64")
-    emit_store(val, ga, "i64")
+    sf_type: str = lookup_static_field_type(full)
+    val: str = gen_expr(val_node, sf_type)
+    actual_t: str = infer_expr_type(val_node)
+    if str_eq(actual_t, sf_type) == 0 and str_eq(actual_t, "unknown") == 0:
+        val = implicit_cast(val, actual_t, sf_type)
+    emit_store(val, ga, sf_type)
 
 # ==========================================
 # Block Always Returns? (for branch optimization)
@@ -8607,6 +9407,32 @@ fun copy_struct_local(src_ptr: str, sname: str) -> str:
         fi = fi + 1
     return dest
 
+# List declaration statement handler
+# NODE_LIST_DECL: +8=name, +16=init_value (array lit node), +24=element_type, +32=is_const
+fun gen_list_decl_stmt(node: i64):
+    name: str = Memory.read_i64(node + 8) as str
+    init_val: i64 = Memory.read_i64(node + 16)
+    etype: str = Memory.read_i64(node + 24) as str
+
+    if is_global_list(name) == 1 and g_in_function == 0:
+        # Global list: generate init value and store to global
+        if init_val != 0:
+            lval: str = gen_expr(init_val, "list")
+            ga: str = emit_addr_of(name)
+            emit_store(lval, ga, "!llvm.ptr")
+        return
+
+    # Local list: allocate alloca and store
+    alloc: str = emit_alloca("!llvm.ptr")
+    alloc_name: str = str_from_range(alloc, 1, Memory.strlen(alloc))
+    add_variable(name, alloc_name, "list", 0, 0)
+    if init_val != 0:
+        lval2: str = gen_expr(init_val, "list")
+        emit_store(lval2, alloc, "!llvm.ptr")
+    else:
+        z: str = emit_zero_ptr()
+        emit_store(z, alloc, "!llvm.ptr")
+
 fun gen_var_decl(node: i64):
     vtype: str = Memory.read_i64(node + 8) as str
     name: str = Memory.read_i64(node + 16) as str
@@ -8736,9 +9562,12 @@ fun gen_statement(node: i64):
     elif nt == NODE_ARRAY_DECL:
         gen_var_decl(node)
     elif nt == NODE_LIST_DECL:
-        gen_var_decl(node)
+        gen_list_decl_stmt(node)
     elif nt == NODE_MAP_DECL:
         gen_var_decl(node)
+    elif nt == NODE_ANNOT_DEF:
+        # Annotation definitions are processed at parse time, no codegen needed
+        return
 
 # ==========================================
 # Generate a Block of Statements
@@ -8779,6 +9608,28 @@ fun gen_fun_def(node: i64):
         return
     mark_fn_emitted(mlir_fname)
 
+    # Register function-level annotations for call-site checking
+    fn_annot_list: i64 = Memory.read_i64(node + 80)
+    if fn_annot_list != 0:
+        fn_ac: i32 = Memory.read_i32(fn_annot_list)
+        fn_ai: i32 = 0
+        while fn_ai < fn_ac:
+            fn_an: i64 = Memory.read_i64(fn_annot_list + 8 + (fn_ai * 8) as i64)
+            fn_aname: str = Memory.read_i64(fn_an + 8) as str
+            fn_aidx: i32 = find_annot(fn_aname)
+            if fn_aidx >= 0:
+                fn_ek: str = get_annot_emit_kind(fn_aidx)
+                if str_eq(fn_ek, "") == 0:
+                    fn_em: str = get_annot_emit_msg(fn_aidx)
+                    fn_flags: i32 = 0
+                    if str_eq(fn_aname, "deprecated") == 1:
+                        fn_flags = 1
+                    elif str_eq(fn_aname, "must_use") == 1:
+                        fn_flags = 2
+                    if fn_flags > 0:
+                        register_fn_annot(mlir_fname, fn_flags, fn_em)
+            fn_ai = fn_ai + 1
+
     # Reset tmp counter for each function
     g_tmp_counter = 0
 
@@ -8809,11 +9660,18 @@ fun gen_fun_def(node: i64):
         ret_mt = mlir_type(ret_type)
         has_return = 1
 
+    # Collect LLVM passthrough attributes from annotations (with composes expansion)
+    attr_str: str = collect_llvm_attrs_from_list(Memory.read_i64(node + 80))
+
     # Emit function header (using mangled name)
+    func_attrs: str = ""
+    if str_eq(attr_str, "") == 0:
+        func_attrs = Str.concat(" attributes { passthrough = [", Str.concat(attr_str, "] }"))
+
     if has_return == 1:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, " {"))))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, Str.concat(func_attrs, " {")))))
     else:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), ") {"))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), Str.concat(")", Str.concat(func_attrs, " {"))))
     indent_inc()
 
     # Set up function context
@@ -8907,6 +9765,28 @@ fun gen_method_def(struct_name: str, node: i64):
     # Resolve overloaded name
     mangled: str = resolve_overload(base_mangled, mpt_str)
 
+    # Register method-level annotations for call-site checking
+    mt_annot_list: i64 = Memory.read_i64(node + 80)
+    if mt_annot_list != 0:
+        mt_ac: i32 = Memory.read_i32(mt_annot_list)
+        mt_ai: i32 = 0
+        while mt_ai < mt_ac:
+            mt_an: i64 = Memory.read_i64(mt_annot_list + 8 + (mt_ai * 8) as i64)
+            mt_aname: str = Memory.read_i64(mt_an + 8) as str
+            mt_aidx: i32 = find_annot(mt_aname)
+            if mt_aidx >= 0:
+                mt_ek: str = get_annot_emit_kind(mt_aidx)
+                if str_eq(mt_ek, "") == 0:
+                    mt_em: str = get_annot_emit_msg(mt_aidx)
+                    mt_flags: i32 = 0
+                    if str_eq(mt_aname, "deprecated") == 1:
+                        mt_flags = 1
+                    elif str_eq(mt_aname, "must_use") == 1:
+                        mt_flags = 2
+                    if mt_flags > 0:
+                        register_fn_annot(mangled, mt_flags, mt_em)
+            mt_ai = mt_ai + 1
+
     g_tmp_counter = 0
 
     # Build param list
@@ -8996,10 +9876,17 @@ fun gen_method_def(struct_name: str, node: i64):
         ret_mt = mlir_type(ret_type)
         has_return = 1
 
+    # Collect LLVM passthrough attributes from method annotations (with composes expansion)
+    m_attr_str: str = collect_llvm_attrs_from_list(Memory.read_i64(node + 80))
+
+    m_func_attrs: str = ""
+    if str_eq(m_attr_str, "") == 0:
+        m_func_attrs = Str.concat(" attributes { passthrough = [", Str.concat(m_attr_str, "] }"))
+
     if has_return == 1:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, " {"))))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, Str.concat(m_func_attrs, " {")))))
     else:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), ") {"))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), Str.concat(")", Str.concat(m_func_attrs, " {"))))
     indent_inc()
 
     old_in_fn: i32 = g_in_function
@@ -9059,19 +9946,29 @@ fun register_extern_sigs(node: i64):
         return
     fc: i32 = nl_count(funcs)
     ri: i32 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    fn_node: i64 = 0
+    fname: str = ""
+    params: i64 = 0
+    ret_type: str = ""
+    pts: str = ""
+    pc: i32 = 0
+    pi: i32 = 0
+    pnode: i64 = 0
+    ptype: str = ""
     while ri < fc:
-        fn_node: i64 = nl_get(funcs, ri)
-        fname: str = Memory.read_i64(fn_node + 8) as str
-        params: i64 = Memory.read_i64(fn_node + 16)
-        ret_type: str = Memory.read_i64(fn_node + 24) as str
+        fn_node = nl_get(funcs, ri)
+        fname = Memory.read_i64(fn_node + 8) as str
+        params = Memory.read_i64(fn_node + 16)
+        ret_type = Memory.read_i64(fn_node + 24) as str
         # Build comma-separated param types
-        pts: str = ""
+        pts = ""
         if params != 0:
-            pc: i32 = nl_count(params)
-            pi: i32 = 0
+            pc = nl_count(params)
+            pi = 0
             while pi < pc:
-                pnode: i64 = nl_get(params, pi)
-                ptype: str = Memory.read_i64(pnode + 16) as str
+                pnode = nl_get(params, pi)
+                ptype = Memory.read_i64(pnode + 16) as str
                 if pi > 0:
                     pts = Str.concat(pts, ",")
                 pts = Str.concat(pts, ptype)
@@ -9087,28 +9984,40 @@ fun gen_extern_block(node: i64):
 
     fc: i32 = nl_count(funcs)
     i: i32 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    fn_node: i64 = 0
+    fname: str = ""
+    params: i64 = 0
+    ret_type: str = ""
+    param_str: str = ""
+    pc: i32 = 0
+    j: i32 = 0
+    pnode: i64 = 0
+    ptype: str = ""
+    pmt: str = ""
+    ret_mt: str = ""
     while i < fc:
-        fn_node: i64 = nl_get(funcs, i)
-        fname: str = Memory.read_i64(fn_node + 8) as str
-        params: i64 = Memory.read_i64(fn_node + 16)
-        ret_type: str = Memory.read_i64(fn_node + 24) as str
+        fn_node = nl_get(funcs, i)
+        fname = Memory.read_i64(fn_node + 8) as str
+        params = Memory.read_i64(fn_node + 16)
+        ret_type = Memory.read_i64(fn_node + 24) as str
 
         # Build param types
-        param_str: str = ""
-        pc: i32 = 0
+        param_str = ""
+        pc = 0
         if params != 0:
             pc = nl_count(params)
-        j: i32 = 0
+        j = 0
         while j < pc:
-            pnode: i64 = nl_get(params, j)
-            ptype: str = Memory.read_i64(pnode + 16) as str
-            pmt: str = mlir_type(ptype)
+            pnode = nl_get(params, j)
+            ptype = Memory.read_i64(pnode + 16) as str
+            pmt = mlir_type(ptype)
             if j > 0:
                 param_str = Str.concat(param_str, ", ")
             param_str = Str.concat(param_str, pmt)
             j = j + 1
 
-        ret_mt: str = ""
+        ret_mt = ""
         if str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
             ret_mt = mlir_type(ret_type)
 
@@ -9249,6 +10158,70 @@ fun gen_field_access(node: i64) -> str:
     return val
 
 # ==========================================
+# Nested Field Access (e.g., state.Gamepad.bLeftTrigger)
+# ==========================================
+fun gen_nested_field_access(node: i64, expected: str) -> str:
+    base_node: i64 = Memory.read_i64(node + 8)
+    field_name: str = Memory.read_i64(node + 16) as str
+
+    # Build GEP chain: resolve base to a pointer (without final load)
+    base_ptr: str = gen_nested_field_ptr(base_node)
+
+    # Get type of the base expression
+    base_type: str = infer_expr_type(base_node)
+
+    # GEP into the sub-struct for the nested field
+    fidx2: i32 = get_field_index(base_type, field_name)
+    ftype2: str = get_field_type(base_type, field_name)
+    mt2: str = mlir_type(ftype2)
+
+    struct_mlir2: str = get_struct_mlir_type(base_type)
+    fp2: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(fp2, " = llvm.getelementptr "), base_ptr), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx2 as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir2))))
+
+    val2: str = emit_load(fp2, mt2)
+    return val2
+
+# Returns pointer to a struct field WITHOUT loading (for nested chain)
+fun gen_nested_field_ptr(node: i64) -> str:
+    nt2: i32 = nd_type(node)
+
+    if nt2 == NODE_FIELD_ACCESS:
+        obj_name2: str = Memory.read_i64(node + 8) as str
+        field2: str = Memory.read_i64(node + 16) as str
+        obj_type2: str = get_var_type(obj_name2)
+        obj_ptr2: str = gen_var_load(obj_name2, obj_type2)
+        fidx3: i32 = get_field_index(obj_type2, field2)
+        struct_mlir3: str = get_struct_mlir_type(obj_type2)
+        fp3: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(fp3, " = llvm.getelementptr "), obj_ptr2), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx3 as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir3))))
+        return fp3
+
+    if nt2 == NODE_NESTED_FIELD:
+        inner_base: i64 = Memory.read_i64(node + 8)
+        inner_field: str = Memory.read_i64(node + 16) as str
+        inner_ptr: str = gen_nested_field_ptr(inner_base)
+        inner_type: str = infer_expr_type(inner_base)
+        fidx4: i32 = get_field_index(inner_type, inner_field)
+        struct_mlir4: str = get_struct_mlir_type(inner_type)
+        fp4: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(fp4, " = llvm.getelementptr "), inner_ptr), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx4 as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir4))))
+        return fp4
+
+    if nt2 == NODE_SELF_FIELD:
+        sf2: str = Memory.read_i64(node + 8) as str
+        sf_type2: str = g_cur_method_struct
+        fidx5: i32 = get_field_index(sf_type2, sf2)
+        struct_mlir5: str = get_struct_mlir_type(sf_type2)
+        fp5: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(fp5, " = llvm.getelementptr %self"), ""), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx5 as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir5))))
+        return fp5
+
+    # Fallback: gen_expr and hope it returns a ptr
+    fb_type: str = infer_expr_type(node)
+    return gen_expr(node, fb_type)
+
+# ==========================================
 # Self Field Access (self.field in methods)
 # ==========================================
 fun gen_self_field_access(node: i64) -> str:
@@ -9280,8 +10253,8 @@ fun gen_static_field_access(node: i64) -> str:
 
     full: str = Str.concat(Str.concat(sname, "__"), fname)
     ga: str = emit_addr_of(full)
-    # TODO: look up type from static fields registry
-    val: str = emit_load(ga, "i64")
+    sf_type: str = lookup_static_field_type(full)
+    val: str = emit_load(ga, sf_type)
     return val
 
 # ==========================================
@@ -9313,6 +10286,13 @@ fun gen_fun_call(node: i64) -> str:
         ati = ati + 1
 
     call_name: str = resolve_overload(fname, arg_types_str)
+
+    # Check for annotation warnings at call site
+    fn_flags: i32 = get_fn_annot_flags(call_name)
+    if fn_flags == 1:
+        # deprecated
+        depr_msg: str = get_fn_annot_msg(call_name)
+        IOOps.io_println(Str.concat("[WARNING] @deprecated: ", Str.concat(fname, Str.concat(" - ", depr_msg))))
 
     # Build argument list
     arg_str: str = ""
@@ -9550,9 +10530,15 @@ fun gen_instance_method_call(node: i64) -> str:
 
         if str_eq(expected_pt2, "") == 0:
             av: str = gen_expr(anode, expected_pt2)
-            amt: str = mlir_type(expected_pt2)
             if str_eq(at, expected_pt2) == 0 and str_eq(at, "unknown") == 0:
-                av = implicit_cast(av, at, expected_pt2)
+                # Only implicit cast for compatible types (e.g., i32->i64), not across categories
+                if is_int_type(at) == 1 and is_int_type(expected_pt2) == 1:
+                    av = implicit_cast(av, at, expected_pt2)
+                    at = expected_pt2
+                elif is_float_type(at) == 1 and is_float_type(expected_pt2) == 1:
+                    av = implicit_cast(av, at, expected_pt2)
+                    at = expected_pt2
+            amt: str = mlir_type(at)
             arg_str = Str.concat(arg_str, Str.concat(", ", av))
             type_str = Str.concat(type_str, Str.concat(", ", amt))
         else:
@@ -9653,6 +10639,11 @@ fun gen_array_access(node: i64, expected: str) -> str:
 
     # Get index value
     idx_val: str = gen_expr(idx_node, "i64")
+
+    # Ensure index is i64 (widen i32 loop vars)
+    idx_type: str = infer_expr_type(idx_node)
+    if str_eq(idx_type, "i32") == 1:
+        idx_val = implicit_cast(idx_val, "i32", "i64")
 
     # Default element type
     elem_type: str = expected
@@ -9781,167 +10772,276 @@ fun gen_string_constants():
         i = i + 1
     emit_blank()
 
+g_str_emitted_count: i32 = 0
+
+# Emit string constants that were added after the initial gen_string_constants pass
+fun gen_late_string_constants():
+    if g_str_count <= g_str_emitted_count:
+        return
+    i: i32 = g_str_emitted_count
+    while i < g_str_count:
+        off8: i64 = (i as i64) * 8
+        off4: i64 = (i as i64) * 4
+        label: str = Memory.read_i64(g_str_labels + off8) as str
+        text: str = Memory.read_i64(g_str_texts + off8) as str
+        slen: i32 = Memory.read_i32(g_str_lens + off4)
+        escaped: str = escape_mlir_string(text)
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal constant ", label), "(\""), escaped), Str.concat(Str.concat("\\00\") {addr_space = 0 : i32} : !llvm.array<", Convert.i64_to_str(slen as i64)), " x i8>")))
+        i = i + 1
+    emit_blank()
+
 # ==========================================
 # Collect Phase: scan AST and register types
 # ==========================================
 fun collect_declarations(ast: i64):
     sc: i32 = nl_count(ast)
     i: i32 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    node: i64 = 0
+    nt: i32 = 0
+    ename: str = ""
+    variants: i64 = 0
+    vlist: i64 = 0
+    vc: i32 = 0
+    j: i32 = 0
+    vnode: i64 = 0
+    sname: str = ""
+    fields: i64 = 0
+    base_class: str = ""
+    s_stack_alloc: i64 = 0
+    s_type_params: i64 = 0
+    tf: i64 = 0
+    inner_t: str = ""
+    parent_fields: i64 = 0
+    pfc: i32 = 0
+    merged: i64 = 0
+    pi: i32 = 0
+    cfc: i32 = 0
+    ci: i32 = 0
+    smethods: i64 = 0
+    smc: i32 = 0
+    sj: i32 = 0
+    smnode: i64 = 0
+    smname: str = ""
+    smret: str = ""
+    smangled: str = ""
+    sm_params: i64 = 0
+    sm_pt: str = ""
+    fname: str = ""
+    ret_type: str = ""
+    fparams: i64 = 0
+    fpt_str: str = ""
+    mangled_fn: str = ""
+    isname: str = ""
+    methods: i64 = 0
+    mc: i32 = 0
+    j2: i32 = 0
+    mnode: i64 = 0
+    mname: str = ""
+    mret: str = ""
+    mangled: str = ""
+    m_params: i64 = 0
+    m_pt: str = ""
+    etname: str = ""
+    emethods: i64 = 0
+    mc2: i32 = 0
+    j3: i32 = 0
+    enode: i64 = 0
+    emname: str = ""
+    emret: str = ""
+    emangled_base: str = ""
+    eparams: i64 = 0
+    ept_str: str = ""
+    epc: i32 = 0
+    epi: i32 = 0
+    epn: i64 = 0
+    epname: str = ""
+    eptype: str = ""
+    emangled: str = ""
+    vname2: str = ""
+    aname: str = ""
+    atarget: str = ""
+    # Static field filtering variables (hoisted)
+    total_fc: i32 = 0
+    inst_fields: i64 = 0
+    sfi: i32 = 0
+    sf_node: i64 = 0
+    sf_is_st: i64 = 0
+    sf_nm: str = ""
+    sf_tp: str = ""
+    sf_full_nm: str = ""
+    sf_def: i64 = 0
     while i < sc:
-        node: i64 = nl_get(ast, i)
-        nt: i32 = nd_type(node)
+        node = nl_get(ast, i)
+        nt = nd_type(node)
 
         # Enum declarations
         if nt == NODE_ENUM_DECL:
-            ename: str = Memory.read_i64(node + 8) as str
-            variants: i64 = Memory.read_i64(node + 16)
-            # Build value list as node_list of str_lit nodes for value names
-            vlist: i64 = mk_node_list(32)
+            ename = Memory.read_i64(node + 8) as str
+            variants = Memory.read_i64(node + 16)
+            vlist = mk_node_list(32)
             if variants != 0:
-                vc: i32 = nl_count(variants)
-                j: i32 = 0
+                vc = nl_count(variants)
+                j = 0
                 while j < vc:
-                    vnode: i64 = nl_get(variants, j)
-                    # Variant node has name at offset 8
+                    vnode = nl_get(variants, j)
                     nl_add(vlist, vnode)
                     j = j + 1
             register_enum(ename, vlist)
 
         # Struct declarations
         if nt == NODE_STRUCT_DECL:
-            sname: str = Memory.read_i64(node + 8) as str
-            fields: i64 = Memory.read_i64(node + 16)
-            base_class: str = Memory.read_i64(node + 32) as str
-            s_stack_alloc: i64 = Memory.read_i64(node + 56)
+            sname = Memory.read_i64(node + 8) as str
+            fields = Memory.read_i64(node + 16)
+            base_class = Memory.read_i64(node + 32) as str
+            s_stack_alloc = Memory.read_i64(node + 56)
 
-            # Register generic type parameters if present
-            s_type_params: i64 = Memory.read_i64(node + 24)
+            s_type_params = Memory.read_i64(node + 24)
             if s_type_params != 0:
                 register_generic(sname, s_type_params)
 
-            # @transparent struct — register as transparent, not as regular struct
             if s_stack_alloc == 2:
-                # Get first (and only) field's type as inner raw type
                 if fields != 0:
                     if nl_count(fields) > 0:
-                        tf: i64 = nl_get(fields, 0)
-                        inner_t: str = Memory.read_i64(tf + 16) as str
+                        tf = nl_get(fields, 0)
+                        inner_t = Memory.read_i64(tf + 16) as str
                         register_transparent(sname, inner_t)
             else:
-                # @heap struct — mark for Memory.malloc; otherwise default is llvm.alloca (stack)
                 if s_stack_alloc == 3:
                     register_heap_struct(sname)
-                # Merge parent fields if struct extends another
                 if str_eq(base_class, "") == 0:
-                    parent_fields: i64 = get_struct_fields(base_class)
+                    parent_fields = get_struct_fields(base_class)
                     if parent_fields != 0:
-                        pfc: i32 = nl_count(parent_fields)
-                        # Create merged field list: parent fields first, then child fields
-                        merged: i64 = mk_node_list(64)
-                        pi: i32 = 0
+                        pfc = nl_count(parent_fields)
+                        merged = mk_node_list(64)
+                        pi = 0
                         while pi < pfc:
                             nl_add(merged, nl_get(parent_fields, pi))
                             pi = pi + 1
-                        # Add child-specific fields
                         if fields != 0:
-                            cfc: i32 = nl_count(fields)
-                            ci: i32 = 0
+                            cfc = nl_count(fields)
+                            ci = 0
                             while ci < cfc:
                                 nl_add(merged, nl_get(fields, ci))
                                 ci = ci + 1
                         fields = merged
                     register_parent_struct(sname, base_class)
                 if fields != 0:
-                    register_struct(sname, fields)
-                # Register inline method signatures with param types (methods at +40)
-                smethods: i64 = Memory.read_i64(node + 40)
+                    # Separate instance fields from static fields
+                    total_fc = nl_count(fields)
+                    inst_fields = mk_node_list(64)
+                    sfi = 0
+                    while sfi < total_fc:
+                        sf_node = nl_get(fields, sfi)
+                        sf_is_st = Memory.read_i64(sf_node + 48)
+                        if sf_is_st == 1:
+                            sf_nm = Memory.read_i64(sf_node + 8) as str
+                            sf_tp = Memory.read_i64(sf_node + 16) as str
+                            if str_eq(sf_tp, "") == 1:
+                                sf_tp = "i64"
+                            sf_full_nm = Str.concat(Str.concat(sname, "__"), sf_nm)
+                            sf_def = Memory.read_i64(sf_node + 32)
+                            if sf_def != 0:
+                                register_static_field_with_default(sf_full_nm, sf_tp, sf_def)
+                            else:
+                                register_static_field(sf_full_nm, sf_tp)
+                        else:
+                            nl_add(inst_fields, sf_node)
+                        sfi = sfi + 1
+                    register_struct(sname, inst_fields)
+                smethods = Memory.read_i64(node + 40)
                 if smethods != 0:
-                    smc: i32 = nl_count(smethods)
-                    sj: i32 = 0
+                    smc = nl_count(smethods)
+                    sj = 0
                     while sj < smc:
-                        smnode: i64 = nl_get(smethods, sj)
-                        smname: str = Memory.read_i64(smnode + 8) as str
-                        smret: str = Memory.read_i64(smnode + 24) as str
-                        smangled: str = Str.concat(Str.concat(sname, "_"), smname)
-                        sm_params: i64 = Memory.read_i64(smnode + 16)
-                        sm_pt: str = build_param_types_str_no_self(sm_params)
+                        smnode = nl_get(smethods, sj)
+                        smname = Memory.read_i64(smnode + 8) as str
+                        smret = Memory.read_i64(smnode + 24) as str
+                        smangled = Str.concat(Str.concat(sname, "_"), smname)
+                        sm_params = Memory.read_i64(smnode + 16)
+                        sm_pt = build_param_types_str_no_self(sm_params)
                         register_fun_sig_with_params(smangled, smret, sm_pt)
                         register_impl_method(sname, smname, smnode)
                         sj = sj + 1
 
-        # Function definitions — register signatures (with overload support)
+        # Function definitions
         if nt == NODE_FUN_DEF:
-            fname: str = Memory.read_i64(node + 8) as str
-            ret_type: str = Memory.read_i64(node + 24) as str
-            fparams: i64 = Memory.read_i64(node + 16)
-            fpt_str: str = build_param_types_str(fparams)
-            mangled_fn: str = register_overload(fname, fpt_str)
+            fname = Memory.read_i64(node + 8) as str
+            ret_type = Memory.read_i64(node + 24) as str
+            fparams = Memory.read_i64(node + 16)
+            fpt_str = build_param_types_str(fparams)
+            mangled_fn = register_overload(fname, fpt_str)
             register_fun_sig_with_params(mangled_fn, ret_type, fpt_str)
 
-        # Impl blocks — register method signatures
+        # Impl blocks
         if nt == NODE_IMPL_BLOCK:
-            isname: str = Memory.read_i64(node + 8) as str
-            methods: i64 = Memory.read_i64(node + 16)
+            isname = Memory.read_i64(node + 8) as str
+            methods = Memory.read_i64(node + 16)
             if methods != 0:
-                mc: i32 = nl_count(methods)
-                j2: i32 = 0
+                mc = nl_count(methods)
+                j2 = 0
                 while j2 < mc:
-                    mnode: i64 = nl_get(methods, j2)
-                    mname: str = Memory.read_i64(mnode + 8) as str
-                    mret: str = Memory.read_i64(mnode + 24) as str
-                    mangled: str = Str.concat(Str.concat(isname, "_"), mname)
-                    m_params: i64 = Memory.read_i64(mnode + 16)
-                    m_pt: str = build_param_types_str_no_self(m_params)
+                    mnode = nl_get(methods, j2)
+                    mname = Memory.read_i64(mnode + 8) as str
+                    mret = Memory.read_i64(mnode + 24) as str
+                    mangled = Str.concat(Str.concat(isname, "_"), mname)
+                    m_params = Memory.read_i64(mnode + 16)
+                    m_pt = build_param_types_str_no_self(m_params)
+                    mangled = register_overload(mangled, m_pt)
                     register_fun_sig_with_params(mangled, mret, m_pt)
                     register_impl_method(isname, mname, mnode)
                     j2 = j2 + 1
 
-        # Extend blocks — register method signatures with overload support
+        # Extend blocks
         if nt == NODE_EXTEND_BLOCK:
-            etname: str = Memory.read_i64(node + 8) as str
-            emethods: i64 = Memory.read_i64(node + 16)
+            etname = Memory.read_i64(node + 8) as str
+            emethods = Memory.read_i64(node + 16)
             if emethods != 0:
-                mc2: i32 = nl_count(emethods)
-                j3: i32 = 0
+                mc2 = nl_count(emethods)
+                j3 = 0
                 while j3 < mc2:
-                    enode: i64 = nl_get(emethods, j3)
-                    emname: str = Memory.read_i64(enode + 8) as str
-                    emret: str = Memory.read_i64(enode + 24) as str
-                    emangled_base: str = Str.concat(Str.concat(etname, "_"), emname)
-                    # Build param types string (skip self) for overload
-                    eparams: i64 = Memory.read_i64(enode + 16)
-                    ept_str: str = ""
+                    enode = nl_get(emethods, j3)
+                    emname = Memory.read_i64(enode + 8) as str
+                    emret = Memory.read_i64(enode + 24) as str
+                    emangled_base = Str.concat(Str.concat(etname, "_"), emname)
+                    eparams = Memory.read_i64(enode + 16)
+                    ept_str = ""
                     if eparams != 0:
-                        epc: i32 = nl_count(eparams)
-                        epi: i32 = 0
+                        epc = nl_count(eparams)
+                        epi = 0
                         while epi < epc:
-                            epn: i64 = nl_get(eparams, epi)
-                            epname: str = Memory.read_i64(epn + 8) as str
+                            epn = nl_get(eparams, epi)
+                            epname = Memory.read_i64(epn + 8) as str
                             if str_eq(epname, "self") == 0:
-                                eptype: str = Memory.read_i64(epn + 16) as str
+                                eptype = Memory.read_i64(epn + 16) as str
                                 if Memory.strlen(ept_str) > 0:
                                     ept_str = Str.concat(ept_str, Str.concat(",", eptype))
                                 else:
                                     ept_str = eptype
                             epi = epi + 1
-                    emangled: str = register_overload(emangled_base, ept_str)
+                    emangled = register_overload(emangled_base, ept_str)
                     register_fun_sig_with_params(emangled, emret, ept_str)
                     register_impl_method(etname, emname, enode)
                     j3 = j3 + 1
 
-        # Extern blocks — only register signatures here, emit declarations later
+        # Extern blocks
         if nt == NODE_EXTERN_BLOCK:
             register_extern_sigs(node)
 
-        # Variable declarations (check if used from functions -> global)
+        # Variable declarations
         if nt == NODE_VAR_DECL:
-            vname2: str = Memory.read_i64(node + 16) as str
+            vname2 = Memory.read_i64(node + 16) as str
             register_global_var(vname2, node)
 
-        # Type alias: type i32 = I32
+        # List declarations — treated as ptr globals
+        if nt == NODE_LIST_DECL:
+            vname2 = Memory.read_i64(node + 8) as str
+            register_global_list(vname2, node)
+
+        # Type alias
         if nt == NODE_TYPE_ALIAS:
-            aname: str = Memory.read_i64(node + 8) as str
-            atarget: str = Memory.read_i64(node + 16) as str
+            aname = Memory.read_i64(node + 8) as str
+            atarget = Memory.read_i64(node + 16) as str
             register_alias(aname, atarget)
 
         i = i + 1
@@ -10132,6 +11232,75 @@ fun gen_global_var_decls():
     emit_blank()
 
 # ==========================================
+# Generate Global List Declarations (list vars as !llvm.ptr globals)
+# ==========================================
+fun gen_global_list_decls():
+    if g_global_list_count == 0:
+        return
+    emit_ind("// Global list variable declarations")
+    i: i32 = 0
+    while i < g_global_list_count:
+        off: i64 = (i as i64) * 8
+        lname: str = Memory.read_i64(g_global_list_names + off) as str
+        add_variable(lname, lname, "list", 2, 0)
+        emit_ind(Str.concat(Str.concat("llvm.mlir.global internal @", lname), " () {addr_space = 0 : i32} : !llvm.ptr {"))
+        emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
+        emit_ind("  llvm.return %0 : !llvm.ptr")
+        emit_ind("}")
+        i = i + 1
+    emit_blank()
+
+# ==========================================
+# Generate Struct Static Field Declarations
+# ==========================================
+fun gen_static_field_decls():
+    if g_static_field_count == 0:
+        return
+    emit_ind("// Struct static field declarations")
+    # Hoist variables to avoid alloca-in-loop
+    i: i32 = 0
+    off: i64 = 0
+    sf_name: str = ""
+    sf_type: str = ""
+    sf_def: i64 = 0
+    mt: str = ""
+    def_int_val: str = "0"
+    def_float_val: str = "0.0"
+    def_nt: i32 = 0
+    while i < g_static_field_count:
+        off = (i as i64) * 8
+        sf_name = Memory.read_i64(g_sf_names + off) as str
+        sf_type = Memory.read_i64(g_sf_types + off) as str
+        sf_def = Memory.read_i64(g_sf_defaults + off)
+        mt = mlir_type(sf_type)
+        add_variable(sf_name, sf_name, sf_type, 2, 0)
+        emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", sf_name), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
+        # Check for non-zero default literal values
+        def_int_val = "0"
+        def_float_val = "0.0"
+        if sf_def != 0:
+            def_nt = nd_type(sf_def)
+            if def_nt == NODE_INT_LIT:
+                def_int_val = Convert.i64_to_str(Memory.read_i64(sf_def + 8))
+            elif def_nt == NODE_FLOAT_LIT:
+                def_float_val = Memory.read_i64(sf_def + 8) as str
+        if is_string_type(sf_type) == 1:
+            emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
+            emit_ind("  llvm.return %0 : !llvm.ptr")
+        elif is_int_type(sf_type) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_int_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        elif is_float_type(sf_type) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_float_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        else:
+            emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        emit_ind("}")
+        i = i + 1
+    emit_blank()
+
+# ==========================================
 # Function Deduplication (prevent duplicate MLIR emissions)
 # ==========================================
 g_emitted_fn_names: i64 = 0
@@ -10168,11 +11337,9 @@ fun gen_functions(ast: i64):
         node: i64 = nl_get(ast, i)
         nt: i32 = nd_type(node)
 
-        IOOps.io_println(Str.concat(Str.concat("[gen_fn] node ", Convert.i64_to_str(i as i64)), Str.concat(" type=", Convert.i64_to_str(nt as i64))))
         if nt == NODE_EXTERN_BLOCK:
             if ts_extern_block_has_reachable(node) == 1:
                 gen_extern_block(node)
-                IOOps.io_println("[gen_fn] extern done")
         elif nt == NODE_STRUCT_DECL:
             sdbg: str = Memory.read_i64(node + 8) as str
             # Skip @transparent structs — they have no MLIR representation
@@ -10272,8 +11439,8 @@ fun generate(ast: i64) -> str:
     indent_inc()
 
     # String constants
-    IOOps.io_println("[gen] emitting string constants")
     gen_string_constants()
+    g_str_emitted_count = g_str_count
 
     # Windows helpers
     emit_ind("// Microsoft linker requires _fltused for floating-point code")
@@ -10291,14 +11458,17 @@ fun generate(ast: i64) -> str:
     # Global variable declarations
     gen_global_var_decls()
 
+    # Global list declarations (list variables at top level)
+    gen_global_list_decls()
+
+    # Struct static field declarations
+    gen_static_field_decls()
+
     # User-defined functions
-    IOOps.io_println("[gen] emitting functions")
     gen_functions(ast)
-    IOOps.io_println("[gen] functions done, checking user main")
 
     # Main function (if user didn't define one)
     if has_user_main(ast) == 0:
-        IOOps.io_println("[gen] no user main, generating wrapper")
         g_tmp_counter = 0
         emit_ind("llvm.func @main() -> i32 {")
         indent_inc()
@@ -10314,11 +11484,13 @@ fun generate(ast: i64) -> str:
         indent_dec()
         emit_ind("}")
 
+    # Emit any string constants added during codegen
+    gen_late_string_constants()
+
     indent_dec()
     emit("}")
 
     # Join all output lines — O(n) bulk copy instead of O(n²) concat
-    IOOps.io_println(Str.concat("[gen] joining ", Str.concat(Convert.i64_to_str(g_out_count as i64), " output lines")))
     # First pass: compute total length
     total_len: i64 = 0
     i: i32 = 0
@@ -10327,7 +11499,6 @@ fun generate(ast: i64) -> str:
         if i > 0:
             total_len = total_len + 1
         i = i + 1
-    IOOps.io_println(Str.concat("[gen] total MLIR length: ", Convert.i64_to_str(total_len)))
     # Second pass: copy into pre-allocated buffer
     buf: i64 = Memory.malloc(total_len + 1)
     pos: i64 = 0
@@ -10461,6 +11632,7 @@ fun init_tokenizer_constants():
     TK_MODULE = 116
     TK_EXPORT = 117
     TK_REQUIRES = 118
+    TK_ANNOT = 135
 
 fun init_tokenizer_buffers():
     MAX_TOKENS = 131072
@@ -10478,6 +11650,8 @@ fun init_pipeline():
     init_tokenizer_buffers()
     init_ast_constants()
     init_module_names()
+    init_annot_registry()
+    init_builtin_annots()
 
 ##############################
 # Dolet Compiler CLI Driver
@@ -10996,7 +12170,33 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
         i = i + 1
 
     # Pass 2: Process load/requires directives
+    # Extract "module X" line from mod.dlt to include in result for package detection
+    mod_line: str = ""
+    mi: i64 = 0
+    mc: i8 = 0 as i8
+    while mi < slen:
+        mc = Memory.read_i8((mod_content as i64) + mi)
+        if mc == 109:
+            if mi + 7 < slen:
+                mc1: i8 = Memory.read_i8((mod_content as i64) + mi + 1)
+                mc2: i8 = Memory.read_i8((mod_content as i64) + mi + 2)
+                mc3: i8 = Memory.read_i8((mod_content as i64) + mi + 3)
+                mc4: i8 = Memory.read_i8((mod_content as i64) + mi + 4)
+                mc5: i8 = Memory.read_i8((mod_content as i64) + mi + 5)
+                mc6: i8 = Memory.read_i8((mod_content as i64) + mi + 6)
+                if mc1 == 111 and mc2 == 100 and mc3 == 117 and mc4 == 108 and mc5 == 101 and mc6 == 32:
+                    me: i64 = mi + 7
+                    while me < slen:
+                        mc = Memory.read_i8((mod_content as i64) + me)
+                        if mc == 10 or mc == 13:
+                            break
+                        me = me + 1
+                    mod_line = str_from_range(mod_content, mi, me)
+                    break
+        mi = mi + 1
     result: str = ""
+    if Memory.strlen(mod_line) > 0:
+        result = Str.concat("\n", Str.concat(mod_line, "\n"))
     i = 0
     line_start = 0
 
@@ -11106,6 +12306,10 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                                 ri = ri + 1
                             req_mod_file: str = Str.concat(req_path, "\\mod.dlt")
                             req_src: str = load_module(library_root, req_mod_file)
+                            if Memory.strlen(req_src) == 0:
+                                # Try packages directory
+                                pkg_root: str = Str.concat(library_root, "..\\packages\\")
+                                req_src = load_module(pkg_root, req_mod_file)
                             if Memory.strlen(req_src) > 0:
                                 result = Str.concat(result, req_src)
 
@@ -11585,9 +12789,15 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
     mod_name: str = ""
     pkg_mod: str = ""
     pkg_dir: str = ""
-    # Scan for pattern: "import " (ASCII: 'i'=105 'm'=109 'p'=112 'o'=111 'r'=114 't'=116 ' '=32)
+    added_names: i64 = Memory.malloc_zeroed(256 * 8)
+    added_count: i32 = 0
+    already: i32 = 0
+    ai: i32 = 0
+    an: str = ""
+    # Scan for "import " and "module " patterns
     while i < slen - 7:
         c0 = Memory.read_i8((src as i64) + i)
+        # Check "import " (i=105 m=109 p=112 o=111 r=114 t=116 ' '=32)
         if c0 == 105:
             c1 = Memory.read_i8((src as i64) + i + 1)
             c2 = Memory.read_i8((src as i64) + i + 2)
@@ -11618,15 +12828,78 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
                     name_end = name_end + 1
                 if name_end > name_start:
                     mod_name = Str.substring(src, name_start, name_end)
-                    pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
-                    if file_exists(pkg_mod) == 1:
-                        pkg_dir = Str.concat(pkg_base, mod_name)
-                        result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                    already = 0
+                    ai = 0
+                    while ai < added_count:
+                        an = Memory.read_i64(added_names + ((ai as i64) * 8)) as str
+                        if str_eq(an, mod_name) == 1:
+                            already = 1
+                            break
+                        ai = ai + 1
+                    if already == 0:
+                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
+                        if file_exists(pkg_mod) == 1:
+                            pkg_dir = Str.concat(pkg_base, mod_name)
+                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(Str.concat(pkg_dir, "\\windows"), "\"")))
+                            Memory.write_i64(added_names + ((added_count as i64) * 8), mod_name as i64)
+                            added_count = added_count + 1
+                i = name_end + 1
+            else:
+                i = i + 1
+        # Check "module " (m=109 o=111 d=100 u=117 l=108 e=101 ' '=32)
+        elif c0 == 109:
+            c1 = Memory.read_i8((src as i64) + i + 1)
+            c2 = Memory.read_i8((src as i64) + i + 2)
+            c3 = Memory.read_i8((src as i64) + i + 3)
+            c4 = Memory.read_i8((src as i64) + i + 4)
+            c5 = Memory.read_i8((src as i64) + i + 5)
+            c6 = Memory.read_i8((src as i64) + i + 6)
+            if c1 == 111 and c2 == 100 and c3 == 117 and c4 == 108 and c5 == 101 and c6 == 32:
+                in_comment = 0
+                bk = i - 1
+                while bk >= 0:
+                    bc = Memory.read_i8((src as i64) + bk)
+                    if bc == 10:
+                        break
+                    if bc == 35:
+                        in_comment = 1
+                        break
+                    bk = bk - 1
+                if in_comment == 1:
+                    i = i + 1
+                    continue
+                name_start = i + 7
+                name_end = name_start
+                while name_end < slen:
+                    nc = Memory.read_i8((src as i64) + name_end)
+                    if nc == 10 or nc == 13 or nc == 32 or nc == 9:
+                        break
+                    name_end = name_end + 1
+                if name_end > name_start:
+                    mod_name = Str.substring(src, name_start, name_end)
+                    already = 0
+                    ai = 0
+                    while ai < added_count:
+                        an = Memory.read_i64(added_names + ((ai as i64) * 8)) as str
+                        if str_eq(an, mod_name) == 1:
+                            already = 1
+                            break
+                        ai = ai + 1
+                    if already == 0:
+                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
+                        if file_exists(pkg_mod) == 1:
+                            pkg_dir = Str.concat(pkg_base, mod_name)
+                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(Str.concat(pkg_dir, "\\windows"), "\"")))
+                            Memory.write_i64(added_names + ((added_count as i64) * 8), mod_name as i64)
+                            added_count = added_count + 1
                 i = name_end + 1
             else:
                 i = i + 1
         else:
             i = i + 1
+    Memory.free(added_names)
     return result
 
 # ==========================================
@@ -11732,6 +13005,7 @@ fun main() -> i32:
         mark_file_loaded("platform/process")
         mark_file_loaded("std/io")
         mark_file_loaded("core/types/collections")
+        mark_file_loaded("std/fileIO")
         register_module_name("std")
 
         # std is already loaded as part of runtime, no need for separate loading
@@ -11814,12 +13088,14 @@ fun main() -> i32:
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-out:\"", output_exe), "\" "))
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-libpath:\"", sys_libs), "\" "))
     pkg_base2: str = Str.concat(std_base, "..\\packages\\")
-    pkg_libpaths: str = extract_pkg_libpaths(user_src, pkg_base2)
+    pkg_libpaths: str = extract_pkg_libpaths(source, pkg_base2)
+    IOOps.io_println(Str.concat("[link] pkg_libpaths: ", pkg_libpaths))
     cmd3 = Str.concat(cmd3, pkg_libpaths)
     cmd3 = Str.concat(cmd3, " ")
     # Extract extern lib names from source for linking
     extern_lib_flags: str = extract_extern_libs(source)
-    cmd3 = Str.concat(cmd3, Str.concat("-defaultlib:kernel32 -subsystem:console -entry:main", extern_lib_flags))
+    IOOps.io_println(Str.concat("[link] extern_lib_flags: ", extern_lib_flags))
+    cmd3 = Str.concat(cmd3, Str.concat("-defaultlib:kernel32 -defaultlib:msvcrt-math -stack:8388608 -subsystem:console -entry:main", extern_lib_flags))
     rc3: i32 = Process.run(cmd3)
     if rc3 != 0:
         IOOps.io_println("Error: Linking failed")

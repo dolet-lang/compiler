@@ -107,6 +107,7 @@ fun init_tokenizer_constants():
     TK_LIST = 112
     TK_MAP = 113
     TK_ARRAY = 114
+    TK_ANNOT = 135
 
 fun init_tokenizer_buffers():
     MAX_TOKENS = 131072
@@ -124,3 +125,5 @@ fun init_pipeline():
     init_tokenizer_buffers()
     init_ast_constants()
     init_module_names()
+    init_annot_registry()
+    init_builtin_annots()

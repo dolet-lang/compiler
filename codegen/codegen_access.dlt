@@ -102,8 +102,8 @@ fun gen_static_field_access(node: i64) -> str:
 
     full: str = Str.concat(Str.concat(sname, "__"), fname)
     ga: str = emit_addr_of(full)
-    # TODO: look up type from static fields registry
-    val: str = emit_load(ga, "i64")
+    sf_type: str = lookup_static_field_type(full)
+    val: str = emit_load(ga, sf_type)
     return val
 
 # ==========================================
@@ -449,6 +449,11 @@ fun gen_array_access(node: i64, expected: str) -> str:
 
     # Get index value
     idx_val: str = gen_expr(idx_node, "i64")
+
+    # Ensure index is i64 (widen i32 loop vars)
+    idx_type: str = infer_expr_type(idx_node)
+    if str_eq(idx_type, "i32") == 1:
+        idx_val = implicit_cast(idx_val, "i32", "i64")
 
     # Default element type
     elem_type: str = expected

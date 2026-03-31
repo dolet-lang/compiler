@@ -110,161 +110,245 @@ fun gen_string_constants():
 fun collect_declarations(ast: i64):
     sc: i32 = nl_count(ast)
     i: i32 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    node: i64 = 0
+    nt: i32 = 0
+    ename: str = ""
+    variants: i64 = 0
+    vlist: i64 = 0
+    vc: i32 = 0
+    j: i32 = 0
+    vnode: i64 = 0
+    sname: str = ""
+    fields: i64 = 0
+    base_class: str = ""
+    s_stack_alloc: i64 = 0
+    s_type_params: i64 = 0
+    tf: i64 = 0
+    inner_t: str = ""
+    parent_fields: i64 = 0
+    pfc: i32 = 0
+    merged: i64 = 0
+    pi: i32 = 0
+    cfc: i32 = 0
+    ci: i32 = 0
+    smethods: i64 = 0
+    smc: i32 = 0
+    sj: i32 = 0
+    smnode: i64 = 0
+    smname: str = ""
+    smret: str = ""
+    smangled: str = ""
+    sm_params: i64 = 0
+    sm_pt: str = ""
+    fname: str = ""
+    ret_type: str = ""
+    fparams: i64 = 0
+    fpt_str: str = ""
+    mangled_fn: str = ""
+    isname: str = ""
+    methods: i64 = 0
+    mc: i32 = 0
+    j2: i32 = 0
+    mnode: i64 = 0
+    mname: str = ""
+    mret: str = ""
+    mangled: str = ""
+    m_params: i64 = 0
+    m_pt: str = ""
+    etname: str = ""
+    emethods: i64 = 0
+    mc2: i32 = 0
+    j3: i32 = 0
+    enode: i64 = 0
+    emname: str = ""
+    emret: str = ""
+    emangled_base: str = ""
+    eparams: i64 = 0
+    ept_str: str = ""
+    epc: i32 = 0
+    epi: i32 = 0
+    epn: i64 = 0
+    epname: str = ""
+    eptype: str = ""
+    emangled: str = ""
+    vname2: str = ""
+    aname: str = ""
+    atarget: str = ""
+    total_fc: i32 = 0
+    inst_fields: i64 = 0
+    sfi: i32 = 0
+    sf_node: i64 = 0
+    sf_is_st: i64 = 0
+    sf_nm: str = ""
+    sf_tp: str = ""
+    sf_full_nm: str = ""
+    sf_def: i64 = 0
     while i < sc:
-        node: i64 = nl_get(ast, i)
-        nt: i32 = nd_type(node)
+        node = nl_get(ast, i)
+        nt = nd_type(node)
 
         # Enum declarations
         if nt == NODE_ENUM_DECL:
-            ename: str = Memory.read_i64(node + 8) as str
-            variants: i64 = Memory.read_i64(node + 16)
-            # Build value list as node_list of str_lit nodes for value names
-            vlist: i64 = mk_node_list(32)
+            ename = Memory.read_i64(node + 8) as str
+            variants = Memory.read_i64(node + 16)
+            vlist = mk_node_list(32)
             if variants != 0:
-                vc: i32 = nl_count(variants)
-                j: i32 = 0
+                vc = nl_count(variants)
+                j = 0
                 while j < vc:
-                    vnode: i64 = nl_get(variants, j)
-                    # Variant node has name at offset 8
+                    vnode = nl_get(variants, j)
                     nl_add(vlist, vnode)
                     j = j + 1
             register_enum(ename, vlist)
 
         # Struct declarations
         if nt == NODE_STRUCT_DECL:
-            sname: str = Memory.read_i64(node + 8) as str
-            fields: i64 = Memory.read_i64(node + 16)
-            base_class: str = Memory.read_i64(node + 32) as str
-            s_stack_alloc: i64 = Memory.read_i64(node + 56)
+            sname = Memory.read_i64(node + 8) as str
+            fields = Memory.read_i64(node + 16)
+            base_class = Memory.read_i64(node + 32) as str
+            s_stack_alloc = Memory.read_i64(node + 56)
 
-            # Register generic type parameters if present
-            s_type_params: i64 = Memory.read_i64(node + 24)
+            s_type_params = Memory.read_i64(node + 24)
             if s_type_params != 0:
                 register_generic(sname, s_type_params)
 
-            # @transparent struct — register as transparent, not as regular struct
             if s_stack_alloc == 2:
-                # Get first (and only) field's type as inner raw type
                 if fields != 0:
                     if nl_count(fields) > 0:
-                        tf: i64 = nl_get(fields, 0)
-                        inner_t: str = Memory.read_i64(tf + 16) as str
+                        tf = nl_get(fields, 0)
+                        inner_t = Memory.read_i64(tf + 16) as str
                         register_transparent(sname, inner_t)
             else:
-                # @heap struct — mark for Memory.malloc; otherwise default is llvm.alloca (stack)
                 if s_stack_alloc == 3:
                     register_heap_struct(sname)
-                # Merge parent fields if struct extends another
                 if str_eq(base_class, "") == 0:
-                    parent_fields: i64 = get_struct_fields(base_class)
+                    parent_fields = get_struct_fields(base_class)
                     if parent_fields != 0:
-                        pfc: i32 = nl_count(parent_fields)
-                        # Create merged field list: parent fields first, then child fields
-                        merged: i64 = mk_node_list(64)
-                        pi: i32 = 0
+                        pfc = nl_count(parent_fields)
+                        merged = mk_node_list(64)
+                        pi = 0
                         while pi < pfc:
                             nl_add(merged, nl_get(parent_fields, pi))
                             pi = pi + 1
-                        # Add child-specific fields
                         if fields != 0:
-                            cfc: i32 = nl_count(fields)
-                            ci: i32 = 0
+                            cfc = nl_count(fields)
+                            ci = 0
                             while ci < cfc:
                                 nl_add(merged, nl_get(fields, ci))
                                 ci = ci + 1
                         fields = merged
                     register_parent_struct(sname, base_class)
                 if fields != 0:
-                    register_struct(sname, fields)
-                # Register inline method signatures with param types (methods at +40)
-                smethods: i64 = Memory.read_i64(node + 40)
+                    # Separate instance fields from static fields
+                    total_fc = nl_count(fields)
+                    inst_fields = mk_node_list(64)
+                    sfi = 0
+                    while sfi < total_fc:
+                        sf_node = nl_get(fields, sfi)
+                        sf_is_st = Memory.read_i64(sf_node + 48)
+                        if sf_is_st == 1:
+                            sf_nm = Memory.read_i64(sf_node + 8) as str
+                            sf_tp = Memory.read_i64(sf_node + 16) as str
+                            if str_eq(sf_tp, "") == 1:
+                                sf_tp = "i64"
+                            sf_full_nm = Str.concat(Str.concat(sname, "__"), sf_nm)
+                            sf_def = Memory.read_i64(sf_node + 32)
+                            if sf_def != 0:
+                                register_static_field_with_default(sf_full_nm, sf_tp, sf_def)
+                            else:
+                                register_static_field(sf_full_nm, sf_tp)
+                        else:
+                            nl_add(inst_fields, sf_node)
+                        sfi = sfi + 1
+                    register_struct(sname, inst_fields)
+                smethods = Memory.read_i64(node + 40)
                 if smethods != 0:
-                    smc: i32 = nl_count(smethods)
-                    sj: i32 = 0
+                    smc = nl_count(smethods)
+                    sj = 0
                     while sj < smc:
-                        smnode: i64 = nl_get(smethods, sj)
-                        smname: str = Memory.read_i64(smnode + 8) as str
-                        smret: str = Memory.read_i64(smnode + 24) as str
-                        smangled: str = Str.concat(Str.concat(sname, "_"), smname)
-                        sm_params: i64 = Memory.read_i64(smnode + 16)
-                        sm_pt: str = build_param_types_str_no_self(sm_params)
+                        smnode = nl_get(smethods, sj)
+                        smname = Memory.read_i64(smnode + 8) as str
+                        smret = Memory.read_i64(smnode + 24) as str
+                        smangled = Str.concat(Str.concat(sname, "_"), smname)
+                        sm_params = Memory.read_i64(smnode + 16)
+                        sm_pt = build_param_types_str_no_self(sm_params)
                         register_fun_sig_with_params(smangled, smret, sm_pt)
                         register_impl_method(sname, smname, smnode)
                         sj = sj + 1
 
-        # Function definitions — register signatures (with overload support)
+        # Function definitions
         if nt == NODE_FUN_DEF:
-            fname: str = Memory.read_i64(node + 8) as str
-            ret_type: str = Memory.read_i64(node + 24) as str
-            fparams: i64 = Memory.read_i64(node + 16)
-            fpt_str: str = build_param_types_str(fparams)
-            mangled_fn: str = register_overload(fname, fpt_str)
+            fname = Memory.read_i64(node + 8) as str
+            ret_type = Memory.read_i64(node + 24) as str
+            fparams = Memory.read_i64(node + 16)
+            fpt_str = build_param_types_str(fparams)
+            mangled_fn = register_overload(fname, fpt_str)
             register_fun_sig_with_params(mangled_fn, ret_type, fpt_str)
 
-        # Impl blocks — register method signatures
+        # Impl blocks
         if nt == NODE_IMPL_BLOCK:
-            isname: str = Memory.read_i64(node + 8) as str
-            methods: i64 = Memory.read_i64(node + 16)
+            isname = Memory.read_i64(node + 8) as str
+            methods = Memory.read_i64(node + 16)
             if methods != 0:
-                mc: i32 = nl_count(methods)
-                j2: i32 = 0
+                mc = nl_count(methods)
+                j2 = 0
                 while j2 < mc:
-                    mnode: i64 = nl_get(methods, j2)
-                    mname: str = Memory.read_i64(mnode + 8) as str
-                    mret: str = Memory.read_i64(mnode + 24) as str
-                    mangled: str = Str.concat(Str.concat(isname, "_"), mname)
-                    m_params: i64 = Memory.read_i64(mnode + 16)
-                    m_pt: str = build_param_types_str_no_self(m_params)
+                    mnode = nl_get(methods, j2)
+                    mname = Memory.read_i64(mnode + 8) as str
+                    mret = Memory.read_i64(mnode + 24) as str
+                    mangled = Str.concat(Str.concat(isname, "_"), mname)
+                    m_params = Memory.read_i64(mnode + 16)
+                    m_pt = build_param_types_str_no_self(m_params)
                     register_fun_sig_with_params(mangled, mret, m_pt)
                     register_impl_method(isname, mname, mnode)
                     j2 = j2 + 1
 
-        # Extend blocks — register method signatures with overload support
+        # Extend blocks
         if nt == NODE_EXTEND_BLOCK:
-            etname: str = Memory.read_i64(node + 8) as str
-            emethods: i64 = Memory.read_i64(node + 16)
+            etname = Memory.read_i64(node + 8) as str
+            emethods = Memory.read_i64(node + 16)
             if emethods != 0:
-                mc2: i32 = nl_count(emethods)
-                j3: i32 = 0
+                mc2 = nl_count(emethods)
+                j3 = 0
                 while j3 < mc2:
-                    enode: i64 = nl_get(emethods, j3)
-                    emname: str = Memory.read_i64(enode + 8) as str
-                    emret: str = Memory.read_i64(enode + 24) as str
-                    emangled_base: str = Str.concat(Str.concat(etname, "_"), emname)
-                    # Build param types string (skip self) for overload
-                    eparams: i64 = Memory.read_i64(enode + 16)
-                    ept_str: str = ""
+                    enode = nl_get(emethods, j3)
+                    emname = Memory.read_i64(enode + 8) as str
+                    emret = Memory.read_i64(enode + 24) as str
+                    emangled_base = Str.concat(Str.concat(etname, "_"), emname)
+                    eparams = Memory.read_i64(enode + 16)
+                    ept_str = ""
                     if eparams != 0:
-                        epc: i32 = nl_count(eparams)
-                        epi: i32 = 0
+                        epc = nl_count(eparams)
+                        epi = 0
                         while epi < epc:
-                            epn: i64 = nl_get(eparams, epi)
-                            epname: str = Memory.read_i64(epn + 8) as str
+                            epn = nl_get(eparams, epi)
+                            epname = Memory.read_i64(epn + 8) as str
                             if str_eq(epname, "self") == 0:
-                                eptype: str = Memory.read_i64(epn + 16) as str
+                                eptype = Memory.read_i64(epn + 16) as str
                                 if Memory.strlen(ept_str) > 0:
                                     ept_str = Str.concat(ept_str, Str.concat(",", eptype))
                                 else:
                                     ept_str = eptype
                             epi = epi + 1
-                    emangled: str = register_overload(emangled_base, ept_str)
+                    emangled = register_overload(emangled_base, ept_str)
                     register_fun_sig_with_params(emangled, emret, ept_str)
                     register_impl_method(etname, emname, enode)
                     j3 = j3 + 1
 
-        # Extern blocks — only register signatures here, emit declarations later
+        # Extern blocks
         if nt == NODE_EXTERN_BLOCK:
             register_extern_sigs(node)
 
-        # Variable declarations (check if used from functions -> global)
+        # Variable declarations
         if nt == NODE_VAR_DECL:
-            vname2: str = Memory.read_i64(node + 16) as str
+            vname2 = Memory.read_i64(node + 16) as str
             register_global_var(vname2, node)
 
-        # Type alias: type i32 = I32
+        # Type alias
         if nt == NODE_TYPE_ALIAS:
-            aname: str = Memory.read_i64(node + 8) as str
-            atarget: str = Memory.read_i64(node + 16) as str
+            aname = Memory.read_i64(node + 8) as str
+            atarget = Memory.read_i64(node + 16) as str
             register_alias(aname, atarget)
 
         i = i + 1
@@ -455,6 +539,47 @@ fun gen_global_var_decls():
     emit_blank()
 
 # ==========================================
+# Generate Struct Static Field Declarations
+# ==========================================
+fun gen_static_field_decls():
+    if g_static_field_count == 0:
+        return
+    emit_ind("// Struct static field declarations")
+    i: i32 = 0
+    while i < g_static_field_count:
+        off: i64 = (i as i64) * 8
+        sf_name: str = Memory.read_i64(g_sf_names + off) as str
+        sf_type: str = Memory.read_i64(g_sf_types + off) as str
+        sf_def: i64 = Memory.read_i64(g_sf_defaults + off)
+        mt: str = mlir_type(sf_type)
+        add_variable(sf_name, sf_name, sf_type, 2, 0)
+        emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", sf_name), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
+        # Check for non-zero default literal values
+        def_int_val: str = "0"
+        def_float_val: str = "0.0"
+        if sf_def != 0:
+            def_nt: i32 = nd_type(sf_def)
+            if def_nt == NODE_INT_LIT:
+                def_int_val = Memory.read_i64(sf_def + 8) as str
+            elif def_nt == NODE_FLOAT_LIT:
+                def_float_val = Memory.read_i64(sf_def + 8) as str
+        if is_string_type(sf_type) == 1:
+            emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
+            emit_ind("  llvm.return %0 : !llvm.ptr")
+        elif is_int_type(sf_type) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_int_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        elif is_float_type(sf_type) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_float_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        else:
+            emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        emit_ind("}")
+        i = i + 1
+    emit_blank()
+
+# ==========================================
 # Generate Functions
 # ==========================================
 fun gen_functions(ast: i64):
@@ -521,6 +646,8 @@ fun gen_main_body(ast: i64):
             i = i + 1
         elif nt == NODE_IMPORT:
             i = i + 1
+        elif nt == NODE_ANNOT_DEF:
+            i = i + 1
         else:
             # Top-level statement — generate in main
             gen_statement(node)
@@ -586,6 +713,9 @@ fun generate(ast: i64) -> str:
 
     # Global variable declarations
     gen_global_var_decls()
+
+    # Struct static field declarations
+    gen_static_field_decls()
 
     # User-defined functions
     IOOps.io_println("[gen] emitting functions")

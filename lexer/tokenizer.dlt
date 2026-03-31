@@ -112,6 +112,7 @@ TK_ARRAY: i32 = 114
 TK_MODULE: i32 = 116
 TK_EXPORT: i32 = 117
 TK_REQUIRES: i32 = 118
+TK_ANNOT: i32 = 135
 TK_I8: i32 = 120
 TK_I16: i32 = 121
 TK_I32: i32 = 122
@@ -470,6 +471,8 @@ fun resolve_keyword(name: str) -> i32:
         return TK_NOT
     if str_eq(name, "stack") == 1:
         return TK_STACK
+    if str_eq(name, "annot") == 1:
+        return TK_ANNOT
     if str_eq(name, "int") == 1:
         return TK_TYPE
     if str_eq(name, "float") == 1:

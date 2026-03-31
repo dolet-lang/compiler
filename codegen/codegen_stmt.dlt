@@ -155,9 +155,12 @@ fun gen_static_field_assignment(node: i64):
 
     full: str = Str.concat(Str.concat(sname, "__"), fname)
     ga: str = emit_addr_of(full)
-    # Infer type (TODO: look up from static fields registry)
-    val: str = gen_expr(val_node, "i64")
-    emit_store(val, ga, "i64")
+    sf_type: str = lookup_static_field_type(full)
+    val: str = gen_expr(val_node, sf_type)
+    actual_t: str = infer_expr_type(val_node)
+    if str_eq(actual_t, sf_type) == 0 and str_eq(actual_t, "unknown") == 0:
+        val = implicit_cast(val, actual_t, sf_type)
+    emit_store(val, ga, sf_type)
 
 # ==========================================
 # Block Always Returns? (for branch optimization)
@@ -847,6 +850,9 @@ fun gen_statement(node: i64):
         gen_var_decl(node)
     elif nt == NODE_MAP_DECL:
         gen_var_decl(node)
+    elif nt == NODE_ANNOT_DEF:
+        # Annotation definitions are processed at parse time, no codegen needed
+        return
 
 # ==========================================
 # Generate a Block of Statements

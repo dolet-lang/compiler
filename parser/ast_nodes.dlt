@@ -119,6 +119,11 @@ NODE_EXPORT: i32 = 161
 NODE_REQUIRES: i32 = 162
 NODE_USE_MODULE: i32 = 163
 
+# Annotation System
+NODE_ANNOT_DEF: i32 = 170
+NODE_ANNOT_PARAM: i32 = 171
+NODE_ANNOT_USE: i32 = 172
+
 # Helpers (not in Python AST but needed for Dolet representation)
 NODE_PARAM: i32 = 150
 NODE_FIELD_VAL: i32 = 151
@@ -134,7 +139,7 @@ IMPORT_SELECTIVE_ALIASED: i32 = 4
 # Core Infrastructure
 # ==========================================
 
-NODE_SIZE: i32 = 80
+NODE_SIZE: i32 = 88
 
 fun alloc_node(ntype: i32) -> i64:
     n: i64 = Memory.malloc_zeroed(NODE_SIZE as i64)
@@ -1431,3 +1436,27 @@ fun mk_is_not_null(value: i64) -> i64:
 
 fun isnotnull_value(n: i64) -> i64:
     return Memory.read_i64(n + 8)
+
+# AnnotDefNode: f0=name, f1=targets(str), f2=params(nl), f3=effect_type(str), f4=effect_data(str), f5=composes(nl), f6=exclusive(str), f7=emit_level(str), f8=emit_msg(str)
+# +8=name, +16=targets, +24=params, +32=effect_type, +40=effect_data, +48=composes, +56=exclusive, +64=emit_level, +72=emit_msg
+fun mk_annot_def(name: str, targets: str) -> i64:
+    n: i64 = alloc_node(NODE_ANNOT_DEF)
+    Memory.write_i64(n + 8, name as i64)
+    Memory.write_i64(n + 16, targets as i64)
+    return n
+
+# AnnotParamNode: f0=name, f1=ptype(str), f2=default_val(str), f3=is_optional(i64), f4=valid_values(str)
+# +8=name, +16=ptype, +24=default_val, +32=is_optional, +40=valid_values
+fun mk_annot_param(name: str, ptype: str) -> i64:
+    n: i64 = alloc_node(NODE_ANNOT_PARAM)
+    Memory.write_i64(n + 8, name as i64)
+    Memory.write_i64(n + 16, ptype as i64)
+    return n
+
+# AnnotUseNode: f0=name, f1=args(nl of key=value pairs)
+# +8=name, +16=args
+fun mk_annot_use(name: str, args: i64) -> i64:
+    n: i64 = alloc_node(NODE_ANNOT_USE)
+    Memory.write_i64(n + 8, name as i64)
+    Memory.write_i64(n + 16, args)
+    return n

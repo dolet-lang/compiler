@@ -25,6 +25,28 @@ fun gen_fun_def(node: i64):
         return
     mark_fn_emitted(mlir_fname)
 
+    # Register function-level annotations for call-site checking
+    fn_annot_list: i64 = Memory.read_i64(node + 80)
+    if fn_annot_list != 0:
+        fn_ac: i32 = Memory.read_i32(fn_annot_list)
+        fn_ai: i32 = 0
+        while fn_ai < fn_ac:
+            fn_an: i64 = Memory.read_i64(fn_annot_list + 8 + (fn_ai * 8) as i64)
+            fn_aname: str = Memory.read_i64(fn_an + 8) as str
+            fn_aidx: i32 = find_annot(fn_aname)
+            if fn_aidx >= 0:
+                fn_ek: str = get_annot_emit_kind(fn_aidx)
+                if str_eq(fn_ek, "") == 0:
+                    fn_em: str = get_annot_emit_msg(fn_aidx)
+                    fn_flags: i32 = 0
+                    if str_eq(fn_aname, "deprecated") == 1:
+                        fn_flags = 1
+                    elif str_eq(fn_aname, "must_use") == 1:
+                        fn_flags = 2
+                    if fn_flags > 0:
+                        register_fn_annot(mlir_fname, fn_flags, fn_em)
+            fn_ai = fn_ai + 1
+
     # Reset tmp counter for each function
     g_tmp_counter = 0
 
@@ -55,11 +77,18 @@ fun gen_fun_def(node: i64):
         ret_mt = mlir_type(ret_type)
         has_return = 1
 
+    # Collect LLVM passthrough attributes from annotations (with composes expansion)
+    attr_str: str = collect_llvm_attrs_from_list(Memory.read_i64(node + 80))
+
     # Emit function header (using mangled name)
+    func_attrs: str = ""
+    if str_eq(attr_str, "") == 0:
+        func_attrs = Str.concat(" attributes { passthrough = [", Str.concat(attr_str, "] }"))
+
     if has_return == 1:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, " {"))))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, Str.concat(func_attrs, " {")))))
     else:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), ") {"))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mlir_fname), "("), param_str), Str.concat(")", Str.concat(func_attrs, " {"))))
     indent_inc()
 
     # Set up function context
@@ -153,6 +182,28 @@ fun gen_method_def(struct_name: str, node: i64):
     # Resolve overloaded name
     mangled: str = resolve_overload(base_mangled, mpt_str)
 
+    # Register method-level annotations for call-site checking
+    mt_annot_list: i64 = Memory.read_i64(node + 80)
+    if mt_annot_list != 0:
+        mt_ac: i32 = Memory.read_i32(mt_annot_list)
+        mt_ai: i32 = 0
+        while mt_ai < mt_ac:
+            mt_an: i64 = Memory.read_i64(mt_annot_list + 8 + (mt_ai * 8) as i64)
+            mt_aname: str = Memory.read_i64(mt_an + 8) as str
+            mt_aidx: i32 = find_annot(mt_aname)
+            if mt_aidx >= 0:
+                mt_ek: str = get_annot_emit_kind(mt_aidx)
+                if str_eq(mt_ek, "") == 0:
+                    mt_em: str = get_annot_emit_msg(mt_aidx)
+                    mt_flags: i32 = 0
+                    if str_eq(mt_aname, "deprecated") == 1:
+                        mt_flags = 1
+                    elif str_eq(mt_aname, "must_use") == 1:
+                        mt_flags = 2
+                    if mt_flags > 0:
+                        register_fn_annot(mangled, mt_flags, mt_em)
+            mt_ai = mt_ai + 1
+
     g_tmp_counter = 0
 
     # Build param list
@@ -242,10 +293,17 @@ fun gen_method_def(struct_name: str, node: i64):
         ret_mt = mlir_type(ret_type)
         has_return = 1
 
+    # Collect LLVM passthrough attributes from method annotations (with composes expansion)
+    m_attr_str: str = collect_llvm_attrs_from_list(Memory.read_i64(node + 80))
+
+    m_func_attrs: str = ""
+    if str_eq(m_attr_str, "") == 0:
+        m_func_attrs = Str.concat(" attributes { passthrough = [", Str.concat(m_attr_str, "] }"))
+
     if has_return == 1:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, " {"))))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), Str.concat(") -> ", Str.concat(ret_mt, Str.concat(m_func_attrs, " {")))))
     else:
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), ") {"))
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.func @", mangled), "("), param_str), Str.concat(")", Str.concat(m_func_attrs, " {"))))
     indent_inc()
 
     old_in_fn: i32 = g_in_function
@@ -305,19 +363,29 @@ fun register_extern_sigs(node: i64):
         return
     fc: i32 = nl_count(funcs)
     ri: i32 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    fn_node: i64 = 0
+    fname: str = ""
+    params: i64 = 0
+    ret_type: str = ""
+    pts: str = ""
+    pc: i32 = 0
+    pi: i32 = 0
+    pnode: i64 = 0
+    ptype: str = ""
     while ri < fc:
-        fn_node: i64 = nl_get(funcs, ri)
-        fname: str = Memory.read_i64(fn_node + 8) as str
-        params: i64 = Memory.read_i64(fn_node + 16)
-        ret_type: str = Memory.read_i64(fn_node + 24) as str
+        fn_node = nl_get(funcs, ri)
+        fname = Memory.read_i64(fn_node + 8) as str
+        params = Memory.read_i64(fn_node + 16)
+        ret_type = Memory.read_i64(fn_node + 24) as str
         # Build comma-separated param types
-        pts: str = ""
+        pts = ""
         if params != 0:
-            pc: i32 = nl_count(params)
-            pi: i32 = 0
+            pc = nl_count(params)
+            pi = 0
             while pi < pc:
-                pnode: i64 = nl_get(params, pi)
-                ptype: str = Memory.read_i64(pnode + 16) as str
+                pnode = nl_get(params, pi)
+                ptype = Memory.read_i64(pnode + 16) as str
                 if pi > 0:
                     pts = Str.concat(pts, ",")
                 pts = Str.concat(pts, ptype)
@@ -333,28 +401,40 @@ fun gen_extern_block(node: i64):
 
     fc: i32 = nl_count(funcs)
     i: i32 = 0
+    # Hoisted from loop to avoid alloca-in-loop stack overflow
+    fn_node: i64 = 0
+    fname: str = ""
+    params: i64 = 0
+    ret_type: str = ""
+    param_str: str = ""
+    pc: i32 = 0
+    j: i32 = 0
+    pnode: i64 = 0
+    ptype: str = ""
+    pmt: str = ""
+    ret_mt: str = ""
     while i < fc:
-        fn_node: i64 = nl_get(funcs, i)
-        fname: str = Memory.read_i64(fn_node + 8) as str
-        params: i64 = Memory.read_i64(fn_node + 16)
-        ret_type: str = Memory.read_i64(fn_node + 24) as str
+        fn_node = nl_get(funcs, i)
+        fname = Memory.read_i64(fn_node + 8) as str
+        params = Memory.read_i64(fn_node + 16)
+        ret_type = Memory.read_i64(fn_node + 24) as str
 
         # Build param types
-        param_str: str = ""
-        pc: i32 = 0
+        param_str = ""
+        pc = 0
         if params != 0:
             pc = nl_count(params)
-        j: i32 = 0
+        j = 0
         while j < pc:
-            pnode: i64 = nl_get(params, j)
-            ptype: str = Memory.read_i64(pnode + 16) as str
-            pmt: str = mlir_type(ptype)
+            pnode = nl_get(params, j)
+            ptype = Memory.read_i64(pnode + 16) as str
+            pmt = mlir_type(ptype)
             if j > 0:
                 param_str = Str.concat(param_str, ", ")
             param_str = Str.concat(param_str, pmt)
             j = j + 1
 
-        ret_mt: str = ""
+        ret_mt = ""
         if str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
             ret_mt = mlir_type(ret_type)
 

@@ -1,0 +1,198 @@
+#=====================================================
+#  KUBIC DEMO — FPS Game "The Cube"
+#=====================================================
+
+import aecs         [component, system, resource, query]
+import kubic.core   [App, SceneTree]
+import kubic.node3d [Node3D, Camera3D, Light3D, MeshNode3D]
+import kubic.mesh   [CubeMesh, PlaneMesh]
+import kubic.physics [RigidBody3D, CollisionShape3D, BoxShape, CapsuleShape]
+import kubic.input  [Input, KeyCode, MouseButton, Mouse]
+import kubic.render [RenderConfig, KubicDefaultPlugins]
+import kubic.math   [Vec3, clamp]
+import kubic.ui     [HUD, Label, Crosshair]
+
+#=====================================================
+#  COMPONENTS — بس اللي ما عنده Node جاهز
+#=====================================================
+
+@[component]
+struct PlayerTag:
+    speed:       f32  = 5.0
+    sprint_mult: f32  = 1.8
+    jump_force:  f32  = 6.0
+    sensitivity: f32  = 0.15
+    health:      f32  = 100.0
+
+@[component]
+struct CubeTag:
+    hit_flash: f32 = 0.0
+
+#=====================================================
+#  RESOURCES
+#=====================================================
+
+@[resource]
+struct GameState:
+    score:     i32  = 0
+    ammo:      i32  = 30
+    is_paused: bool = false
+
+#=====================================================
+#  SCENE TREE — نظيفة لأن كل node عنده defaults
+#=====================================================
+
+@[node]
+struct GameScene extends SceneTree:
+
+    world = Node3D.new(name="World")
+
+    sun = Light3D.new(name="Sun")
+        .set_type("directional")
+        .set_rot(Vec3(-45.0, 30.0, 0.0))
+        # color, intensity, shadows → defaults مدمجة
+
+    floor = MeshNode3D.new(name="Floor")
+        .set_mesh(PlaneMesh(50.0, 50.0))
+        .set_material("assets/concrete.mat")
+        # CollisionShape تلقائي من الـ mesh bounds
+
+    cube = MeshNode3D.new(name="TargetCube")
+        .set_mesh(CubeMesh(1.0))
+        .set_material("assets/red_cube.mat")
+        .set_pos(Vec3(0.0, 0.5, -8.0))
+        .set_physics("rigid", mass=1.0)
+        # set_physics() تضيف RigidBody + CollisionShape تلقائياً
+        .attach(CubeTag())
+
+    player = Node3D.new(name="Player")
+        .set_pos(Vec3(0.0, 1.0, 0.0))
+        .set_physics("character", mass=70.0)
+        # character physics = capsule collider + lock rotation تلقائي
+        .attach(PlayerTag())
+        .add_child(
+            Camera3D.new(name="FPSCamera")
+                .set_pos(Vec3(0.0, 0.8, 0.0))
+                .set_fov(90.0)
+                # near, far, projection → defaults
+        )
+
+    hud = HUD.new()
+        .add_child(Crosshair.new())
+        .add_child(Label.new(name="AmmoLabel",  anchor="bottom_right"))
+        .add_child(Label.new(name="ScoreLabel", anchor="top_left"))
+        .add_child(Label.new(name="HealthLabel",anchor="bottom_left"))
+
+    fun build() -> void:
+        world
+            .add_child(sun)
+            .add_child(floor)
+            .add_child(cube)
+            .add_child(player)
+            .add_child(hud)
+        self.set_root(world)
+
+#=====================================================
+#  SYSTEMS
+#=====================================================
+
+@[system(stage="startup")]
+fun init(game_state: @res<GameState>) -> void:
+    Mouse.capture()
+
+@[system(stage="update")]
+fun fps_look(
+    player: @query<Node3D,   has=PlayerTag>,
+    cam:    @query<Camera3D>
+) -> void:
+    delta = Mouse.get_delta()
+    player.rotate_y(-delta.x * 0.15)
+    cam.rotate_x(-delta.y * 0.15)
+    cam.clamp_pitch(-89.0, 89.0)
+    # clamp_pitch → built-in في Camera3D
+
+@[system(stage="update", after="fps_look")]
+fun fps_movement(
+    player: @query<Node3D,  has=PlayerTag>,
+    ctrl:   @query<PlayerTag>,
+    dt:     @res<DeltaTime>
+) -> void:
+    move  = Vec3.from_input(KeyCode.W, KeyCode.S, KeyCode.A, KeyCode.D)
+    # Vec3.from_input → built-in helper شائع جداً في engines
+
+    speed = ctrl.speed * (ctrl.sprint_mult if Input.held(KeyCode.Shift) else 1.0)
+
+    player.move_and_slide(move * speed, dt.value)
+    # move_and_slide → built-in في character physics
+
+    if Input.pressed(KeyCode.Space) and player.is_grounded():
+        player.jump(ctrl.jump_force)
+    # is_grounded(), jump() → built-in في character physics
+
+@[system(stage="update")]
+fun fps_shoot(
+    cam:        @query<Camera3D>,
+    game_state: @res<GameState>
+) -> void:
+    if not Input.pressed(MouseButton.Left): return
+    if game_state.ammo <= 0:               return
+
+    game_state.ammo -= 1
+
+    ray = cam.raycast(100.0)
+    # raycast() → built-in في Camera3D
+
+    if ray.hit(CubeTag):
+        ray.node.get(CubeTag).hit_flash = 0.15
+        ray.node.apply_impulse(ray.dir * 8.0)
+        game_state.score += 10
+
+@[system(stage="update")]
+fun cube_flash(
+    cube: @query<CubeTag>,
+    mesh: @query<MeshNode3D, has=CubeTag>,
+    dt:   @res<DeltaTime>
+) -> void:
+    if cube.hit_flash > 0.0:
+        mesh.set_emission(Vec3(1.0, 1.0, 0.0) * cube.hit_flash * 6.0)
+        cube.hit_flash -= dt.value
+    else:
+        mesh.clear_emission()
+
+@[system(stage="update")]
+fun cube_respawn(node: @query<Node3D, has=CubeTag>) -> void:
+    if node.pos.y < -10.0:
+        node.reset_to(Vec3(0.0, 0.5, -8.0))
+        # reset_to() → pos + velocity reset في نفس الوقت
+
+@[system(stage="post_update")]
+fun update_hud(
+    hud:        @query<HUD>,
+    ctrl:       @query<PlayerTag>,
+    game_state: @res<GameState>
+) -> void:
+    hud["AmmoLabel"].text   = "{game_state.ammo} / 30"
+    hud["ScoreLabel"].text  = "Score: {game_state.score}"
+    hud["HealthLabel"].text = "HP: {ctrl.health}"
+
+@[system(stage="update")]
+fun handle_pause(game_state: @res<GameState>) -> void:
+    if Input.pressed(KeyCode.Escape):
+        game_state.is_paused = not game_state.is_paused
+        Mouse.toggle_capture()
+        # toggle_capture() → built-in بدل if/else
+
+#=====================================================
+#  ENTRY POINT
+#=====================================================
+
+fun main() -> void:
+    App.new()
+        .config(RenderConfig(
+            title: "The Cube — Kubic",
+            width: 1920, height: 1080
+        ))
+        .add_plugin(KubicDefaultPlugins)
+        .add_scene(GameScene)
+        .run()
+        

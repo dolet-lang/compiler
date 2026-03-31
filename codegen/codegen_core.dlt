@@ -129,7 +129,10 @@ fun init_ast_constants():
     NODE_PARAM = 150
     NODE_FIELD_VAL = 151
     NODE_MAP_ENTRY = 152
-    NODE_SIZE = 80
+    NODE_ANNOT_DEF = 170
+    NODE_ANNOT_PARAM = 171
+    NODE_ANNOT_USE = 172
+    NODE_SIZE = 88
     IMPORT_FULL = 1
     IMPORT_FROM = 2
     IMPORT_AS = 3
@@ -163,6 +166,7 @@ fun init_codegen():
     g_cur_method_struct = ""
     g_break_label = ""
     g_continue_label = ""
+    init_fn_annot_registry()
 
 fun emit(line: str):
     if g_out_count >= g_out_cap:
@@ -400,9 +404,9 @@ g_fun_sig_ret: i64 = 0
 g_fun_sig_count: i32 = 0
 
 fun init_fun_sigs():
-    g_fun_sig_names = Memory.malloc_zeroed(2048 * 8)
-    g_fun_sig_ret = Memory.malloc_zeroed(2048 * 8)
-    g_fun_sig_params = Memory.malloc_zeroed(2048 * 8)
+    g_fun_sig_names = Memory.malloc_zeroed(8192 * 8)
+    g_fun_sig_ret = Memory.malloc_zeroed(8192 * 8)
+    g_fun_sig_params = Memory.malloc_zeroed(8192 * 8)
     g_fun_sig_count = 0
 
 g_fun_sig_params: i64 = 0
@@ -715,18 +719,38 @@ fun is_global_var(name: str) -> i32:
 # ==========================================
 g_sf_names: i64 = 0
 g_sf_types: i64 = 0
+g_sf_defaults: i64 = 0
 g_static_field_count: i32 = 0
 
 fun init_static_fields():
     g_sf_names = Memory.malloc_zeroed(1024 * 8)
     g_sf_types = Memory.malloc_zeroed(1024 * 8)
+    g_sf_defaults = Memory.malloc_zeroed(1024 * 8)
     g_static_field_count = 0
 
 fun register_static_field(full_name: str, ftype: str):
     off: i64 = (g_static_field_count as i64) * 8
     Memory.write_i64(g_sf_names + off, full_name as i64)
     Memory.write_i64(g_sf_types + off, ftype as i64)
+    Memory.write_i64(g_sf_defaults + off, 0)
     g_static_field_count = g_static_field_count + 1
+
+fun register_static_field_with_default(full_name: str, ftype: str, def_node: i64):
+    off: i64 = (g_static_field_count as i64) * 8
+    Memory.write_i64(g_sf_names + off, full_name as i64)
+    Memory.write_i64(g_sf_types + off, ftype as i64)
+    Memory.write_i64(g_sf_defaults + off, def_node)
+    g_static_field_count = g_static_field_count + 1
+
+fun lookup_static_field_type(full_name: str) -> str:
+    i: i32 = 0
+    while i < g_static_field_count:
+        off: i64 = (i as i64) * 8
+        n: str = Memory.read_i64(g_sf_names + off) as str
+        if str_eq(n, full_name) == 1:
+            return Memory.read_i64(g_sf_types + off) as str
+        i = i + 1
+    return "i64"
 
 # ==========================================
 # Impl Method Registry
@@ -769,6 +793,279 @@ g_cur_fn_name: str = ""
 g_cur_method_struct: str = ""
 g_break_label: str = ""
 g_continue_label: str = ""
+
+# ==========================================
+# Annotation Registry
+# Parallel arrays storing custom annotation definitions
+g_annot_names: i64 = 0
+g_annot_targets: i64 = 0
+g_annot_effects: i64 = 0
+g_annot_emit_kinds: i64 = 0
+g_annot_emit_msgs: i64 = 0
+g_annot_exclusives: i64 = 0
+g_annot_composes_list: i64 = 0
+g_annot_param_lists: i64 = 0
+g_annot_count: i32 = 0
+MAX_ANNOTS: i32 = 256
+
+fun init_annot_registry():
+    MAX_ANNOTS = 256
+    g_annot_names = Memory.malloc_zeroed(2048)
+    g_annot_targets = Memory.malloc_zeroed(2048)
+    g_annot_effects = Memory.malloc_zeroed(2048)
+    g_annot_emit_kinds = Memory.malloc_zeroed(2048)
+    g_annot_emit_msgs = Memory.malloc_zeroed(2048)
+    g_annot_exclusives = Memory.malloc_zeroed(2048)
+    g_annot_composes_list = Memory.malloc_zeroed(2048)
+    g_annot_param_lists = Memory.malloc_zeroed(2048)
+    g_annot_count = 0
+
+fun register_annot(name: str, targets: str, effect: str, emit_kind: str, emit_msg: str, exclusive: str, composes: str) -> i32:
+    idx: i32 = g_annot_count
+    if idx >= MAX_ANNOTS:
+        IOOps.io_println("[ERROR] Annotation registry overflow")
+        return -1
+    Memory.write_i64(g_annot_names + (idx * 8) as i64, name as i64)
+    Memory.write_i64(g_annot_targets + (idx * 8) as i64, targets as i64)
+    Memory.write_i64(g_annot_effects + (idx * 8) as i64, effect as i64)
+    Memory.write_i64(g_annot_emit_kinds + (idx * 8) as i64, emit_kind as i64)
+    Memory.write_i64(g_annot_emit_msgs + (idx * 8) as i64, emit_msg as i64)
+    Memory.write_i64(g_annot_exclusives + (idx * 8) as i64, exclusive as i64)
+    Memory.write_i64(g_annot_composes_list + (idx * 8) as i64, composes as i64)
+    Memory.write_i64(g_annot_param_lists + (idx * 8) as i64, 0)
+    g_annot_count = idx + 1
+    return idx
+
+fun register_annot_params(annot_idx: i32, params_nl: i64):
+    if annot_idx >= 0 and annot_idx < g_annot_count:
+        Memory.write_i64(g_annot_param_lists + (annot_idx * 8) as i64, params_nl)
+
+fun find_annot(name: str) -> i32:
+    i: i32 = 0
+    while i < g_annot_count:
+        aname: str = Memory.read_i64(g_annot_names + (i * 8) as i64) as str
+        if str_eq(aname, name) == 1:
+            return i
+        i = i + 1
+    return -1
+
+fun get_annot_target(idx: i32) -> str:
+    return Memory.read_i64(g_annot_targets + (idx * 8) as i64) as str
+
+fun get_annot_effect(idx: i32) -> str:
+    return Memory.read_i64(g_annot_effects + (idx * 8) as i64) as str
+
+fun get_annot_emit_kind(idx: i32) -> str:
+    return Memory.read_i64(g_annot_emit_kinds + (idx * 8) as i64) as str
+
+fun get_annot_emit_msg(idx: i32) -> str:
+    return Memory.read_i64(g_annot_emit_msgs + (idx * 8) as i64) as str
+
+fun get_annot_exclusive(idx: i32) -> str:
+    return Memory.read_i64(g_annot_exclusives + (idx * 8) as i64) as str
+
+fun get_annot_composes(idx: i32) -> str:
+    return Memory.read_i64(g_annot_composes_list + (idx * 8) as i64) as str
+
+fun get_annot_params(idx: i32) -> i64:
+    return Memory.read_i64(g_annot_param_lists + (idx * 8) as i64)
+
+fun target_allows(targets: str, kind: str) -> i32:
+    # Check if 'kind' is in comma-separated 'targets' string
+    # Simple: check if targets contains the kind substring
+    if str_eq(targets, kind) == 1:
+        return 1
+    # Check for "fun, struct" style — look for ",kind" or "kind,"
+    tlen: i32 = Memory.strlen(targets as i64)
+    klen: i32 = Memory.strlen(kind as i64)
+    pos: i32 = 0
+    while pos <= (tlen - klen):
+        matched: i32 = 1
+        j: i32 = 0
+        while j < klen:
+            tc: i32 = Memory.read_i8((targets as i64) + (pos + j) as i64) as i32
+            kc: i32 = Memory.read_i8((kind as i64) + j as i64) as i32
+            if tc != kc:
+                matched = 0
+                j = klen
+            j = j + 1
+        if matched == 1:
+            # Verify word boundary: before must be start or comma/space, after must be end or comma/space
+            ok_before: i32 = 0
+            if pos == 0:
+                ok_before = 1
+            else:
+                cb: i32 = Memory.read_i8((targets as i64) + (pos - 1) as i64) as i32
+                if cb == 44 or cb == 32:
+                    ok_before = 1
+            ok_after: i32 = 0
+            if (pos + klen) >= tlen:
+                ok_after = 1
+            else:
+                ca: i32 = Memory.read_i8((targets as i64) + (pos + klen) as i64) as i32
+                if ca == 44 or ca == 32:
+                    ok_after = 1
+            if ok_before == 1 and ok_after == 1:
+                return 1
+        pos = pos + 1
+    return 0
+
+fun init_builtin_annots():
+    # Struct allocation annotations (legacy compat)
+    register_annot("transparent", "struct", "", "", "", "", "")
+    register_annot("stack", "struct", "", "", "", "", "")
+    register_annot("heap", "struct", "", "", "", "", "")
+    # LLVM function attributes
+    register_annot("inline", "fun", "llvm:alwaysinline", "", "", "", "")
+    register_annot("noinline", "fun", "llvm:noinline", "", "", "inline", "")
+    register_annot("hot", "fun", "llvm:hot", "", "", "", "")
+    register_annot("cold", "fun", "llvm:cold", "", "", "hot", "")
+    register_annot("pure", "fun", "llvm:readnone", "", "", "", "")
+    register_annot("noreturn", "fun", "llvm:noreturn", "", "", "", "")
+    # Compiler messages
+    register_annot("deprecated", "fun, struct", "", "warning", "this symbol is deprecated", "", "")
+    register_annot("must_use", "fun", "", "error", "return value must be used", "", "")
+
+# Check if a node has a specific annotation in its +80 annotation list
+fun node_has_annot(node: i64, annot_name: str) -> i32:
+    annot_list: i64 = Memory.read_i64(node + 80)
+    if annot_list == 0:
+        return 0
+    count: i32 = Memory.read_i32(annot_list)
+    i: i32 = 0
+    while i < count:
+        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        aname: str = Memory.read_i64(anode + 8) as str
+        if str_eq(aname, annot_name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+# Get annotation use node from a declaration node's +80 list
+fun get_annot_use(node: i64, annot_name: str) -> i64:
+    annot_list: i64 = Memory.read_i64(node + 80)
+    if annot_list == 0:
+        return 0
+    count: i32 = Memory.read_i32(annot_list)
+    i: i32 = 0
+    while i < count:
+        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        aname: str = Memory.read_i64(anode + 8) as str
+        if str_eq(aname, annot_name) == 1:
+            return anode
+        i = i + 1
+    return 0
+
+# Function annotation tracking (by mangled name)
+# Records which functions have specific annotations for call-site checks
+g_fn_annot_names: i64 = 0
+g_fn_annot_flags: i64 = 0
+g_fn_annot_msgs: i64 = 0
+g_fn_annot_count: i32 = 0
+MAX_FN_ANNOTS: i32 = 1024
+
+fun init_fn_annot_registry():
+    MAX_FN_ANNOTS = 1024
+    g_fn_annot_names = Memory.malloc_zeroed(8192)
+    g_fn_annot_flags = Memory.malloc_zeroed(8192)
+    g_fn_annot_msgs = Memory.malloc_zeroed(8192)
+    g_fn_annot_count = 0
+
+# flags: 1=deprecated, 2=must_use
+fun register_fn_annot(fname: str, flags: i32, msg: str):
+    idx: i32 = g_fn_annot_count
+    if idx >= MAX_FN_ANNOTS:
+        return
+    Memory.write_i64(g_fn_annot_names + (idx * 8) as i64, fname as i64)
+    Memory.write_i32(g_fn_annot_flags + (idx * 4) as i64, flags)
+    Memory.write_i64(g_fn_annot_msgs + (idx * 8) as i64, msg as i64)
+    g_fn_annot_count = idx + 1
+
+fun get_fn_annot_flags(fname: str) -> i32:
+    i: i32 = 0
+    while i < g_fn_annot_count:
+        fn: str = Memory.read_i64(g_fn_annot_names + (i * 8) as i64) as str
+        if str_eq(fn, fname) == 1:
+            return Memory.read_i32(g_fn_annot_flags + (i * 4) as i64)
+        i = i + 1
+    return 0
+
+fun get_fn_annot_msg(fname: str) -> str:
+    i: i32 = 0
+    while i < g_fn_annot_count:
+        fn: str = Memory.read_i64(g_fn_annot_names + (i * 8) as i64) as str
+        if str_eq(fn, fname) == 1:
+            return Memory.read_i64(g_fn_annot_msgs + (i * 8) as i64) as str
+        i = i + 1
+    return ""
+
+# Check if string starts with "llvm:" (5 chars: l=108, l=108, v=118, m=109, :=58)
+fun starts_with_llvm(s: str) -> i32:
+    if Memory.strlen(s as i64) < 6:
+        return 0
+    c0: i32 = Memory.read_i8((s as i64) + 0) as i32
+    c1: i32 = Memory.read_i8((s as i64) + 1) as i32
+    c2: i32 = Memory.read_i8((s as i64) + 2) as i32
+    c3: i32 = Memory.read_i8((s as i64) + 3) as i32
+    c4: i32 = Memory.read_i8((s as i64) + 4) as i32
+    if c0 == 108 and c1 == 108 and c2 == 118 and c3 == 109 and c4 == 58:
+        return 1
+    return 0
+
+# Collect all LLVM passthrough attributes from an annotation name, expanding composes
+fun collect_llvm_attrs_for_annot(aname: str, acc: str) -> str:
+    aidx: i32 = find_annot(aname)
+    if aidx < 0:
+        return acc
+    out: str = acc
+    # Direct effect
+    aeff: str = get_annot_effect(aidx)
+    if starts_with_llvm(aeff) == 1:
+        attr_name: str = Str.substring(aeff, 5, Memory.strlen(aeff as i64))
+        if str_eq(out, "") == 1:
+            out = Str.concat("\"", Str.concat(attr_name, "\""))
+        else:
+            out = Str.concat(out, Str.concat(", \"", Str.concat(attr_name, "\"")))
+    # Composed annotations (comma-separated names)
+    comp: str = get_annot_composes(aidx)
+    if str_eq(comp, "") == 0:
+        # Parse comma-separated composed annotation names
+        clen: i32 = Memory.strlen(comp as i64)
+        cstart: i32 = 0
+        cpos: i32 = 0
+        while cpos <= clen:
+            ch: i32 = 0
+            if cpos < clen:
+                ch = Memory.read_i8((comp as i64) + cpos as i64) as i32
+            if cpos == clen or ch == 44:
+                # Extract name from cstart to cpos
+                cname: str = Str.substring(comp, cstart, cpos)
+                # Skip leading spaces
+                while Memory.strlen(cname as i64) > 0:
+                    fc: i32 = Memory.read_i8(cname as i64) as i32
+                    if fc == 32:
+                        cname = Str.substring(cname, 1, Memory.strlen(cname as i64))
+                    else:
+                        break
+                if str_eq(cname, "") == 0:
+                    out = collect_llvm_attrs_for_annot(cname, out)
+                cstart = cpos + 1
+            cpos = cpos + 1
+    return out
+
+# Collect LLVM attrs from annotation node list at +80
+fun collect_llvm_attrs_from_list(annot_list: i64) -> str:
+    if annot_list == 0:
+        return ""
+    acc2: str = ""
+    ac: i32 = Memory.read_i32(annot_list)
+    ai: i32 = 0
+    while ai < ac:
+        an: i64 = Memory.read_i64(annot_list + 8 + (ai * 8) as i64)
+        aname: str = Memory.read_i64(an + 8) as str
+        acc2 = collect_llvm_attrs_for_annot(aname, acc2)
+        ai = ai + 1
+    return acc2
 
 # ==========================================
 # MLIR Type Mapping

@@ -56,6 +56,7 @@ for %%f in (
     test_35_mut_imm
     test_36_selective_import
     test_37_selective_bracket
+    test_38_annotations
 ) do (
     echo [TEST] %%f
     if exist "%TESTS_DIR%\%%f.dlt" (

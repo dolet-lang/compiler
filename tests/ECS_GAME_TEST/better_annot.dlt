@@ -1,0 +1,224 @@
+
+
+#مشكلة 1 — param منفصل عن التعريف
+# الحالي — param كـ keyword منفصل
+annot align:
+    target: fun, struct
+    param value: i32
+        validate: value > 0
+        default: 8
+
+# المشكلة:
+# Dolet في كل مكان ثاني بتعرف params هيك:
+fun align(value: i32 = 8) -> void:
+#          ^^^^^^^^^^^^
+# ليش الـ annotation مختلف؟
+
+#مشكلة 2 — keywords طويلة ومش consistent
+mutually_exclusive: [inline]   # طويل جداً
+type_constraint: ptr, ref      # طويل
+parent_required: serialize     # طويل
+valid_values: ["a", "b"]      # طويل
+
+
+#مشكلة 3 — الـ validate متعلق بالـ param بس مش واضح visually
+param value: i32
+    validate: value > 0     # هل هاد جزء من param أو من الـ annot؟
+    default: 8
+
+#======================================#
+# الحل "الشكل الأقوى — متوافق مع Dolet
+#الفكرة الأساسية: params تشبه function params
+# دالة عادية في Dolet
+fun foo(x: i32 = 0, name: str = "default") -> void:
+    ...
+
+# annotation — نفس الفكرة بالضبط
+annot foo(x: i32 = 0, name: str = "default"):
+    target: fun, struct
+    ...
+
+#التعريفات الكاملة بعد التحسين
+annot inline:
+    target: fun
+    conflicts: [noinline]
+
+annot pure:
+    target: fun
+    effect: llvm
+        attribute: "readnone"
+
+annot noreturn:
+    target: fun
+    effect: llvm
+        attribute: "noreturn"
+
+#2. مع params — نفس syntax الـ functions
+annot align(value: i32 = 8):
+    target: fun, struct, var
+    check value: value > 0 and value % 2 == 0
+
+annot deprecated(message: str = "this symbol is deprecated", since: str = ""):
+    target: fun, struct, type, field
+    emit: warning
+        message: "{symbol} deprecated since {since} — {message}"
+
+annot export(name: str = "{fun_name}"):
+    target: fun, struct
+    effect: llvm
+        attribute: "export={name}"
+
+annot clamp(min: auto, max: auto):
+    target: field, param
+    on: i32, i64, f32, f64
+    check: min < max
+    effect: codegen
+        inject_check: "value = max(value, min)"
+        inject_check: "value = min(value, max)"
+
+#3. مع variadic params
+annot target(...platforms: str):
+    values: ["linux", "windows", "macos", "wasm", "android", "ios"]
+    effect: codegen
+        compile_if: "platform in platforms"
+
+annot derives(...traits: str):
+    values: ["Clone", "Debug", "Hash", "Eq", "Serialize"]
+    target: struct
+    effect: codegen
+        for trait in traits:
+            inject_impl: "{trait} for {struct_name}"
+
+#4. مع effects كاملة
+annot serialize(
+    format:     str  = "json",
+    skip_null:  bool = false,
+    rename_all: str  = ""
+):
+    target: struct
+    values format:     ["json", "binary", "toml", "yaml"]
+    values rename_all: ["camelCase", "snake_case", "PascalCase", ""]
+    effect: codegen
+        inject_fun: "serialize(self) -> str"
+        inject_fun: "deserialize(raw: str) -> Self"
+
+annot system(
+    stage:  str = "update",
+    before: str = "",
+    after:  str = ""
+):
+    target: fun
+    values stage: ["startup", "pre_update", "update", "post_update", "render", "cleanup"]
+    effect: codegen
+        register_in: "system_scheduler"
+
+annot component:
+    target: struct
+    effect: codegen
+        register_in: "component_registry"
+        inject_fun: "clone(self) -> Self"
+
+annot resource(unique: bool = true):
+    target: struct
+    effect: codegen
+        register_in: "resource_registry"
+        if unique:
+            enforce: "single instance in World"
+
+#5. مع needs و conflicts
+annot skip:
+    target: field
+    needs: serialize        # بدل parent_required
+    effect: codegen
+        exclude_from: "serialize, deserialize"
+
+annot rename(name: str):
+    target: field
+    needs: serialize
+    effect: codegen
+        replace_key: "{field_name}" with "{name}"
+
+annot noinline:
+    target: fun
+    conflicts: [inline]     # بدل mutually_exclusive
+
+annot cold:
+    target: fun
+    conflicts: [hot]
+    effect: llvm
+        attribute: "cold"
+
+#6. مع composes
+annot fast_fun:
+    target: fun
+    composes:
+        @[inline]
+        @[hot]
+        @[pure]
+
+annot c_compat:
+    target: fun, struct
+    composes:
+        @[extern("c")]
+        @[repr("c")]
+        @[export("{fun_name}")]
+
+annot game_system(after: str = ""):
+    target: fun
+    composes:
+        @[system(stage="update", after=after)]
+        @[hot]
+
+#7. مع emit مختلفة
+annot must_use:
+    target: fun, type
+    emit: error
+        when: "return value discarded"
+        message: "return value of {fun_name} must be used"
+
+annot unstable(reason: str = ""):
+    target: fun, struct, type, field
+    emit: warning
+        message: "{symbol} is unstable — {reason}"
+
+annot experimental(feature: str):
+    target: fun, struct, module
+    emit: warning
+        message: "{symbol} requires experimental feature '{feature}'"
+    effect: codegen
+        compile_if: "feature_enabled({feature})"
+
+#الشكل النهائي الكامل
+annot example(
+    name:  str  = "default",    # param اختياري
+    count: i32  = 1,            # param بـ default
+    flag:  bool = false         # param boolean
+):
+    target:    fun, struct, field, param, var, for_loop
+    on:        i32, f32, ptr              # type constraint
+    needs:     serialize                  # parent required
+    conflicts: [other_annot]             # mutually exclusive
+    values name: ["a", "b", "c"]        # valid values
+    check count: count > 0              # validation
+
+    effect: type_system
+        enforce: "rule"
+        optimize: "hint"
+
+    effect: codegen
+        inject_fun: "generated() -> void"
+        compile_if: "condition"
+
+    effect: mlir
+        apply_pass: "pass-name"
+
+    effect: llvm
+        attribute: "llvm-attr"
+
+    emit: warning
+        when: "condition"
+        message: "message {symbol}"
+
+    composes:
+        @[inline]
+        @[hot]

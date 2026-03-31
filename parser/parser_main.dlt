@@ -8,7 +8,7 @@
 # Indented Block Parser
 # ==========================================
 fun parse_indented_block(base_indent: i32) -> i64:
-    body: i64 = mk_node_list(128)
+    body: i64 = mk_node_list(512)
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()
         if ci <= base_indent:
@@ -242,28 +242,113 @@ fun parse_statement() -> i64:
             return mk_self_field(sfname)
         return mk_self()
 
-    # Annotation: @stack, @heap, @transparent, @inline, etc.
+    # Annotation definition: annot name:
+    if k == TK_ANNOT:
+        return parse_annot_def()
+
+    # Annotation: @stack, @heap, @transparent, @inline, @[deprecated(msg="...")] etc.
     if k == TK_AT:
-        advance()
-        ann_name: str = ""
-        if cur_kind() == TK_IDENT:
-            ann_name = cur_val()
+        # Collect all stacked annotations
+        annot_nodes: i64 = mk_node_list(8)
+        while cur_kind() == TK_AT:
             advance()
-        elif cur_kind() == TK_STACK:
-            ann_name = "stack"
+
+            # Check for @[name(k=v, ...)] bracket syntax
+            use_bracket: i32 = 0
+            if cur_kind() == TK_LBRACKET:
+                use_bracket = 1
+                advance()
+
+            ann_name: str = ""
+            if cur_kind() == TK_IDENT:
+                ann_name = cur_val()
+                advance()
+            elif cur_kind() == TK_STACK:
+                ann_name = "stack"
+                advance()
+
+            # Parse optional arguments: (k=v, k2=v2)
+            ann_args: i64 = 0
+            if cur_kind() == TK_LPAREN:
+                advance()
+                ann_args = mk_node_list(4)
+                while cur_kind() != TK_RPAREN and cur_kind() != TK_EOF:
+                    ak: str = cur_val()
+                    advance()
+                    if cur_kind() == TK_ASSIGN:
+                        advance()
+                        av: str = cur_val()
+                        advance()
+                        # Store as field_val node: +8=key, +16=value
+                        kv_node: i64 = alloc_node(NODE_FIELD_VAL)
+                        Memory.write_i64(kv_node + 8, ak as i64)
+                        Memory.write_i64(kv_node + 16, av as i64)
+                        nl_add(ann_args, kv_node)
+                    if cur_kind() == TK_COMMA:
+                        advance()
+                if cur_kind() == TK_RPAREN:
+                    advance()
+
+            if use_bracket == 1:
+                if cur_kind() == TK_RBRACKET:
+                    advance()
+
+            ann_use: i64 = mk_annot_use(ann_name, ann_args)
+            nl_add(annot_nodes, ann_use)
+
+            # Validate annotation exists in registry
+            aidx: i32 = find_annot(ann_name)
+            if aidx >= 0:
+                # Check mutual exclusivity
+                excl: str = get_annot_exclusive(aidx)
+                if str_eq(excl, "") == 0:
+                    ec: i32 = Memory.read_i32(annot_nodes)
+                    ei: i32 = 0
+                    while ei < ec:
+                        en: i64 = Memory.read_i64(annot_nodes + 8 + (ei * 8) as i64)
+                        ename: str = Memory.read_i64(en + 8) as str
+                        if str_eq(ename, excl) == 1:
+                            IOOps.io_println(Str.concat("[ERROR] @", Str.concat(ann_name, Str.concat(" is mutually exclusive with @", excl))))
+                        ei = ei + 1
+
+            skip_newlines()
+
+        # Now parse the target declaration
+        # Legacy: @transparent/@stack/@heap + struct → keep +56 flag AND attach +80
+        ann_count: i32 = Memory.read_i32(annot_nodes)
+        first_ann_name: str = ""
+        if ann_count > 0:
+            first_ann: i64 = Memory.read_i64(annot_nodes + 8)
+            first_ann_name = Memory.read_i64(first_ann + 8) as str
+
+        if cur_kind() == TK_STRUCT:
+            target_node: i64 = 0
+            # Legacy struct annotations
+            if str_eq(first_ann_name, "transparent") == 1:
+                target_node = parse_struct_decl_transparent()
+            elif str_eq(first_ann_name, "stack") == 1:
+                target_node = parse_struct_decl_stack()
+            elif str_eq(first_ann_name, "heap") == 1:
+                target_node = parse_struct_decl_heap()
+            else:
+                target_node = parse_struct_decl(0)
+            # Attach annotations at +80
+            Memory.write_i64(target_node + 80, annot_nodes)
+            return target_node
+
+        if cur_kind() == TK_FUN:
+            target_node2: i64 = parse_fun_def(0)
+            Memory.write_i64(target_node2 + 80, annot_nodes)
+            return target_node2
+
+        if cur_kind() == TK_ASYNC:
             advance()
-        # @transparent struct → pass flag=2 via stack_alloc field
-        if str_eq(ann_name, "transparent") == 1:
-            if cur_kind() == TK_STRUCT:
-                return parse_struct_decl_transparent()
-        # @stack struct → pass flag=1 (alias for default, stack is the default)
-        if str_eq(ann_name, "stack") == 1:
-            if cur_kind() == TK_STRUCT:
-                return parse_struct_decl_stack()
-        # @heap struct → pass flag=3 via stack_alloc field (explicit heap allocation)
-        if str_eq(ann_name, "heap") == 1:
-            if cur_kind() == TK_STRUCT:
-                return parse_struct_decl_heap()
+            if cur_kind() == TK_FUN:
+                target_node3: i64 = parse_fun_def(1)
+                Memory.write_i64(target_node3 + 80, annot_nodes)
+                return target_node3
+
+        # Annotation on something else — fallthrough, just parse next statement
         return parse_statement()
 
     # Identifier: var decl, assignment, function call, method call

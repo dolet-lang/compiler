@@ -537,7 +537,33 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
         i = i + 1
 
     # Pass 2: Process load/requires directives
+    # Extract "module X" line from mod.dlt to include in result for package detection
+    mod_line: str = ""
+    mi: i64 = 0
+    mc: i8 = 0 as i8
+    while mi < slen:
+        mc = Memory.read_i8((mod_content as i64) + mi)
+        if mc == 109:
+            if mi + 7 < slen:
+                mc1: i8 = Memory.read_i8((mod_content as i64) + mi + 1)
+                mc2: i8 = Memory.read_i8((mod_content as i64) + mi + 2)
+                mc3: i8 = Memory.read_i8((mod_content as i64) + mi + 3)
+                mc4: i8 = Memory.read_i8((mod_content as i64) + mi + 4)
+                mc5: i8 = Memory.read_i8((mod_content as i64) + mi + 5)
+                mc6: i8 = Memory.read_i8((mod_content as i64) + mi + 6)
+                if mc1 == 111 and mc2 == 100 and mc3 == 117 and mc4 == 108 and mc5 == 101 and mc6 == 32:
+                    me: i64 = mi + 7
+                    while me < slen:
+                        mc = Memory.read_i8((mod_content as i64) + me)
+                        if mc == 10 or mc == 13:
+                            break
+                        me = me + 1
+                    mod_line = str_from_range(mod_content, mi, me)
+                    break
+        mi = mi + 1
     result: str = ""
+    if Memory.strlen(mod_line) > 0:
+        result = Str.concat("\n", Str.concat(mod_line, "\n"))
     i = 0
     line_start = 0
 
@@ -1132,9 +1158,15 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
     mod_name: str = ""
     pkg_mod: str = ""
     pkg_dir: str = ""
-    # Scan for pattern: "import " (ASCII: 'i'=105 'm'=109 'p'=112 'o'=111 'r'=114 't'=116 ' '=32)
+    added_names: i64 = Memory.malloc_zeroed(256 * 8)
+    added_count: i32 = 0
+    already: i32 = 0
+    ai: i32 = 0
+    an: str = ""
+    # Scan for "import " and "module " patterns
     while i < slen - 7:
         c0 = Memory.read_i8((src as i64) + i)
+        # Check "import " (i=105 m=109 p=112 o=111 r=114 t=116 ' '=32)
         if c0 == 105:
             c1 = Memory.read_i8((src as i64) + i + 1)
             c2 = Memory.read_i8((src as i64) + i + 2)
@@ -1165,15 +1197,76 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
                     name_end = name_end + 1
                 if name_end > name_start:
                     mod_name = Str.substring(src, name_start, name_end)
-                    pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
-                    if file_exists(pkg_mod) == 1:
-                        pkg_dir = Str.concat(pkg_base, mod_name)
-                        result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                    already = 0
+                    ai = 0
+                    while ai < added_count:
+                        an = Memory.read_i64(added_names + ((ai as i64) * 8)) as str
+                        if str_eq(an, mod_name) == 1:
+                            already = 1
+                            break
+                        ai = ai + 1
+                    if already == 0:
+                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
+                        if file_exists(pkg_mod) == 1:
+                            pkg_dir = Str.concat(pkg_base, mod_name)
+                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                            Memory.write_i64(added_names + ((added_count as i64) * 8), mod_name as i64)
+                            added_count = added_count + 1
+                i = name_end + 1
+            else:
+                i = i + 1
+        # Check "module " (m=109 o=111 d=100 u=117 l=108 e=101 ' '=32)
+        elif c0 == 109:
+            c1 = Memory.read_i8((src as i64) + i + 1)
+            c2 = Memory.read_i8((src as i64) + i + 2)
+            c3 = Memory.read_i8((src as i64) + i + 3)
+            c4 = Memory.read_i8((src as i64) + i + 4)
+            c5 = Memory.read_i8((src as i64) + i + 5)
+            c6 = Memory.read_i8((src as i64) + i + 6)
+            if c1 == 111 and c2 == 100 and c3 == 117 and c4 == 108 and c5 == 101 and c6 == 32:
+                in_comment = 0
+                bk = i - 1
+                while bk >= 0:
+                    bc = Memory.read_i8((src as i64) + bk)
+                    if bc == 10:
+                        break
+                    if bc == 35:
+                        in_comment = 1
+                        break
+                    bk = bk - 1
+                if in_comment == 1:
+                    i = i + 1
+                    continue
+                name_start = i + 7
+                name_end = name_start
+                while name_end < slen:
+                    nc = Memory.read_i8((src as i64) + name_end)
+                    if nc == 10 or nc == 13 or nc == 32 or nc == 9:
+                        break
+                    name_end = name_end + 1
+                if name_end > name_start:
+                    mod_name = Str.substring(src, name_start, name_end)
+                    already = 0
+                    ai = 0
+                    while ai < added_count:
+                        an = Memory.read_i64(added_names + ((ai as i64) * 8)) as str
+                        if str_eq(an, mod_name) == 1:
+                            already = 1
+                            break
+                        ai = ai + 1
+                    if already == 0:
+                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
+                        if file_exists(pkg_mod) == 1:
+                            pkg_dir = Str.concat(pkg_base, mod_name)
+                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                            Memory.write_i64(added_names + ((added_count as i64) * 8), mod_name as i64)
+                            added_count = added_count + 1
                 i = name_end + 1
             else:
                 i = i + 1
         else:
             i = i + 1
+    Memory.free(added_names)
     return result
 
 # ==========================================
@@ -1280,6 +1373,7 @@ fun main() -> i32:
         mark_file_loaded("platform/process")
         mark_file_loaded("std/io")
         mark_file_loaded("core/types/collections")
+        mark_file_loaded("std/fileIO")
         register_module_name("std")
 
         # std is already loaded as part of runtime, no need for separate loading
@@ -1362,12 +1456,12 @@ fun main() -> i32:
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-out:\"", output_exe), "\" "))
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-libpath:\"", sys_libs), "\" "))
     pkg_base2: str = Str.concat(std_base, "..\\packages\\")
-    pkg_libpaths: str = extract_pkg_libpaths(user_src, pkg_base2)
+    pkg_libpaths: str = extract_pkg_libpaths(source, pkg_base2)
     cmd3 = Str.concat(cmd3, pkg_libpaths)
     cmd3 = Str.concat(cmd3, " ")
     # Extract extern lib names from source for linking
     extern_lib_flags: str = extract_extern_libs(source)
-    cmd3 = Str.concat(cmd3, Str.concat("-defaultlib:kernel32 -subsystem:console -entry:main", extern_lib_flags))
+    cmd3 = Str.concat(cmd3, Str.concat("-defaultlib:kernel32 -defaultlib:msvcrt-math -stack:8388608 -subsystem:console -entry:main", extern_lib_flags))
     rc3: i32 = Process.run(cmd3)
     if rc3 != 0:
         IOOps.io_println("Error: Linking failed")

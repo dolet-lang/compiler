@@ -1,0 +1,52 @@
+# Test: custom annotation system (new syntax)
+import std
+
+# Define a custom annotation with composes — new @[name] style
+annot fast_fun:
+    target: fun
+    composes:
+        @[inline]
+        @[hot]
+
+# Define a deprecated annotation with emit message
+annot obsolete:
+    target: fun
+    emit: warning
+        message: "this function is obsolete"
+
+# Define annotation with params in parens (new syntax)
+annot align(value: i32 = 8):
+    target: fun, struct
+
+# Define annotation with conflicts (replaces mutually_exclusive)
+annot noinline_custom:
+    target: fun
+    conflicts: [inline]
+
+# Use built-in @inline on function
+@inline
+fun add_fast(a: i32, b: i32) -> i32:
+    return a + b
+
+# Use built-in @hot on function
+@hot
+fun multiply(a: i32, b: i32) -> i32:
+    return a * b
+
+# Use custom composed annotation
+@fast_fun
+fun compute(x: i32) -> i32:
+    r: i32 = add_fast(x, 10)
+    r = multiply(r, 2)
+    return r
+
+# Stack-annotated struct (legacy compat)
+@stack
+struct Vec2:
+    x: i32
+    y: i32
+
+# Test: use annotated functions
+result: i32 = compute(5)
+msg: str = Str.concat("Result: ", Convert.i64_to_str(result as i64))
+IOOps.io_println(msg)

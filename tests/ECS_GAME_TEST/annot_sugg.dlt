@@ -1,0 +1,449 @@
+#1. أبسط حالة — annotation بدون params
+annot inline:
+    target: fun
+
+annot noinline:
+    target: fun
+    mutually_exclusive: [inline]
+
+annot pure:
+    target: fun
+    effect: llvm
+        attribute: "readnone"
+
+annot hot:
+    target: fun
+    effect: llvm
+        attribute: "hot"
+
+annot cold:
+    target: fun
+    effect: llvm
+        attribute: "cold"
+
+annot noreturn:
+    target: fun
+    effect: llvm
+        attribute: "noreturn"
+#2. annotation مع param واحد
+annot align:
+    target: fun, struct, var
+    param value: i32
+        validate: value > 0 and value % 2 == 0
+        default: 8
+
+annot export:
+    target: fun, struct
+    param name: str
+        default: "{fun_name}"
+
+annot deprecated:
+    target: fun, struct, type
+    param message: str
+        default: "this symbol is deprecated"
+    emit: warning
+
+annot repeat:
+    target: for_loop
+    param times: i32
+        validate: times >= 1
+#3. annotation مع params متعددة
+annot clamp:
+    target: field, param, var
+    type_constraint: i32, i64, f32, f64
+    param min: auto
+    param max: auto
+    validate: min < max
+    effect: codegen
+        inject_check: "value = max(value, min)"
+        inject_check: "value = min(value, max)"
+
+annot range:
+    target: field, param
+    type_constraint: i32, i64, f32, f64
+    param min: auto
+    param max: auto
+    param inclusive: bool
+        default: true
+    validate: min < max
+    effect: type_system
+        enforce: "value must be in [{min}, {max}]"
+
+annot timeout:
+    target: fun
+    param duration: f32
+        validate: duration > 0.0
+    param unit: str
+        valid_values: ["ms", "s", "min"]
+        default: "ms"
+    effect: codegen
+        wrap_fn: "timeout_runner"
+#4. annotation مع optional params
+annot deprecated:
+    target: fun, struct, type, field
+    param message: str
+        default: "this symbol is deprecated"
+    param since: str
+        optional: true
+    param replaced_by: str
+        optional: true
+    emit: warning
+        message: "{symbol} is deprecated since {since}: {message}"
+
+annot system:
+    target: fun
+    param stage: str
+        valid_values: ["startup", "pre_update", "update", "post_update", "render", "cleanup"]
+        default: "update"
+    param before: str
+        optional: true
+    param after: str
+        optional: true
+    param thread: str
+        valid_values: ["main", "async", "parallel"]
+        default: "main"
+        optional: true
+
+annot test:
+    target: fun
+    param name: str
+        optional: true
+        default: "{fun_name}"
+    param timeout: f32
+        optional: true
+    param skip: bool
+        default: false
+    param skip_reason: str
+        optional: true
+#5. annotation مع variadic params
+annot target:
+    target: fun, struct
+    param platforms: ...str
+        valid_values: ["linux", "windows", "macos", "wasm", "android", "ios"]
+    effect: codegen
+        compile_if: "platform in platforms"
+
+annot derives:
+    target: struct
+    param traits: ...str
+        valid_values: ["Clone", "Debug", "Hash", "Eq", "Ord", "Serialize"]
+    effect: codegen
+        for trait in traits:
+            inject_impl: "{trait} for {struct_name}"
+
+annot flags:
+    target: enum
+    param values: ...str
+        optional: true
+    effect: codegen
+        generate: "bitfield from {enum_name}"
+        generate: "operators |, &, ^ for {enum_name}"
+#6. annotation مع type_constraint
+annot nullable:
+    target: field, param, var, return
+    type_constraint: ptr, ref
+    effect: type_system
+        allow: "null assignment"
+        enforce: "null check before deref"
+
+annot nonnull:
+    target: field, param, var, return
+    type_constraint: ptr, ref
+    mutually_exclusive: [nullable]
+    effect: type_system
+        enforce: "no null assignment"
+        optimize: "remove null checks"
+
+annot atomic:
+    target: field, var
+    type_constraint: i32, i64, u32, u64, bool, ptr
+    effect: codegen
+        replace_ops: "atomic load/store/cas"
+
+annot simd:
+    target: var, field
+    type_constraint: array<f32>, array<f64>, array<i32>
+    param width: i32
+        valid_values: [4, 8, 16]
+        default: 4
+    effect: mlir
+        apply: "vector<{width}xf32>"
+#7. annotation مع parent_required
+annot skip:
+    target: field
+    parent_required: serialize
+    effect: codegen
+        exclude_from: "serialize, deserialize"
+
+annot rename:
+    target: field
+    parent_required: serialize
+    param name: str
+    effect: codegen
+        replace_key: "{field_name}" with "{name}"
+
+annot default_val:
+    target: field
+    parent_required: serialize
+    param value: auto
+    effect: codegen
+        inject: "if key missing: field = {value}"
+
+annot validate_field:
+    target: field
+    parent_required: serialize
+    param rule: str
+    emit: error
+        when: "rule fails during deserialization"
+        message: "validation failed on {field_name}: {rule}"
+#8. annotation مع codegen كامل
+annot serialize:
+    target: struct
+    param format: str
+        valid_values: ["json", "binary", "toml", "yaml"]
+        default: "json"
+    param skip_null: bool
+        default: false
+    param rename_all: str
+        valid_values: ["camelCase", "snake_case", "PascalCase", "UPPER_CASE"]
+        optional: true
+    effect: codegen
+        inject_fun: "serialize(self) -> str"
+        inject_fun: "deserialize(raw: str) -> Self"
+        inject_fun: "to_bytes(self) -> array<u8>"
+        inject_fun: "from_bytes(raw: array<u8>) -> Self"
+
+annot builder:
+    target: struct
+    param prefix: str
+        default: "with"
+    param terminal: str
+        default: "build"
+    effect: codegen
+        generate_struct: "{struct_name}Builder"
+        for field in struct.fields:
+            inject_fun: "{prefix}_{field}(self, val: {field.type}) -> Self"
+        inject_fun: "{terminal}(self) -> {struct_name}"
+
+annot singleton:
+    target: struct
+    param thread_safe: bool
+        default: true
+    effect: codegen
+        inject_fun: "instance() -> &Self"
+        inject_fun: "reset() -> void"
+        inject_var: "_instance: Option<Self> = none"
+        enforce: "no direct instantiation"
+#9. annotation مع effect: type_system
+annot owned:
+    target: param, return
+    type_constraint: ptr, ref
+    effect: type_system
+        transfer: ownership_in
+        enforce: "caller must not use after call"
+        enforce: "fn must free or transfer"
+
+annot borrowed:
+    target: param
+    type_constraint: ptr, ref
+    effect: type_system
+        transfer: none
+        enforce: "fn must not store ptr"
+        enforce: "fn must not free ptr"
+        enforce: "lifetime: shorter than caller scope"
+
+annot immutable:
+    target: param, field
+    effect: type_system
+        enforce: "no mutation after init"
+        optimize: "treat as compile-time const if possible"
+
+annot sealed:
+    target: struct, type
+    effect: type_system
+        enforce: "no external inheritance"
+        enforce: "no external impl of traits"
+#10. annotation مع effect: mlir
+annot vectorize:
+    target: for_loop
+    param width: i32
+        valid_values: [4, 8, 16]
+        default: 4
+    param aligned: bool
+        default: true
+    effect: mlir
+        apply_pass: "affine-vectorize"
+        hint: "vector.width={width}"
+        hint: "vector.aligned={aligned}"
+
+annot parallel:
+    target: for_loop
+    param threads: i32
+        default: 0     # 0 = auto detect
+        validate: threads >= 0
+    effect: mlir
+        apply_pass: "affine-parallelize"
+        hint: "parallel.threads={threads}"
+
+annot gpu:
+    target: fun, for_loop
+    param device: str
+        valid_values: ["cuda", "vulkan", "metal", "opencl"]
+        default: "vulkan"
+    effect: mlir
+        apply_pass: "gpu-kernel-outlining"
+        apply_pass: "convert-gpu-to-{device}"
+#11. annotation مع composes
+annot fast_fun:
+    target: fun
+    composes:
+        @[inline]
+        @[hot]
+        @[pure]
+
+annot c_compat:
+    target: fun, struct
+    composes:
+        @[extern("c")]
+        @[repr(c)]
+        @[export("{fun_name}")]
+
+annot game_system:
+    target: fun
+    composes:
+        @[system(stage="update")]
+        @[hot]
+    param after: str
+        optional: true
+
+annot data_struct:
+    target: struct
+    composes:
+        @[derives(Clone, Debug, Hash)]
+        @[repr(c)]
+    param serializable: bool
+        default: false
+    effect: codegen
+        if serializable:
+            inject_annot: "@[serialize]"
+#12. annotation مع emit مختلفة
+annot unstable:
+    target: fun, struct, type, field
+    param reason: str
+        optional: true
+    emit: warning
+        level: 1
+        message: "{symbol} is unstable and may change: {reason}"
+
+annot unsafe_op:
+    target: fun
+    emit: warning
+        level: 2
+        message: "calling {fun_name} requires manual safety guarantees"
+
+annot must_use:
+    target: fun, type
+    emit: error
+        when: "return value is discarded"
+        message: "return value of {fun_name} must be used"
+
+annot experimental:
+    target: fun, struct, module
+    param feature: str
+    emit: warning
+        level: 1
+        message: "{symbol} is behind experimental feature '{feature}'"
+    effect: codegen
+        compile_if: "feature_flag({feature}) == true"
+#13. annotation خاص بالـ nodes — Kubic Engine
+annot node:
+    target: struct
+    type_constraint: extends Node
+    effect: codegen
+        register_in: "scene_tree"
+        inject_fun: "_process(dt: f32) -> void"
+            default_body: "pass"
+        inject_fun: "_ready() -> void"
+            default_body: "pass"
+        inject_fun: "_destroy() -> void"
+            default_body: "pass"
+
+annot component:
+    target: struct
+    effect: codegen
+        register_in: "component_registry"
+        inject_fun: "clone(self) -> Self"
+
+annot resource:
+    target: struct
+    param unique: bool
+        default: true
+    effect: codegen
+        register_in: "resource_registry"
+        if unique:
+            enforce: "only one instance in World"
+
+annot plugin:
+    target: struct
+    effect: type_system
+        enforce: "must implement fun build(app: App) -> void"
+    effect: codegen
+        register_in: "plugin_registry"
+#######################################
+#الملخص — كل الـ keywords مع بعض
+annot example:
+    # ─── أين يُطبَّق ───────────────────────────────
+    target: fun, struct, field, param, var, return, for_loop, enum, module
+
+    # ─── شروط على الـ target ──────────────────────
+    type_constraint: ptr, ref, i32, f32, array<f32>
+    parent_required: serialize
+    mutually_exclusive: [other_annot]
+
+    # ─── params ───────────────────────────────────
+    param name: type
+        default: value
+        optional: true
+        validate: expression
+        valid_values: ["a", "b", "c"]
+
+    # variadic
+    param names: ...type
+        optional: true
+
+    # ─── تأثير على الـ compiler ───────────────────
+    effect: type_system
+        enforce: "rule description"
+        optimize: "optimization hint"
+        transfer: ownership_in | ownership_out | none
+        allow: "normally forbidden op"
+
+    effect: codegen
+        inject_fun: "generated_fun(...) -> type"
+        inject_impl: "Trait for {struct_name}"
+        inject_check: "runtime check code"
+        inject_var: "var: type = value"
+        compile_if: "condition expression"
+        wrap_fn: "wrapper_name"
+        generate: "what to generate"
+        register_in: "registry_name"
+
+    effect: mlir
+        apply_pass: "pass-name"
+        hint: "key=value"
+        apply: "dialect.op"
+
+    effect: llvm
+        attribute: "llvm_attribute"
+
+    # ─── رسائل الـ compiler ───────────────────────
+    emit: warning | error | info
+        level: 1 | 2 | 3
+        when: "condition"
+        message: "message with {placeholders}"
+
+    # ─── تركيب مع annotations أخرى ───────────────
+    composes:
+        @[other_annot]
+        @[another(param=value)]
+#=====================================================
