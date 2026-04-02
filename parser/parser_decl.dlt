@@ -588,7 +588,7 @@ fun parse_import_stmt() -> i64:
     symbols: i64 = 0
     imp_type: i64 = 0
 
-    # Check for dot notation: import math.dsqrt
+    # Check for dot notation: import math.dsqrt or import a.b.c
     if cur_kind() == TK_DOT:
         advance()
         # Check for bracket syntax: import std.[io, string]
@@ -611,6 +611,13 @@ fun parse_import_stmt() -> i64:
         else:
             sym_name: str = cur_val()
             eat(TK_IDENT)
+
+            # Multi-level dotted path: import a.b.c.d
+            while cur_kind() == TK_DOT:
+                mod_name = Str.concat(Str.concat(mod_name, "."), sym_name)
+                advance()
+                sym_name = cur_val()
+                eat(TK_IDENT)
 
             # Check for .dlt extension
             if str_eq(sym_name, "dlt") == 1:

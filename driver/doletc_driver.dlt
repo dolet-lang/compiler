@@ -1044,10 +1044,7 @@ fun path_base_name(path: str) -> str:
 # File Delete Helper
 # ==========================================
 fun delete_file(path: str):
-    # Open for DELETE access and immediately close (DeleteFileA not in bindings)
-    # Use Process.run("cmd /c del ...") instead
-    cmd: str = Str.concat(Str.concat("cmd /c del \"", path), "\" >nul 2>nul")
-    Process.run(cmd)
+    DeleteFileA(path)
 
 # ==========================================
 # Extract extern lib names from source code
