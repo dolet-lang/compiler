@@ -12693,7 +12693,8 @@ fun path_base_name(path: str) -> str:
 # File Delete Helper
 # ==========================================
 fun delete_file(path: str):
-    DeleteFileA(path)
+    cmd: str = Str.concat(Str.concat("cmd /c del \"", path), "\" >nul 2>nul")
+    Process.run(cmd)
 
 # ==========================================
 # Extract extern lib names from source code
@@ -12931,20 +12932,22 @@ fun main() -> i32:
 
     argc: i32 = Args.count()
     if argc < 2:
-        IOOps.io_println("Dolet Compiler v0.3")
-        IOOps.io_println("Usage: doletc <input.dlt> [-o output.exe] [--keep-mlir] [--keep-llvm] [--no-runtime]")
+        IOOps.io_println("Dolet Compiler v1.0.0-beta")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output.exe] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
         IOOps.io_println("  -o <path>       Output executable path")
         IOOps.io_println("  --keep-mlir     Keep intermediate .mlir file")
         IOOps.io_println("  --keep-llvm     Keep intermediate .ll file")
         IOOps.io_println("  --no-runtime    Don't auto-import runtime libraries")
+        IOOps.io_println("  --no-console    Hide console window (subsystem:windows)")
         return 1
 
     # Parse arguments
     no_runtime: i32 = 0
     keep_mlir: i32 = 0
     keep_llvm: i32 = 0
+    no_console: i32 = 0
     input_path: str = ""
     output_exe: str = ""
 
@@ -12959,6 +12962,8 @@ fun main() -> i32:
             keep_llvm = 1
         elif str_eq(arg, "--tree-shake") == 1:
             g_tree_shake_enabled = 1
+        elif str_eq(arg, "--no-console") == 1:
+            no_console = 1
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:
@@ -13115,7 +13120,10 @@ fun main() -> i32:
     # Extract extern lib names from source for linking
     extern_lib_flags: str = extract_extern_libs(source)
     IOOps.io_println(Str.concat("[link] extern_lib_flags: ", extern_lib_flags))
-    cmd3 = Str.concat(cmd3, Str.concat("-defaultlib:kernel32 -defaultlib:msvcrt-math -stack:8388608 -subsystem:console -entry:main", extern_lib_flags))
+    subsys: str = "-subsystem:console"
+    if no_console == 1:
+        subsys = "-subsystem:windows"
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-defaultlib:kernel32 -defaultlib:msvcrt-math -stack:8388608 ", subsys), Str.concat(" -entry:main", extern_lib_flags)))
     rc3: i32 = Process.run(cmd3)
     if rc3 != 0:
         IOOps.io_println("Error: Linking failed")
