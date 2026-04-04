@@ -262,6 +262,8 @@ fun collect_declarations(ast: i64):
                             nl_add(inst_fields, sf_node)
                         sfi = sfi + 1
                     register_struct(sname, inst_fields)
+                else:
+                    register_struct(sname, mk_node_list(4))
                 smethods = Memory.read_i64(node + 40)
                 if smethods != 0:
                     smc = nl_count(smethods)

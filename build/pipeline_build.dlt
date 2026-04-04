@@ -8858,7 +8858,7 @@ fun gen_static_field_assignment(node: i64):
     actual_t: str = infer_expr_type(val_node)
     if str_eq(actual_t, sf_type) == 0 and str_eq(actual_t, "unknown") == 0:
         val = implicit_cast(val, actual_t, sf_type)
-    emit_store(val, ga, sf_type)
+    emit_store(val, ga, mlir_type(sf_type))
 
 # ==========================================
 # Block Always Returns? (for branch optimization)
@@ -10263,8 +10263,72 @@ fun gen_static_field_access(node: i64) -> str:
     full: str = Str.concat(Str.concat(sname, "__"), fname)
     ga: str = emit_addr_of(full)
     sf_type: str = lookup_static_field_type(full)
-    val: str = emit_load(ga, sf_type)
+    val: str = emit_load(ga, mlir_type(sf_type))
     return val
+
+# ==========================================
+# Indirect Function Pointer Call
+# ==========================================
+fun parse_fun_ptr_ret_type(ftype: str) -> str:
+    # Parse "fun(X) -> Y" or "fun(X)->Y" to extract return type
+    # Find "->" in the string (with or without spaces)
+    flen: i64 = Memory.strlen(ftype)
+    fi: i64 = 0
+    while fi < flen - 1:
+        c0: i8 = Memory.read_i8((ftype as i64) + fi)
+        c1: i8 = Memory.read_i8((ftype as i64) + fi + 1)
+        # "->" = 45, 62
+        if c0 == 45 and c1 == 62:
+            # Skip "-> " or "->"
+            start: i64 = fi + 2
+            if start < flen:
+                cs: i8 = Memory.read_i8((ftype as i64) + start)
+                if cs == 32:
+                    start = start + 1
+            return Str.substring(ftype, start, flen)
+        fi = fi + 1
+    return "void"
+
+fun gen_indirect_call(node: i64, fname: str, fvar_type: str, args_list: i64) -> str:
+    # Load the function pointer from the local variable
+    mlir_nm: str = get_mlir_name(fname)
+    fp_val: str = emit_load(Str.concat("%", mlir_nm), "!llvm.ptr")
+
+    # Build argument list
+    arg_str: str = ""
+    type_str: str = ""
+    ac: i32 = 0
+    if args_list != 0:
+        ac = nl_count(args_list)
+    ii: i32 = 0
+    while ii < ac:
+        anode: i64 = nl_get(args_list, ii)
+        at: str = infer_expr_type(anode)
+        if str_eq(at, "unknown") == 1:
+            at = "i64"
+        av: str = gen_expr(anode, at)
+        amt: str = mlir_type(at)
+        if ii > 0:
+            arg_str = Str.concat(arg_str, ", ")
+            type_str = Str.concat(type_str, ", ")
+        arg_str = Str.concat(arg_str, av)
+        type_str = Str.concat(type_str, amt)
+        ii = ii + 1
+
+    # Parse return type from function pointer type
+    ret_type: str = parse_fun_ptr_ret_type(fvar_type)
+    ret_mt: str = ""
+    if str_eq(ret_type, "void") == 0 and str_eq(ret_type, "") == 0:
+        ret_mt = mlir_type(ret_type)
+
+    # Emit indirect call — MLIR syntax: llvm.call %ptr(args) : !llvm.ptr, (arg_types) -> ret_type
+    if str_eq(ret_mt, "") == 1:
+        emit_ind(Str.concat3(Str.concat3("llvm.call ", fp_val, "("), arg_str, Str.concat3(") : !llvm.ptr, (", type_str, ") -> ()")))
+        return ""
+    else:
+        tmp: str = new_tmp()
+        emit_ind(Str.concat3(Str.concat3(tmp, " = llvm.call ", fp_val), Str.concat("(", arg_str), Str.concat3(") : !llvm.ptr, (", type_str, Str.concat(") -> ", ret_mt))))
+        return tmp
 
 # ==========================================
 # Function Call
@@ -10276,6 +10340,11 @@ fun gen_fun_call(node: i64) -> str:
     # Check if it's actually a struct instantiation
     if is_struct_type(fname) == 1:
         return gen_struct_instantiation(node)
+
+    # Check if fname is a local variable holding a function pointer
+    fvar_type: str = get_var_type(fname)
+    if Str.starts_with(fvar_type, "fun(") == 1:
+        return gen_indirect_call(node, fname, fvar_type, args_list)
 
     # Resolve overloaded function name
     ac: i32 = 0
@@ -10966,6 +11035,8 @@ fun collect_declarations(ast: i64):
                             nl_add(inst_fields, sf_node)
                         sfi = sfi + 1
                     register_struct(sname, inst_fields)
+                else:
+                    register_struct(sname, mk_node_list(4))
                 smethods = Memory.read_i64(node + 40)
                 if smethods != 0:
                     smc = nl_count(smethods)
