@@ -700,15 +700,8 @@ fun generate(ast: i64) -> str:
     IOOps.io_println("[gen] emitting string constants")
     gen_string_constants()
 
-    # Windows helpers
-    emit_ind("// Microsoft linker requires _fltused for floating-point code")
-    emit_ind("llvm.mlir.global external @_fltused(1 : i32) {addr_space = 0 : i32} : i32")
-    emit_blank()
-    emit_ind("// Stack probe function for Windows")
-    emit_ind("llvm.func @__chkstk() {")
-    emit_ind("  llvm.return")
-    emit_ind("}")
-    emit_blank()
+    # Platform-specific helpers (e.g., _fltused, __chkstk) are now in
+    # library/sys/<platform>/runtime_helpers.obj — linked externally, not emitted here.
 
     # Runtime declarations
     gen_runtime_decls()

@@ -11724,15 +11724,8 @@ fun generate(ast: i64) -> str:
     gen_string_constants()
     g_str_emitted_count = g_str_count
 
-    # Windows helpers
-    emit_ind("// Microsoft linker requires _fltused for floating-point code")
-    emit_ind("llvm.mlir.global external @_fltused(1 : i32) {addr_space = 0 : i32} : i32")
-    emit_blank()
-    emit_ind("// Stack probe function for Windows")
-    emit_ind("llvm.func @__chkstk() {")
-    emit_ind("  llvm.return")
-    emit_ind("}")
-    emit_blank()
+    # Platform-specific helpers (e.g., _fltused, __chkstk) are now in
+    # library/sys/<platform>/runtime_helpers.obj — linked externally, not emitted here.
 
     # Runtime declarations
     gen_runtime_decls()
@@ -13375,6 +13368,9 @@ fun main() -> i32:
     # Step 3: lld-link (Object → Executable)
     cmd3: str = Str.concat(Str.concat("\"", tools_dir), "lld-link.exe\" ")
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
+    # Link platform-specific runtime helpers (_fltused, __chkstk)
+    runtime_helpers: str = Str.concat(sys_libs, "\\runtime_helpers.obj")
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", runtime_helpers), "\" "))
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-out:\"", output_exe), "\" "))
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-libpath:\"", sys_libs), "\" "))
     pkg_base2: str = Str.concat(std_base, "..\\packages\\")
