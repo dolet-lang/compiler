@@ -56,6 +56,246 @@ fun replace_extension(path: str, new_ext: str) -> str:
     return Str.concat(base, new_ext)
 
 # ==========================================
+# Platform Config
+# ==========================================
+# Reads library/platform/<name>/platform.conf at startup.
+# The compiler itself knows NO platform names — just reads the config.
+# ==========================================
+g_plat_translate: str = ""
+g_plat_compile: str = ""
+g_plat_linker: str = ""
+g_plat_obj_ext: str = ""
+g_plat_exe_ext: str = ""
+g_plat_default_libs: str = ""
+g_plat_runtime_helpers: str = ""
+g_plat_sys_path: str = ""
+g_plat_stack_size: str = ""
+g_plat_entry: str = ""
+g_plat_flag_output: str = ""
+g_plat_flag_libpath: str = ""
+g_plat_flag_defaultlib: str = ""
+g_plat_flag_subsystem_console: str = ""
+g_plat_flag_subsystem_gui: str = ""
+g_plat_flag_entry: str = ""
+g_plat_flag_stack: str = ""
+g_plat_separator: str = ""
+g_plat_name: str = ""
+
+fun plat_config_set(key: str, value: str):
+    if str_eq(key, "translate") == 1:
+        g_plat_translate = value
+    elif str_eq(key, "compile") == 1:
+        g_plat_compile = value
+    elif str_eq(key, "linker") == 1:
+        g_plat_linker = value
+    elif str_eq(key, "obj_ext") == 1:
+        g_plat_obj_ext = value
+    elif str_eq(key, "exe_ext") == 1:
+        g_plat_exe_ext = value
+    elif str_eq(key, "default_libs") == 1:
+        g_plat_default_libs = value
+    elif str_eq(key, "runtime_helpers") == 1:
+        g_plat_runtime_helpers = value
+    elif str_eq(key, "sys_path") == 1:
+        g_plat_sys_path = value
+    elif str_eq(key, "stack_size") == 1:
+        g_plat_stack_size = value
+    elif str_eq(key, "entry") == 1:
+        g_plat_entry = value
+    elif str_eq(key, "output") == 1:
+        g_plat_flag_output = value
+    elif str_eq(key, "libpath") == 1:
+        g_plat_flag_libpath = value
+    elif str_eq(key, "defaultlib") == 1:
+        g_plat_flag_defaultlib = value
+    elif str_eq(key, "subsystem_console") == 1:
+        g_plat_flag_subsystem_console = value
+    elif str_eq(key, "subsystem_gui") == 1:
+        g_plat_flag_subsystem_gui = value
+    elif str_eq(key, "flag_entry") == 1:
+        g_plat_flag_entry = value
+    elif str_eq(key, "stack") == 1:
+        g_plat_flag_stack = value
+    elif str_eq(key, "separator") == 1:
+        g_plat_separator = value
+
+fun load_platform_config(exe_dir: str, plat_name: str) -> i32:
+    g_plat_name = plat_name
+    conf_path: str = Str.concat(exe_dir, Str.concat("\\..\\library\\platform\\", Str.concat(plat_name, "\\platform.conf")))
+    conf_str: str = read_file_to_string(conf_path)
+    conf_len: i64 = Memory.strlen(conf_str)
+    if conf_len == 0:
+        IOOps.io_println(Str.concat("Error: Cannot read platform config: ", conf_path))
+        return 0
+
+    # Parse simple INI: skip comments (#) and sections ([...]), read key = value
+    # IMPORTANT: all vars hoisted out of loop to avoid alloca-in-loop stack overflow
+    ci: i64 = 0
+    line_start: i64 = 0
+    cc: i8 = 0 as i8
+    line_len: i64 = 0
+    line_buf: i64 = 0
+    line: str = ""
+    first_ch: i8 = 0 as i8
+    eq_pos: i64 = 0
+    li: i64 = 0
+    lc: i8 = 0 as i8
+    key_end: i64 = 0
+    kc: i8 = 0 as i8
+    key_buf: i64 = 0
+    val_start: i64 = 0
+    vc: i8 = 0 as i8
+    val_end: i64 = 0
+    vc2: i8 = 0 as i8
+    val_len: i64 = 0
+    val_buf: i64 = 0
+    while ci <= conf_len:
+        cc = 0 as i8
+        if ci < conf_len:
+            cc = Memory.read_i8((conf_str as i64) + ci)
+        if cc == 10 or ci == conf_len:
+            line_len = ci - line_start
+            if line_len > 0:
+                line_buf = Memory.malloc_zeroed(line_len + 1)
+                Memory.copy(line_buf, (conf_str as i64) + line_start, line_len)
+                line = line_buf as str
+                first_ch = Memory.read_i8(line_buf)
+                if first_ch != 35 and first_ch != 91 and first_ch != 13 and first_ch != 0:
+                    eq_pos = -1
+                    li = 0
+                    while li < line_len:
+                        lc = Memory.read_i8(line_buf + li)
+                        if lc == 61:
+                            eq_pos = li
+                            break
+                        li = li + 1
+                    if eq_pos > 0:
+                        key_end = eq_pos - 1
+                        while key_end >= 0:
+                            kc = Memory.read_i8(line_buf + key_end)
+                            if kc != 32 and kc != 9:
+                                break
+                            key_end = key_end - 1
+                        key_buf = Memory.malloc_zeroed(key_end + 2)
+                        Memory.copy(key_buf, line_buf, key_end + 1)
+                        val_start = eq_pos + 1
+                        while val_start < line_len:
+                            vc = Memory.read_i8(line_buf + val_start)
+                            if vc != 32 and vc != 9:
+                                break
+                            val_start = val_start + 1
+                        val_end = line_len - 1
+                        while val_end >= val_start:
+                            vc2 = Memory.read_i8(line_buf + val_end)
+                            if vc2 != 32 and vc2 != 9 and vc2 != 13:
+                                break
+                            val_end = val_end - 1
+                        val_len = val_end - val_start + 1
+                        val_buf = Memory.malloc_zeroed(val_len + 1)
+                        if val_len > 0:
+                            Memory.copy(val_buf, line_buf + val_start, val_len)
+                        plat_config_set(key_buf as str, val_buf as str)
+            line_start = ci + 1
+        ci = ci + 1
+    return 1
+
+fun detect_current_platform() -> str:
+    # Check if running on Windows or Linux by testing exe path
+    exe_path: str = PathOps.get_exe_path()
+    # If path contains backslash or drive letter, it's Windows
+    ep_len: i64 = Memory.strlen(exe_path)
+    pi: i64 = 0
+    while pi < ep_len:
+        pc: i8 = Memory.read_i8((exe_path as i64) + pi)
+        if pc == 92:
+            return "windows"
+        pi = pi + 1
+    return "linux"
+
+fun str_replace(template: str, placeholder: str, value: str) -> str:
+    # Replace first occurrence of placeholder in template with value
+    # IMPORTANT: all vars hoisted to avoid alloca-in-loop
+    tlen: i64 = Memory.strlen(template)
+    plen: i64 = Memory.strlen(placeholder)
+    if plen == 0 or tlen == 0:
+        return template
+    si: i64 = 0
+    found: i32 = 0
+    sj: i64 = 0
+    tc: i8 = 0 as i8
+    pc2: i8 = 0 as i8
+    prefix: i64 = 0
+    suffix_start: i64 = 0
+    suffix_len: i64 = 0
+    suffix: i64 = 0
+    while si <= tlen - plen:
+        found = 1
+        sj = 0
+        while sj < plen:
+            tc = Memory.read_i8((template as i64) + si + sj)
+            pc2 = Memory.read_i8((placeholder as i64) + sj)
+            if tc != pc2:
+                found = 0
+                break
+            sj = sj + 1
+        if found == 1:
+            prefix = Memory.malloc_zeroed(si + 1)
+            Memory.copy(prefix, template as i64, si)
+            suffix_start = si + plen
+            suffix_len = tlen - suffix_start
+            suffix = Memory.malloc_zeroed(suffix_len + 1)
+            Memory.copy(suffix, (template as i64) + suffix_start, suffix_len)
+            return Str.concat(prefix as str, Str.concat(value, suffix as str))
+        si = si + 1
+    return template
+
+fun build_defaultlib_flags(libs_csv: str, flag_template: str) -> str:
+    # IMPORTANT: all vars hoisted to avoid alloca-in-loop
+    result: str = ""
+    csv_len: i64 = Memory.strlen(libs_csv)
+    if csv_len == 0:
+        return result
+    start: i64 = 0
+    di: i64 = 0
+    dc: i8 = 0 as i8
+    ns: i64 = 0
+    nc: i8 = 0 as i8
+    ne: i64 = 0
+    nc2: i8 = 0 as i8
+    name_len: i64 = 0
+    name_buf: i64 = 0
+    flag: str = ""
+    while di <= csv_len:
+        dc = 0 as i8
+        if di < csv_len:
+            dc = Memory.read_i8((libs_csv as i64) + di)
+        if dc == 44 or di == csv_len:
+            ns = start
+            while ns < di:
+                nc = Memory.read_i8((libs_csv as i64) + ns)
+                if nc != 32 and nc != 9:
+                    break
+                ns = ns + 1
+            ne = di - 1
+            while ne >= ns:
+                nc2 = Memory.read_i8((libs_csv as i64) + ne)
+                if nc2 != 32 and nc2 != 9:
+                    break
+                ne = ne - 1
+            name_len = ne - ns + 1
+            if name_len > 0:
+                name_buf = Memory.malloc_zeroed(name_len + 1)
+                Memory.copy(name_buf, (libs_csv as i64) + ns, name_len)
+                flag = str_replace(flag_template, "{name}", name_buf as str)
+                if Memory.strlen(result) > 0:
+                    result = Str.concat(result, Str.concat(" ", flag))
+                else:
+                    result = flag
+            start = di + 1
+        di = di + 1
+    return result
+
+# ==========================================
 # Library Module Registry
 # ==========================================
 # Reads library/mod.dlt to build a name->path lookup table.
@@ -478,18 +718,21 @@ fun get_exe_dir() -> str:
     return PathOps.get_exe_directory()
 
 fun load_runtime(exe_dir: str) -> str:
-    library_root: str = Str.concat(exe_dir, "\\..\\library\\")
-    core_rt: str = load_module(library_root, "core\\mod.dlt")
+    s: str = g_plat_separator
+    library_root: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", s)))))
+    core_rt: str = load_module(library_root, Str.concat("core", Str.concat(s, "mod.dlt")))
     # Core types depend on std (Convert, Str, IOOps), always load std too
-    std_rt: str = load_module(library_root, "std\\mod.dlt")
+    std_rt: str = load_module(library_root, Str.concat("std", Str.concat(s, "mod.dlt")))
     return Str.concat(core_rt, Str.concat("\n", std_rt))
 
 fun load_std(exe_dir: str) -> str:
-    library_root: str = Str.concat(exe_dir, "\\..\\library\\")
-    return load_module(library_root, "std\\mod.dlt")
+    s: str = g_plat_separator
+    library_root: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", s)))))
+    return load_module(library_root, Str.concat("std", Str.concat(s, "mod.dlt")))
 
 fun load_prelude(exe_dir: str) -> str:
-    prelude_path: str = Str.concat(exe_dir, "\\..\\library\\prelude\\annotations.dlt")
+    s: str = g_plat_separator
+    prelude_path: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", Str.concat(s, Str.concat("prelude", Str.concat(s, "annotations.dlt"))))))))
     src: str = read_file_to_string(prelude_path)
     return src
 
@@ -1131,7 +1374,8 @@ fun extract_extern_libs(src: str) -> str:
                             lib_name = Str.substring(lib_name, 0, ln_len - 4)
                     # Skip kernel32 (already included)
                     if str_eq(lib_name, "kernel32") == 0:
-                        result = Str.concat(result, Str.concat(" -defaultlib:", lib_name))
+                        ext_flag: str = str_replace(g_plat_flag_defaultlib, "{name}", lib_name)
+                        result = Str.concat(result, Str.concat(" ", ext_flag))
                 i = name_end + 1
             else:
                 i = i + 1
@@ -1211,7 +1455,8 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
                         pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
                         if file_exists(pkg_mod) == 1:
                             pkg_dir = Str.concat(pkg_base, mod_name)
-                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                            lp_flag: str = str_replace(g_plat_flag_libpath, "{path}", Str.concat("\"", Str.concat(pkg_dir, "\"")))
+                            result = Str.concat(result, Str.concat(" ", lp_flag))
                             Memory.write_i64(added_names + ((added_count as i64) * 8), mod_name as i64)
                             added_count = added_count + 1
                 i = name_end + 1
@@ -1260,7 +1505,8 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
                         pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
                         if file_exists(pkg_mod) == 1:
                             pkg_dir = Str.concat(pkg_base, mod_name)
-                            result = Str.concat(result, Str.concat(" -libpath:\"", Str.concat(pkg_dir, "\"")))
+                            lp_flag: str = str_replace(g_plat_flag_libpath, "{path}", Str.concat("\"", Str.concat(pkg_dir, "\"")))
+                            result = Str.concat(result, Str.concat(" ", lp_flag))
                             Memory.write_i64(added_names + ((added_count as i64) * 8), mod_name as i64)
                             added_count = added_count + 1
                 i = name_end + 1
@@ -1280,15 +1526,16 @@ fun main() -> i32:
 
     argc: i32 = Args.count()
     if argc < 2:
-        IOOps.io_println("Dolet Compiler v1.0.0-beta")
-        IOOps.io_println("Usage: doletc <input.dlt> [-o output.exe] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console]")
+        IOOps.io_println("Dolet Compiler v1.2.0-beta")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--platform <name>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
-        IOOps.io_println("  -o <path>       Output executable path")
-        IOOps.io_println("  --keep-mlir     Keep intermediate .mlir file")
-        IOOps.io_println("  --keep-llvm     Keep intermediate .ll file")
-        IOOps.io_println("  --no-runtime    Don't auto-import runtime libraries")
-        IOOps.io_println("  --no-console    Hide console window (subsystem:windows)")
+        IOOps.io_println("  -o <path>          Output executable path")
+        IOOps.io_println("  --platform <name>  Target platform (reads platform/<name>/platform.conf)")
+        IOOps.io_println("  --keep-mlir        Keep intermediate .mlir file")
+        IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
+        IOOps.io_println("  --no-runtime       Don't auto-import runtime libraries")
+        IOOps.io_println("  --no-console       GUI mode (no console window)")
         return 1
 
     # Parse arguments
@@ -1298,6 +1545,7 @@ fun main() -> i32:
     no_console: i32 = 0
     input_path: str = ""
     output_exe: str = ""
+    target_platform: str = ""
 
     ai: i32 = 1
     while ai < argc:
@@ -1312,6 +1560,10 @@ fun main() -> i32:
             g_tree_shake_enabled = 1
         elif str_eq(arg, "--no-console") == 1:
             no_console = 1
+        elif str_eq(arg, "--platform") == 1:
+            ai = ai + 1
+            if ai < argc:
+                target_platform = Args.get(ai)
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:
@@ -1325,19 +1577,45 @@ fun main() -> i32:
         IOOps.io_println("Error: No input file specified")
         return 1
 
-    # Derive paths
+    # Load platform config
+    exe_dir: str = get_exe_dir()
+    if Memory.strlen(target_platform) == 0:
+        target_platform = detect_current_platform()
+    plat_ok: i32 = load_platform_config(exe_dir, target_platform)
+    if plat_ok == 0:
+        IOOps.io_println(Str.concat("Error: Unknown platform '", Str.concat(target_platform, "'")))
+        return 1
+    IOOps.io_println(Str.concat("Platform: ", g_plat_name))
+
+    # Derive paths using platform config
     base_path: str = path_base_name(input_path)
     mlir_path: str = Str.concat(base_path, ".mlir")
     ll_path: str = Str.concat(base_path, ".ll")
-    obj_path: str = Str.concat(base_path, ".obj")
+    obj_path: str = Str.concat(base_path, g_plat_obj_ext)
     if Memory.strlen(output_exe) == 0:
-        output_exe = Str.concat(base_path, ".exe")
+        output_exe = Str.concat(base_path, g_plat_exe_ext)
+    else:
+        # Append exe_ext if user gave -o without extension
+        has_dot: i32 = 0
+        ocheck: i64 = Memory.strlen(output_exe)
+        oci: i64 = ocheck - 1
+        while oci >= 0:
+            occ: i8 = Memory.read_i8((output_exe as i64) + oci)
+            if occ == 46:
+                has_dot = 1
+                break
+            if occ == 92 or occ == 47:
+                break
+            oci = oci - 1
+        if has_dot == 0:
+            ext_len: i64 = Memory.strlen(g_plat_exe_ext)
+            if ext_len > 0:
+                output_exe = Str.concat(output_exe, g_plat_exe_ext)
 
-    # Determine if we need full pipeline (-o given or output is .exe)
+    # Determine if we need full pipeline
     has_output: i32 = 0
-    # Check if output_exe was explicitly set or default .exe
     oelen: i64 = Memory.strlen(output_exe)
-    if oelen > 4:
+    if oelen > 2:
         has_output = 1
 
     IOOps.io_println(Str.concat("Compiling: ", input_path))
@@ -1351,10 +1629,10 @@ fun main() -> i32:
 
     # Auto-import runtime (unless --no-runtime)
     source: str = ""
-    exe_dir: str = get_exe_dir()
 
     # Load library module registry
-    library_root: str = Str.concat(exe_dir, "\\..\\library\\")
+    sep: str = g_plat_separator
+    library_root: str = Str.concat(exe_dir, Str.concat(sep, Str.concat("..", Str.concat(sep, Str.concat("library", sep)))))
     init_library_registry()
     load_library_registry(library_root)
     init_loaded_files()
@@ -1367,6 +1645,9 @@ fun main() -> i32:
         mark_file_loaded("prelude/annotations")
         IOOps.io_println(Str.concat("Prelude: ", Str.concat(Convert.i64_to_str(prelude_len), " chars")))
 
+    # Build platform-relative path prefix (e.g. "platform/windows/")
+    plat_prefix: str = Str.concat("platform/", Str.concat(g_plat_name, "/"))
+
     if no_runtime == 0:
         rt: str = load_runtime(exe_dir)
         rt_len: i64 = Memory.strlen(rt)
@@ -1375,16 +1656,17 @@ fun main() -> i32:
         mark_file_loaded("core/types/integers")
         mark_file_loaded("core/types/floats")
         mark_file_loaded("core/types/primitives")
-        # Runtime now always includes std
-        mark_file_loaded("platform/windows/kernel32")
-        mark_file_loaded("platform/windows/alloc")
-        mark_file_loaded("platform/windows/format")
-        mark_file_loaded("platform/windows/str")
-        mark_file_loaded("platform/windows/io")
-        mark_file_loaded("platform/windows/file")
-        mark_file_loaded("platform/windows/path")
-        mark_file_loaded("platform/windows/args")
-        mark_file_loaded("platform/windows/process")
+        # Runtime now always includes std — mark platform files dynamically
+        mark_file_loaded(Str.concat(plat_prefix, "kernel32"))
+        mark_file_loaded(Str.concat(plat_prefix, "syscalls"))
+        mark_file_loaded(Str.concat(plat_prefix, "alloc"))
+        mark_file_loaded(Str.concat(plat_prefix, "format"))
+        mark_file_loaded(Str.concat(plat_prefix, "str"))
+        mark_file_loaded(Str.concat(plat_prefix, "io"))
+        mark_file_loaded(Str.concat(plat_prefix, "file"))
+        mark_file_loaded(Str.concat(plat_prefix, "path"))
+        mark_file_loaded(Str.concat(plat_prefix, "args"))
+        mark_file_loaded(Str.concat(plat_prefix, "process"))
         mark_file_loaded("std/io")
         mark_file_loaded("core/types/collections")
         mark_file_loaded("std/fileIO")
@@ -1395,7 +1677,7 @@ fun main() -> i32:
             IOOps.io_println(Str.concat("Runtime: ", Str.concat(Convert.i64_to_str(rt_len), " chars")))
 
     # Resolve and load user imports
-    std_base: str = Str.concat(exe_dir, "\\..\\library\\")
+    std_base: str = library_root
     src_dir: str = get_file_dir(input_path)
     if Memory.strlen(src_dir) == 0:
         src_dir = "."
@@ -1436,11 +1718,11 @@ fun main() -> i32:
 
     # Phase 4: Full pipeline (MLIR → LLVM IR → Object → Executable)
     IOOps.io_println("[4/4] Building executable...")
-    tools_dir: str = Str.concat(exe_dir, "\\..\\tools\\")
-    sys_libs: str = Str.concat(exe_dir, "\\..\\library\\platform\\windows")
+    tools_dir: str = Str.concat(exe_dir, Str.concat(sep, Str.concat("..", Str.concat(sep, Str.concat("tools", sep)))))
+    sys_libs: str = Str.concat(exe_dir, Str.concat(sep, Str.concat("..", Str.concat(sep, Str.concat("library", Str.concat(sep, g_plat_sys_path))))))
 
     # Step 1: mlir-translate (MLIR → LLVM IR)
-    cmd1: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), "mlir-translate.exe\" --mlir-to-llvmir \""), mlir_path), Str.concat("\" -o \"", Str.concat(ll_path, "\"")))
+    cmd1: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_translate, "\" --mlir-to-llvmir \"")), mlir_path), Str.concat("\" -o \"", Str.concat(ll_path, "\"")))
     rc1: i32 = Process.run(cmd1)
     if rc1 != 0:
         IOOps.io_println("Error: MLIR translation failed")
@@ -1448,34 +1730,67 @@ fun main() -> i32:
     IOOps.io_println("  MLIR -> LLVM IR OK")
 
     # Step 2: clang (LLVM IR → Object)
-    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), "clang.exe\" -c \""), ll_path), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
+    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_compile, "\" -c \"")), ll_path), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
     rc2: i32 = Process.run(cmd2)
     if rc2 != 0:
         IOOps.io_println("Error: Compilation to object failed")
         return 1
     IOOps.io_println("  LLVM IR -> Object OK")
 
-    # Step 3: lld-link (Object → Executable)
-    cmd3: str = Str.concat(Str.concat("\"", tools_dir), "lld-link.exe\" ")
+    # Step 3: Link (Object → Executable) — all flags from platform.conf
+    cmd3: str = Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_linker, "\" "))
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
-    # Link platform-specific runtime helpers (_fltused, __chkstk)
-    runtime_helpers: str = Str.concat(sys_libs, "\\runtime_helpers.obj")
-    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", runtime_helpers), "\" "))
-    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-out:\"", output_exe), "\" "))
-    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-libpath:\"", sys_libs), "\" "))
-    pkg_base2: str = Str.concat(std_base, "..\\packages\\")
+
+    # Link runtime helpers if configured
+    rh_len: i64 = Memory.strlen(g_plat_runtime_helpers)
+    if rh_len > 0:
+        runtime_helpers: str = Str.concat(sys_libs, Str.concat(sep, g_plat_runtime_helpers))
+        cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", runtime_helpers), "\" "))
+
+    # Output flag (e.g. "-out:{path}" or "-o {path}")
+    out_flag: str = Str.concat(Str.concat("\"", output_exe), "\"")
+    # Replace {path} in flag template
+    flag_out: str = str_replace(g_plat_flag_output, "{path}", out_flag)
+    cmd3 = Str.concat(cmd3, Str.concat(flag_out, " "))
+
+    # Libpath flag (e.g. "-libpath:{path}" or "-L{path}")
+    lib_flag: str = Str.concat(Str.concat("\"", sys_libs), "\"")
+    flag_lp: str = str_replace(g_plat_flag_libpath, "{path}", lib_flag)
+    cmd3 = Str.concat(cmd3, Str.concat(flag_lp, " "))
+
+    # Package libpaths
+    pkg_base2: str = Str.concat(library_root, Str.concat("..", Str.concat(sep, Str.concat("packages", sep))))
     pkg_libpaths: str = extract_pkg_libpaths(source, pkg_base2)
-    cmd3 = Str.concat(cmd3, pkg_libpaths)
-    cmd3 = Str.concat(cmd3, " ")
-    # Extract extern lib names from source for linking
+    cmd3 = Str.concat(cmd3, Str.concat(pkg_libpaths, " "))
+
+    # Default libs from config (e.g. "kernel32, ws2_32, msvcrt-math")
+    default_lib_flags: str = build_defaultlib_flags(g_plat_default_libs, g_plat_flag_defaultlib)
+    cmd3 = Str.concat(cmd3, Str.concat(default_lib_flags, " "))
+
+    # Extern libs from source
     extern_lib_flags: str = extract_extern_libs(source)
-    subsys: str = "-subsystem:console"
+    cmd3 = Str.concat(cmd3, extern_lib_flags)
+
+    # Stack size
+    flag_stk: str = str_replace(g_plat_flag_stack, "{size}", g_plat_stack_size)
+    cmd3 = Str.concat(cmd3, Str.concat(" ", flag_stk))
+
+    # Subsystem (console/gui)
+    subsys: str = g_plat_flag_subsystem_console
     if no_console == 1:
-        subsys = "-subsystem:windows"
-    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("-defaultlib:kernel32 -defaultlib:msvcrt-math -stack:8388608 ", subsys), Str.concat(" -entry:main", extern_lib_flags)))
+        subsys = g_plat_flag_subsystem_gui
+    sub_len: i64 = Memory.strlen(subsys)
+    if sub_len > 0:
+        cmd3 = Str.concat(cmd3, Str.concat(" ", subsys))
+
+    # Entry point
+    flag_ent: str = str_replace(g_plat_flag_entry, "{name}", g_plat_entry)
+    cmd3 = Str.concat(cmd3, Str.concat(" ", flag_ent))
+
     rc3: i32 = Process.run(cmd3)
     if rc3 != 0:
         IOOps.io_println("Error: Linking failed")
+        IOOps.io_println(Str.concat("  CMD: ", cmd3))
         return 1
     IOOps.io_println("  Object -> Executable OK")
 
