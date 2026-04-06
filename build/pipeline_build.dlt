@@ -11996,6 +11996,7 @@ g_plat_compile: str = ""
 g_plat_linker: str = ""
 g_plat_obj_ext: str = ""
 g_plat_exe_ext: str = ""
+g_plat_target_triple: str = ""
 g_plat_default_libs: str = ""
 g_plat_runtime_helpers: str = ""
 g_plat_sys_path: str = ""
@@ -12022,6 +12023,8 @@ fun plat_config_set(key: str, value: str):
         g_plat_obj_ext = value
     elif str_eq(key, "exe_ext") == 1:
         g_plat_exe_ext = value
+    elif str_eq(key, "target_triple") == 1:
+        g_plat_target_triple = value
     elif str_eq(key, "default_libs") == 1:
         g_plat_default_libs = value
     elif str_eq(key, "runtime_helpers") == 1:
@@ -12402,6 +12405,8 @@ fun load_file_with_deps(library_root: str, rel_path: str) -> str:
                         dep_end = dep_end - 1
                     if dep_end > dep_start:
                         dep_path: str = str_from_range(file_src, dep_start, dep_end)
+                        # Substitute {platform} placeholder with actual platform name
+                        dep_path = str_replace(dep_path, "{platform}", g_plat_name)
                         dep_src: str = load_file_with_deps(library_root, dep_path)
                         if Memory.strlen(dep_src) > 0:
                             deps_src = Str.concat(deps_src, Str.concat("\n", dep_src))
@@ -12486,7 +12491,8 @@ fun resolve_expose_path(library_root: str, mod_rel_path: str, sub_name: str) -> 
                         if en_end > en_start and ep_end > ep_start:
                             exp_name: str = str_from_range(mod_content, en_start, en_end)
                             if str_eq(exp_name, sub_name) == 1:
-                                return str_from_range(mod_content, ep_start, ep_end)
+                                # Substitute {platform} placeholder with actual platform name
+                                return str_replace(str_from_range(mod_content, ep_start, ep_end), "{platform}", g_plat_name)
             if mcc == 13 and (mci + 1) < mclen:
                 mnr: i8 = Memory.read_i8((mod_content as i64) + mci + 1)
                 if mnr == 10:
@@ -12504,6 +12510,8 @@ fun scan_selective_std_imports(user_src: str, library_root: str) -> str:
     si: i64 = 0
     s_line_start: i64 = 0
     mod_path: str = "std\\mod.dlt"
+    # Platform mod.dlt for fallback expose resolution
+    plat_mod_path: str = Str.concat("platform\\", Str.concat(g_plat_name, "\\mod.dlt"))
 
     # Hoist all declarations before loop
     sc: i8 = 0
@@ -12580,6 +12588,9 @@ fun scan_selective_std_imports(user_src: str, library_root: str) -> str:
                                 if ne > ns:
                                     sub_name = str_from_range(user_src, ns, ne)
                                     exp_path = resolve_expose_path(library_root, mod_path, sub_name)
+                                    # Fallback: check platform mod.dlt
+                                    if Memory.strlen(exp_path) == 0:
+                                        exp_path = resolve_expose_path(library_root, plat_mod_path, sub_name)
                                     if Memory.strlen(exp_path) > 0:
                                         dep_src = load_file_with_deps(library_root, exp_path)
                                         if Memory.strlen(dep_src) > 0:
@@ -12598,6 +12609,9 @@ fun scan_selective_std_imports(user_src: str, library_root: str) -> str:
                         if sn_end > after_dot:
                             sub_name2 = str_from_range(user_src, after_dot, sn_end)
                             exp_path2 = resolve_expose_path(library_root, mod_path, sub_name2)
+                            # Fallback: check platform mod.dlt
+                            if Memory.strlen(exp_path2) == 0:
+                                exp_path2 = resolve_expose_path(library_root, plat_mod_path, sub_name2)
                             if Memory.strlen(exp_path2) > 0:
                                 dep_src2 = load_file_with_deps(library_root, exp_path2)
                                 if Memory.strlen(dep_src2) > 0:
@@ -12619,10 +12633,13 @@ fun get_exe_dir() -> str:
 fun load_runtime(exe_dir: str) -> str:
     s: str = g_plat_separator
     library_root: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", s)))))
+    # 1. Core types (Memory, integers, floats) — platform-neutral
     core_rt: str = load_module(library_root, Str.concat("core", Str.concat(s, "mod.dlt")))
-    # Core types depend on std (Convert, Str, IOOps), always load std too
+    # 2. Platform runtime (kernel32/syscalls, alloc, io...) — platform-specific
+    plat_rt: str = load_module(library_root, Str.concat("platform", Str.concat(s, Str.concat(g_plat_name, Str.concat(s, "mod.dlt")))))
+    # 3. Standard library (collections, fileIO) — platform-neutral
     std_rt: str = load_module(library_root, Str.concat("std", Str.concat(s, "mod.dlt")))
-    return Str.concat(core_rt, Str.concat("\n", std_rt))
+    return Str.concat(core_rt, Str.concat("\n", Str.concat(plat_rt, Str.concat("\n", std_rt))))
 
 fun load_std(exe_dir: str) -> str:
     s: str = g_plat_separator
@@ -12738,6 +12755,8 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                         path_end = path_end - 1
                     if path_end > path_start:
                         rel_path: str = str_from_range(mod_content, path_start, path_end)
+                        # Substitute {platform} placeholder with actual platform name
+                        rel_path = str_replace(rel_path, "{platform}", g_plat_name)
                         # Check if last component matches a private name
                         is_priv: i32 = 0
                         if priv_count > 0:
@@ -13634,7 +13653,10 @@ fun main() -> i32:
     IOOps.io_println("  MLIR -> LLVM IR OK")
 
     # Step 2: clang (LLVM IR → Object)
-    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_compile, "\" -c \"")), ll_path), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
+    target_flag: str = ""
+    if Memory.strlen(g_plat_target_triple) > 0:
+        target_flag = Str.concat(" --target=", g_plat_target_triple)
+    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_compile, "\"")), Str.concat(target_flag, Str.concat(" -c \"", ll_path))), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
     rc2: i32 = Process.run(cmd2)
     if rc2 != 0:
         IOOps.io_println("Error: Compilation to object failed")
