@@ -107,6 +107,25 @@ fun init_tokenizer_constants():
     TK_LIST = 112
     TK_MAP = 113
     TK_ARRAY = 114
+    TK_IMM = 115
+    TK_MODULE = 116
+    TK_EXPORT = 117
+    TK_REQUIRES = 118
+    TK_I8 = 120
+    TK_I16 = 121
+    TK_I32 = 122
+    TK_I64 = 123
+    TK_I128 = 124
+    TK_PTR = 125
+    TK_U8 = 126
+    TK_U16 = 127
+    TK_U32 = 128
+    TK_U64 = 129
+    TK_U128 = 130
+    TK_F32 = 131
+    TK_F64 = 132
+    TK_STR_TYPE = 133
+    TK_CHAR_TYPE = 134
     TK_ANNOT = 135
 
 fun init_tokenizer_buffers():

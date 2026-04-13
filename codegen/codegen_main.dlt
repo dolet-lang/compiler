@@ -90,7 +90,7 @@ fun gen_runtime_decls():
 # Generate String Constants
 # ==========================================
 fun gen_string_constants():
-    i: i32 = 0
+    i: i32 = g_str_emitted
     while i < g_str_count:
         off8: i64 = (i as i64) * 8
         off4: i64 = (i as i64) * 4
@@ -102,6 +102,7 @@ fun gen_string_constants():
         # llvm.mlir.global internal constant @strN("text\00") {addr_space = 0 : i32} : !llvm.array<N x i8>
         emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal constant ", label), "(\""), escaped), Str.concat(Str.concat("\\00\") {addr_space = 0 : i32} : !llvm.array<", Convert.i64_to_str(slen as i64)), " x i8>")))
         i = i + 1
+    g_str_emitted = g_str_count
     emit_blank()
 
 # ==========================================
@@ -562,7 +563,7 @@ fun gen_static_field_decls():
         if sf_def != 0:
             def_nt: i32 = nd_type(sf_def)
             if def_nt == NODE_INT_LIT:
-                def_int_val = Memory.read_i64(sf_def + 8) as str
+                def_int_val = Convert.i64_to_str(Memory.read_i64(sf_def + 8))
             elif def_nt == NODE_FLOAT_LIT:
                 def_float_val = Memory.read_i64(sf_def + 8) as str
         if is_string_type(sf_type) == 1:
@@ -732,6 +733,10 @@ fun generate(ast: i64) -> str:
 
         indent_dec()
         emit_ind("}")
+
+    # Emit any late string constants added during function generation
+    if g_str_emitted < g_str_count:
+        gen_string_constants()
 
     indent_dec()
     emit("}")

@@ -5474,10 +5474,11 @@ g_str_labels: i64 = 0
 g_str_texts: i64 = 0
 g_str_lens: i64 = 0
 g_str_count: i32 = 0
-g_str_cap: i32 = 4096
+g_str_emitted: i32 = 0
+g_str_cap: i32 = 65536
 
 fun init_str_pool():
-    g_str_cap = 4096
+    g_str_cap = 65536
     g_str_labels = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_texts = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_lens = Memory.malloc_zeroed((g_str_cap as i64) * 4)
@@ -5509,6 +5510,10 @@ fun gen_string_const(text: str) -> str:
         if str_eq(existing, text) == 1:
             return Memory.read_i64(g_str_labels + off) as str
         i = i + 1
+    # Bounds check
+    if g_str_count >= g_str_cap:
+        IOOps.io_println("[FATAL] String pool overflow - increase g_str_cap")
+        return "@str0"
     # Register new
     label: str = new_str_label()
     slen: i64 = escaped_byte_len(text) + 1
@@ -5539,10 +5544,10 @@ g_var_types: i64 = 0
 g_var_is_param: i64 = 0
 g_var_is_const: i64 = 0
 g_var_count: i32 = 0
-g_var_cap: i32 = 2048
+g_var_cap: i32 = 4096
 
 fun init_var_registry():
-    g_var_cap = 2048
+    g_var_cap = 4096
     g_var_names = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_mlir = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_types = Memory.malloc_zeroed((g_var_cap as i64) * 8)
@@ -5551,6 +5556,9 @@ fun init_var_registry():
     g_var_count = 0
 
 fun add_variable(name: str, mlir_name: str, vtype: str, is_param: i32, is_const: i32):
+    if g_var_count >= g_var_cap:
+        IOOps.io_println("[FATAL] Variable registry overflow - increase g_var_cap")
+        return
     off8: i64 = (g_var_count as i64) * 8
     off4: i64 = (g_var_count as i64) * 4
     Memory.write_i64(g_var_names + off8, name as i64)
@@ -5631,9 +5639,9 @@ g_fun_sig_ret: i64 = 0
 g_fun_sig_count: i32 = 0
 
 fun init_fun_sigs():
-    g_fun_sig_names = Memory.malloc_zeroed(8192 * 8)
-    g_fun_sig_ret = Memory.malloc_zeroed(8192 * 8)
-    g_fun_sig_params = Memory.malloc_zeroed(8192 * 8)
+    g_fun_sig_names = Memory.malloc_zeroed(16384 * 8)
+    g_fun_sig_ret = Memory.malloc_zeroed(16384 * 8)
+    g_fun_sig_params = Memory.malloc_zeroed(16384 * 8)
     g_fun_sig_count = 0
 
 g_fun_sig_params: i64 = 0
@@ -5698,8 +5706,8 @@ g_struct_field_lists: i64 = 0
 g_struct_count: i32 = 0
 
 fun init_struct_registry():
-    g_struct_names = Memory.malloc_zeroed(1024 * 8)
-    g_struct_field_lists = Memory.malloc_zeroed(1024 * 8)
+    g_struct_names = Memory.malloc_zeroed(2048 * 8)
+    g_struct_field_lists = Memory.malloc_zeroed(2048 * 8)
     g_struct_count = 0
 
 fun register_struct(name: str, fields: i64):
@@ -6494,50 +6502,100 @@ fun emit_call(fn_name: str, args: str, arg_types: str, ret_type: str) -> str:
 # String Escape for MLIR
 # ==========================================
 fun escape_mlir_string(text: str) -> str:
-    result: str = ""
     slen: i64 = Memory.strlen(text)
+    # Pre-allocate buffer: worst case each char becomes 3 bytes
+    cap: i64 = slen * 4 + 16
+    buf: i64 = Memory.malloc_zeroed(cap)
+    out: i64 = 0
     i: i64 = 0
     while i < slen:
         c: i8 = Memory.read_i8((text as i64) + i)
         if c == 10:
-            result = Str.concat(result, "\\0A")
+            Memory.write_i8(buf + out, 92)
+            out = out + 1
+            Memory.write_i8(buf + out, 48)
+            out = out + 1
+            Memory.write_i8(buf + out, 65)
+            out = out + 1
         elif c == 13:
-            result = Str.concat(result, "\\0D")
+            Memory.write_i8(buf + out, 92)
+            out = out + 1
+            Memory.write_i8(buf + out, 48)
+            out = out + 1
+            Memory.write_i8(buf + out, 68)
+            out = out + 1
         elif c == 34:
-            result = Str.concat(result, "\\22")
+            Memory.write_i8(buf + out, 92)
+            out = out + 1
+            Memory.write_i8(buf + out, 50)
+            out = out + 1
+            Memory.write_i8(buf + out, 50)
+            out = out + 1
         elif c == 92:
-            # Handle escape sequences: \n \t \r \0 \\ \"
             next_c: i8 = 0
             if i + 1 < slen:
                 next_c = Memory.read_i8((text as i64) + i + 1)
             if next_c == 110:
-                result = Str.concat(result, "\\0A")
+                Memory.write_i8(buf + out, 92)
+                out = out + 1
+                Memory.write_i8(buf + out, 48)
+                out = out + 1
+                Memory.write_i8(buf + out, 65)
+                out = out + 1
                 i = i + 1
             elif next_c == 116:
-                result = Str.concat(result, "\\09")
+                Memory.write_i8(buf + out, 92)
+                out = out + 1
+                Memory.write_i8(buf + out, 48)
+                out = out + 1
+                Memory.write_i8(buf + out, 57)
+                out = out + 1
                 i = i + 1
             elif next_c == 114:
-                result = Str.concat(result, "\\0D")
+                Memory.write_i8(buf + out, 92)
+                out = out + 1
+                Memory.write_i8(buf + out, 48)
+                out = out + 1
+                Memory.write_i8(buf + out, 68)
+                out = out + 1
                 i = i + 1
             elif next_c == 48:
-                result = Str.concat(result, "\\00")
+                Memory.write_i8(buf + out, 92)
+                out = out + 1
+                Memory.write_i8(buf + out, 48)
+                out = out + 1
+                Memory.write_i8(buf + out, 48)
+                out = out + 1
                 i = i + 1
             elif next_c == 92:
-                result = Str.concat(result, "\\5C")
+                Memory.write_i8(buf + out, 92)
+                out = out + 1
+                Memory.write_i8(buf + out, 53)
+                out = out + 1
+                Memory.write_i8(buf + out, 67)
+                out = out + 1
                 i = i + 1
             elif next_c == 34:
-                result = Str.concat(result, "\\22")
+                Memory.write_i8(buf + out, 92)
+                out = out + 1
+                Memory.write_i8(buf + out, 50)
+                out = out + 1
+                Memory.write_i8(buf + out, 50)
+                out = out + 1
                 i = i + 1
             else:
-                result = Str.concat(result, "\\5C")
+                Memory.write_i8(buf + out, 92)
+                out = out + 1
+                Memory.write_i8(buf + out, 53)
+                out = out + 1
+                Memory.write_i8(buf + out, 67)
+                out = out + 1
         else:
-            # Single char append — build 1-byte string
-            buf: i64 = Memory.malloc_zeroed(2)
-            Memory.write_i8(buf, c)
-            Memory.write_i8(buf + 1, 0)
-            result = Str.concat(result, buf as str)
+            Memory.write_i8(buf + out, c)
+            out = out + 1
         i = i + 1
-    return result
+    Memory.write_i8(buf + out, 0)
+    return buf as str
 
 # ==========================================
 # Function Overload Registry
@@ -9756,7 +9814,6 @@ fun gen_struct_inline_methods(node: i64):
     while i < mc:
         mnode: i64 = nl_get(smethods, i)
         mdbg: str = Memory.read_i64(mnode + 8) as str
-        IOOps.io_println(Str.concat(Str.concat(Str.concat("  [method] ", sname), "."), mdbg))
         gen_method_def(sname, mnode)
         i = i + 1
 
@@ -11110,18 +11167,23 @@ fun gen_runtime_decls():
 # Generate String Constants
 # ==========================================
 fun gen_string_constants():
-    i: i32 = 0
+    i: i32 = g_str_emitted
     while i < g_str_count:
         off8: i64 = (i as i64) * 8
         off4: i64 = (i as i64) * 4
         label: str = Memory.read_i64(g_str_labels + off8) as str
         text: str = Memory.read_i64(g_str_texts + off8) as str
         slen: i32 = Memory.read_i32(g_str_lens + off4)
-
         escaped: str = escape_mlir_string(text)
-        # llvm.mlir.global internal constant @strN("text\00") {addr_space = 0 : i32} : !llvm.array<N x i8>
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal constant ", label), "(\""), escaped), Str.concat(Str.concat("\\00\") {addr_space = 0 : i32} : !llvm.array<", Convert.i64_to_str(slen as i64)), " x i8>")))
+        line1: str = Str.concat("llvm.mlir.global internal constant ", label)
+        line2: str = Str.concat(line1, "(\"")
+        line3: str = Str.concat(line2, escaped)
+        line4: str = Str.concat("\\00\") {addr_space = 0 : i32} : !llvm.array<", Convert.i64_to_str(slen as i64))
+        line5: str = Str.concat(line4, " x i8>")
+        line6: str = Str.concat(line3, line5)
+        emit_ind(line6)
         i = i + 1
+    g_str_emitted = g_str_count
     emit_blank()
 
 # ==========================================
@@ -11563,41 +11625,47 @@ fun gen_global_var_decls():
 # ==========================================
 # Generate Struct Static Field Declarations
 # ==========================================
+fun gen_one_static_field(idx: i32):
+    off: i64 = (idx as i64) * 8
+    sf_name: str = Memory.read_i64(g_sf_names + off) as str
+    sf_type: str = Memory.read_i64(g_sf_types + off) as str
+    sf_def: i64 = Memory.read_i64(g_sf_defaults + off)
+    mt: str = mlir_type(sf_type)
+    add_variable(sf_name, sf_name, sf_type, 2, 0)
+    sf_line1: str = Str.concat("llvm.mlir.global internal @", sf_name)
+    sf_line2: str = Str.concat(sf_line1, " () {addr_space = 0 : i32} : ")
+    sf_line3: str = Str.concat(mt, " {")
+    sf_line4: str = Str.concat(sf_line2, sf_line3)
+    emit_ind(sf_line4)
+    def_int_val: str = "0"
+    def_float_val: str = "0.0"
+    if sf_def != 0:
+        def_nt: i32 = nd_type(sf_def)
+        if def_nt == NODE_INT_LIT:
+            def_int_val = Convert.i64_to_str(Memory.read_i64(sf_def + 8))
+        elif def_nt == NODE_FLOAT_LIT:
+            def_float_val = Memory.read_i64(sf_def + 8) as str
+    if is_string_type(sf_type) == 1:
+        emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
+        emit_ind("  llvm.return %0 : !llvm.ptr")
+    elif is_int_type(sf_type) == 1:
+        emit_ind(Str.concat("  %0 = llvm.mlir.constant(", Str.concat(def_int_val, Str.concat(" : ", Str.concat(mt, Str.concat(") : ", mt))))))
+        emit_ind(Str.concat("  llvm.return %0 : ", mt))
+    elif is_float_type(sf_type) == 1:
+        emit_ind(Str.concat("  %0 = llvm.mlir.constant(", Str.concat(def_float_val, Str.concat(" : ", Str.concat(mt, Str.concat(") : ", mt))))))
+        emit_ind(Str.concat("  llvm.return %0 : ", mt))
+    else:
+        emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
+        emit_ind(Str.concat("  llvm.return %0 : ", mt))
+    emit_ind("}")
+
 fun gen_static_field_decls():
     if g_static_field_count == 0:
         return
     emit_ind("// Struct static field declarations")
     i: i32 = 0
     while i < g_static_field_count:
-        off: i64 = (i as i64) * 8
-        sf_name: str = Memory.read_i64(g_sf_names + off) as str
-        sf_type: str = Memory.read_i64(g_sf_types + off) as str
-        sf_def: i64 = Memory.read_i64(g_sf_defaults + off)
-        mt: str = mlir_type(sf_type)
-        add_variable(sf_name, sf_name, sf_type, 2, 0)
-        emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", sf_name), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
-        # Check for non-zero default literal values
-        def_int_val: str = "0"
-        def_float_val: str = "0.0"
-        if sf_def != 0:
-            def_nt: i32 = nd_type(sf_def)
-            if def_nt == NODE_INT_LIT:
-                def_int_val = Memory.read_i64(sf_def + 8) as str
-            elif def_nt == NODE_FLOAT_LIT:
-                def_float_val = Memory.read_i64(sf_def + 8) as str
-        if is_string_type(sf_type) == 1:
-            emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
-            emit_ind("  llvm.return %0 : !llvm.ptr")
-        elif is_int_type(sf_type) == 1:
-            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_int_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
-            emit_ind(Str.concat("  llvm.return %0 : ", mt))
-        elif is_float_type(sf_type) == 1:
-            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_float_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
-            emit_ind(Str.concat("  llvm.return %0 : ", mt))
-        else:
-            emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
-            emit_ind(Str.concat("  llvm.return %0 : ", mt))
-        emit_ind("}")
+        gen_one_static_field(i)
         i = i + 1
     emit_blank()
 
@@ -11611,11 +11679,9 @@ fun gen_functions(ast: i64):
         node: i64 = nl_get(ast, i)
         nt: i32 = nd_type(node)
 
-        IOOps.io_println(Str.concat(Str.concat("[gen_fn] node ", Convert.i64_to_str(i as i64)), Str.concat(" type=", Convert.i64_to_str(nt as i64))))
         if nt == NODE_EXTERN_BLOCK:
             if ts_extern_block_has_reachable(node) == 1:
                 gen_extern_block(node)
-                IOOps.io_println("[gen_fn] extern done")
         elif nt == NODE_STRUCT_DECL:
             sdbg: str = Memory.read_i64(node + 8) as str
             # Skip @transparent structs — they have no MLIR representation
@@ -11696,18 +11762,15 @@ fun has_user_main(ast: i64) -> i32:
 # ==========================================
 fun generate(ast: i64) -> str:
     init_all_registries()
-    IOOps.io_println("[gen] init done")
 
     # Phase 1: Collect declarations
     collect_declarations(ast)
-    IOOps.io_println("[gen] collect_declarations done")
 
     # Phase 1.5: Tree shaking (opt-in)
     run_tree_shaking(ast)
 
     # Phase 2: Collect string literals
     collect_all_strings(ast)
-    IOOps.io_println("[gen] collect_strings done")
 
     # Phase 3: Emit module
     emit("// MLIR generated by Dolet Self-Hosting Compiler")
@@ -11717,7 +11780,6 @@ fun generate(ast: i64) -> str:
     indent_inc()
 
     # String constants
-    IOOps.io_println("[gen] emitting string constants")
     gen_string_constants()
 
     # Platform-specific helpers (e.g., _fltused, __chkstk) are now in
@@ -11733,7 +11795,6 @@ fun generate(ast: i64) -> str:
     gen_static_field_decls()
 
     # User-defined functions
-    IOOps.io_println("[gen] emitting functions")
     gen_functions(ast)
 
     # Main function (if user didn't define one)
@@ -11752,6 +11813,10 @@ fun generate(ast: i64) -> str:
 
         indent_dec()
         emit_ind("}")
+
+    # Emit any late string constants added during function generation
+    if g_str_emitted < g_str_count:
+        gen_string_constants()
 
     indent_dec()
     emit("}")
@@ -11892,6 +11957,25 @@ fun init_tokenizer_constants():
     TK_LIST = 112
     TK_MAP = 113
     TK_ARRAY = 114
+    TK_IMM = 115
+    TK_MODULE = 116
+    TK_EXPORT = 117
+    TK_REQUIRES = 118
+    TK_I8 = 120
+    TK_I16 = 121
+    TK_I32 = 122
+    TK_I64 = 123
+    TK_I128 = 124
+    TK_PTR = 125
+    TK_U8 = 126
+    TK_U16 = 127
+    TK_U32 = 128
+    TK_U64 = 129
+    TK_U128 = 130
+    TK_F32 = 131
+    TK_F64 = 132
+    TK_STR_TYPE = 133
+    TK_CHAR_TYPE = 134
     TK_ANNOT = 135
 
 fun init_tokenizer_buffers():
@@ -13461,7 +13545,7 @@ fun main() -> i32:
 
     argc: i32 = Args.count()
     if argc < 2:
-        IOOps.io_println("Dolet Compiler v1.2.0-beta")
+        IOOps.io_println("Dolet Compiler v1.2.1-beta")
         IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--platform <name>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
@@ -13487,7 +13571,7 @@ fun main() -> i32:
     while ai < argc:
         arg: str = Args.get(ai)
         if str_eq(arg, "--version") == 1:
-            IOOps.io_println("Dolet Compiler v1.2.0-beta")
+            IOOps.io_println("Dolet Compiler v1.2.1-beta")
             return 0
         elif str_eq(arg, "--no-runtime") == 1:
             no_runtime = 1

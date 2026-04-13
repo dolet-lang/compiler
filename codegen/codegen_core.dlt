@@ -287,10 +287,11 @@ g_str_labels: i64 = 0
 g_str_texts: i64 = 0
 g_str_lens: i64 = 0
 g_str_count: i32 = 0
-g_str_cap: i32 = 4096
+g_str_emitted: i32 = 0
+g_str_cap: i32 = 65536
 
 fun init_str_pool():
-    g_str_cap = 4096
+    g_str_cap = 65536
     g_str_labels = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_texts = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_lens = Memory.malloc_zeroed((g_str_cap as i64) * 4)
@@ -322,6 +323,10 @@ fun gen_string_const(text: str) -> str:
         if str_eq(existing, text) == 1:
             return Memory.read_i64(g_str_labels + off) as str
         i = i + 1
+    # Bounds check
+    if g_str_count >= g_str_cap:
+        IOOps.io_println("[FATAL] String pool overflow - increase g_str_cap")
+        return "@str0"
     # Register new
     label: str = new_str_label()
     slen: i64 = escaped_byte_len(text) + 1
@@ -352,10 +357,10 @@ g_var_types: i64 = 0
 g_var_is_param: i64 = 0
 g_var_is_const: i64 = 0
 g_var_count: i32 = 0
-g_var_cap: i32 = 2048
+g_var_cap: i32 = 4096
 
 fun init_var_registry():
-    g_var_cap = 2048
+    g_var_cap = 4096
     g_var_names = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_mlir = Memory.malloc_zeroed((g_var_cap as i64) * 8)
     g_var_types = Memory.malloc_zeroed((g_var_cap as i64) * 8)
@@ -364,6 +369,9 @@ fun init_var_registry():
     g_var_count = 0
 
 fun add_variable(name: str, mlir_name: str, vtype: str, is_param: i32, is_const: i32):
+    if g_var_count >= g_var_cap:
+        IOOps.io_println("[FATAL] Variable registry overflow - increase g_var_cap")
+        return
     off8: i64 = (g_var_count as i64) * 8
     off4: i64 = (g_var_count as i64) * 4
     Memory.write_i64(g_var_names + off8, name as i64)
@@ -444,9 +452,9 @@ g_fun_sig_ret: i64 = 0
 g_fun_sig_count: i32 = 0
 
 fun init_fun_sigs():
-    g_fun_sig_names = Memory.malloc_zeroed(8192 * 8)
-    g_fun_sig_ret = Memory.malloc_zeroed(8192 * 8)
-    g_fun_sig_params = Memory.malloc_zeroed(8192 * 8)
+    g_fun_sig_names = Memory.malloc_zeroed(16384 * 8)
+    g_fun_sig_ret = Memory.malloc_zeroed(16384 * 8)
+    g_fun_sig_params = Memory.malloc_zeroed(16384 * 8)
     g_fun_sig_count = 0
 
 g_fun_sig_params: i64 = 0
@@ -511,8 +519,8 @@ g_struct_field_lists: i64 = 0
 g_struct_count: i32 = 0
 
 fun init_struct_registry():
-    g_struct_names = Memory.malloc_zeroed(1024 * 8)
-    g_struct_field_lists = Memory.malloc_zeroed(1024 * 8)
+    g_struct_names = Memory.malloc_zeroed(2048 * 8)
+    g_struct_field_lists = Memory.malloc_zeroed(2048 * 8)
     g_struct_count = 0
 
 fun register_struct(name: str, fields: i64):
@@ -1307,50 +1315,79 @@ fun emit_call(fn_name: str, args: str, arg_types: str, ret_type: str) -> str:
 # String Escape for MLIR
 # ==========================================
 fun escape_mlir_string(text: str) -> str:
-    result: str = ""
     slen: i64 = Memory.strlen(text)
+    # Worst case: every char becomes a 3-byte escape like \0A
+    buf: i64 = Memory.malloc_zeroed(slen * 3 + 1)
+    out: i64 = 0
     i: i64 = 0
     while i < slen:
         c: i8 = Memory.read_i8((text as i64) + i)
         if c == 10:
-            result = Str.concat(result, "\\0A")
+            Memory.write_i8(buf + out, 92)
+            Memory.write_i8(buf + out + 1, 48)
+            Memory.write_i8(buf + out + 2, 65)
+            out = out + 3
         elif c == 13:
-            result = Str.concat(result, "\\0D")
+            Memory.write_i8(buf + out, 92)
+            Memory.write_i8(buf + out + 1, 48)
+            Memory.write_i8(buf + out + 2, 68)
+            out = out + 3
         elif c == 34:
-            result = Str.concat(result, "\\22")
+            Memory.write_i8(buf + out, 92)
+            Memory.write_i8(buf + out + 1, 50)
+            Memory.write_i8(buf + out + 2, 50)
+            out = out + 3
         elif c == 92:
-            # Handle escape sequences: \n \t \r \0 \\ \"
             next_c: i8 = 0
             if i + 1 < slen:
                 next_c = Memory.read_i8((text as i64) + i + 1)
             if next_c == 110:
-                result = Str.concat(result, "\\0A")
+                Memory.write_i8(buf + out, 92)
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 65)
+                out = out + 3
                 i = i + 1
             elif next_c == 116:
-                result = Str.concat(result, "\\09")
+                Memory.write_i8(buf + out, 92)
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 57)
+                out = out + 3
                 i = i + 1
             elif next_c == 114:
-                result = Str.concat(result, "\\0D")
+                Memory.write_i8(buf + out, 92)
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 68)
+                out = out + 3
                 i = i + 1
             elif next_c == 48:
-                result = Str.concat(result, "\\00")
+                Memory.write_i8(buf + out, 92)
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 48)
+                out = out + 3
                 i = i + 1
             elif next_c == 92:
-                result = Str.concat(result, "\\5C")
+                Memory.write_i8(buf + out, 92)
+                Memory.write_i8(buf + out + 1, 53)
+                Memory.write_i8(buf + out + 2, 67)
+                out = out + 3
                 i = i + 1
             elif next_c == 34:
-                result = Str.concat(result, "\\22")
+                Memory.write_i8(buf + out, 92)
+                Memory.write_i8(buf + out + 1, 50)
+                Memory.write_i8(buf + out + 2, 50)
+                out = out + 3
                 i = i + 1
             else:
-                result = Str.concat(result, "\\5C")
+                Memory.write_i8(buf + out, 92)
+                Memory.write_i8(buf + out + 1, 53)
+                Memory.write_i8(buf + out + 2, 67)
+                out = out + 3
         else:
-            # Single char append — build 1-byte string
-            buf: i64 = Memory.malloc_zeroed(2)
-            Memory.write_i8(buf, c)
-            Memory.write_i8(buf + 1, 0)
-            result = Str.concat(result, buf as str)
+            Memory.write_i8(buf + out, c)
+            out = out + 1
         i = i + 1
-    return result
+    Memory.write_i8(buf + out, 0)
+    return buf as str
 
 # ==========================================
 # Function Overload Registry
