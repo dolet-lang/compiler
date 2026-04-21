@@ -6503,93 +6503,72 @@ fun emit_call(fn_name: str, args: str, arg_types: str, ret_type: str) -> str:
 # ==========================================
 fun escape_mlir_string(text: str) -> str:
     slen: i64 = Memory.strlen(text)
-    # Pre-allocate buffer: worst case each char becomes 3 bytes
-    cap: i64 = slen * 4 + 16
-    buf: i64 = Memory.malloc_zeroed(cap)
+    # Worst case: every char becomes a 3-byte escape like \0A
+    buf: i64 = Memory.malloc_zeroed(slen * 3 + 1)
     out: i64 = 0
     i: i64 = 0
     while i < slen:
         c: i8 = Memory.read_i8((text as i64) + i)
         if c == 10:
             Memory.write_i8(buf + out, 92)
-            out = out + 1
-            Memory.write_i8(buf + out, 48)
-            out = out + 1
-            Memory.write_i8(buf + out, 65)
-            out = out + 1
+            Memory.write_i8(buf + out + 1, 48)
+            Memory.write_i8(buf + out + 2, 65)
+            out = out + 3
         elif c == 13:
             Memory.write_i8(buf + out, 92)
-            out = out + 1
-            Memory.write_i8(buf + out, 48)
-            out = out + 1
-            Memory.write_i8(buf + out, 68)
-            out = out + 1
+            Memory.write_i8(buf + out + 1, 48)
+            Memory.write_i8(buf + out + 2, 68)
+            out = out + 3
         elif c == 34:
             Memory.write_i8(buf + out, 92)
-            out = out + 1
-            Memory.write_i8(buf + out, 50)
-            out = out + 1
-            Memory.write_i8(buf + out, 50)
-            out = out + 1
+            Memory.write_i8(buf + out + 1, 50)
+            Memory.write_i8(buf + out + 2, 50)
+            out = out + 3
         elif c == 92:
             next_c: i8 = 0
             if i + 1 < slen:
                 next_c = Memory.read_i8((text as i64) + i + 1)
             if next_c == 110:
                 Memory.write_i8(buf + out, 92)
-                out = out + 1
-                Memory.write_i8(buf + out, 48)
-                out = out + 1
-                Memory.write_i8(buf + out, 65)
-                out = out + 1
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 65)
+                out = out + 3
                 i = i + 1
             elif next_c == 116:
                 Memory.write_i8(buf + out, 92)
-                out = out + 1
-                Memory.write_i8(buf + out, 48)
-                out = out + 1
-                Memory.write_i8(buf + out, 57)
-                out = out + 1
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 57)
+                out = out + 3
                 i = i + 1
             elif next_c == 114:
                 Memory.write_i8(buf + out, 92)
-                out = out + 1
-                Memory.write_i8(buf + out, 48)
-                out = out + 1
-                Memory.write_i8(buf + out, 68)
-                out = out + 1
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 68)
+                out = out + 3
                 i = i + 1
             elif next_c == 48:
                 Memory.write_i8(buf + out, 92)
-                out = out + 1
-                Memory.write_i8(buf + out, 48)
-                out = out + 1
-                Memory.write_i8(buf + out, 48)
-                out = out + 1
+                Memory.write_i8(buf + out + 1, 48)
+                Memory.write_i8(buf + out + 2, 48)
+                out = out + 3
                 i = i + 1
             elif next_c == 92:
                 Memory.write_i8(buf + out, 92)
-                out = out + 1
-                Memory.write_i8(buf + out, 53)
-                out = out + 1
-                Memory.write_i8(buf + out, 67)
-                out = out + 1
+                Memory.write_i8(buf + out + 1, 53)
+                Memory.write_i8(buf + out + 2, 67)
+                out = out + 3
                 i = i + 1
             elif next_c == 34:
                 Memory.write_i8(buf + out, 92)
-                out = out + 1
-                Memory.write_i8(buf + out, 50)
-                out = out + 1
-                Memory.write_i8(buf + out, 50)
-                out = out + 1
+                Memory.write_i8(buf + out + 1, 50)
+                Memory.write_i8(buf + out + 2, 50)
+                out = out + 3
                 i = i + 1
             else:
                 Memory.write_i8(buf + out, 92)
-                out = out + 1
-                Memory.write_i8(buf + out, 53)
-                out = out + 1
-                Memory.write_i8(buf + out, 67)
-                out = out + 1
+                Memory.write_i8(buf + out + 1, 53)
+                Memory.write_i8(buf + out + 2, 67)
+                out = out + 3
         else:
             Memory.write_i8(buf + out, c)
             out = out + 1
@@ -9814,6 +9793,7 @@ fun gen_struct_inline_methods(node: i64):
     while i < mc:
         mnode: i64 = nl_get(smethods, i)
         mdbg: str = Memory.read_i64(mnode + 8) as str
+        IOOps.io_println(Str.concat(Str.concat(Str.concat("  [method] ", sname), "."), mdbg))
         gen_method_def(sname, mnode)
         i = i + 1
 
@@ -11174,14 +11154,10 @@ fun gen_string_constants():
         label: str = Memory.read_i64(g_str_labels + off8) as str
         text: str = Memory.read_i64(g_str_texts + off8) as str
         slen: i32 = Memory.read_i32(g_str_lens + off4)
+
         escaped: str = escape_mlir_string(text)
-        line1: str = Str.concat("llvm.mlir.global internal constant ", label)
-        line2: str = Str.concat(line1, "(\"")
-        line3: str = Str.concat(line2, escaped)
-        line4: str = Str.concat("\\00\") {addr_space = 0 : i32} : !llvm.array<", Convert.i64_to_str(slen as i64))
-        line5: str = Str.concat(line4, " x i8>")
-        line6: str = Str.concat(line3, line5)
-        emit_ind(line6)
+        # llvm.mlir.global internal constant @strN("text\00") {addr_space = 0 : i32} : !llvm.array<N x i8>
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal constant ", label), "(\""), escaped), Str.concat(Str.concat("\\00\") {addr_space = 0 : i32} : !llvm.array<", Convert.i64_to_str(slen as i64)), " x i8>")))
         i = i + 1
     g_str_emitted = g_str_count
     emit_blank()
@@ -11625,47 +11601,41 @@ fun gen_global_var_decls():
 # ==========================================
 # Generate Struct Static Field Declarations
 # ==========================================
-fun gen_one_static_field(idx: i32):
-    off: i64 = (idx as i64) * 8
-    sf_name: str = Memory.read_i64(g_sf_names + off) as str
-    sf_type: str = Memory.read_i64(g_sf_types + off) as str
-    sf_def: i64 = Memory.read_i64(g_sf_defaults + off)
-    mt: str = mlir_type(sf_type)
-    add_variable(sf_name, sf_name, sf_type, 2, 0)
-    sf_line1: str = Str.concat("llvm.mlir.global internal @", sf_name)
-    sf_line2: str = Str.concat(sf_line1, " () {addr_space = 0 : i32} : ")
-    sf_line3: str = Str.concat(mt, " {")
-    sf_line4: str = Str.concat(sf_line2, sf_line3)
-    emit_ind(sf_line4)
-    def_int_val: str = "0"
-    def_float_val: str = "0.0"
-    if sf_def != 0:
-        def_nt: i32 = nd_type(sf_def)
-        if def_nt == NODE_INT_LIT:
-            def_int_val = Convert.i64_to_str(Memory.read_i64(sf_def + 8))
-        elif def_nt == NODE_FLOAT_LIT:
-            def_float_val = Memory.read_i64(sf_def + 8) as str
-    if is_string_type(sf_type) == 1:
-        emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
-        emit_ind("  llvm.return %0 : !llvm.ptr")
-    elif is_int_type(sf_type) == 1:
-        emit_ind(Str.concat("  %0 = llvm.mlir.constant(", Str.concat(def_int_val, Str.concat(" : ", Str.concat(mt, Str.concat(") : ", mt))))))
-        emit_ind(Str.concat("  llvm.return %0 : ", mt))
-    elif is_float_type(sf_type) == 1:
-        emit_ind(Str.concat("  %0 = llvm.mlir.constant(", Str.concat(def_float_val, Str.concat(" : ", Str.concat(mt, Str.concat(") : ", mt))))))
-        emit_ind(Str.concat("  llvm.return %0 : ", mt))
-    else:
-        emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
-        emit_ind(Str.concat("  llvm.return %0 : ", mt))
-    emit_ind("}")
-
 fun gen_static_field_decls():
     if g_static_field_count == 0:
         return
     emit_ind("// Struct static field declarations")
     i: i32 = 0
     while i < g_static_field_count:
-        gen_one_static_field(i)
+        off: i64 = (i as i64) * 8
+        sf_name: str = Memory.read_i64(g_sf_names + off) as str
+        sf_type: str = Memory.read_i64(g_sf_types + off) as str
+        sf_def: i64 = Memory.read_i64(g_sf_defaults + off)
+        mt: str = mlir_type(sf_type)
+        add_variable(sf_name, sf_name, sf_type, 2, 0)
+        emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", sf_name), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
+        # Check for non-zero default literal values
+        def_int_val: str = "0"
+        def_float_val: str = "0.0"
+        if sf_def != 0:
+            def_nt: i32 = nd_type(sf_def)
+            if def_nt == NODE_INT_LIT:
+                def_int_val = Convert.i64_to_str(Memory.read_i64(sf_def + 8))
+            elif def_nt == NODE_FLOAT_LIT:
+                def_float_val = Memory.read_i64(sf_def + 8) as str
+        if is_string_type(sf_type) == 1:
+            emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
+            emit_ind("  llvm.return %0 : !llvm.ptr")
+        elif is_int_type(sf_type) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_int_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        elif is_float_type(sf_type) == 1:
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", def_float_val), Str.concat(Str.concat(" : ", mt), Str.concat(") : ", mt))))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        else:
+            emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
+            emit_ind(Str.concat("  llvm.return %0 : ", mt))
+        emit_ind("}")
         i = i + 1
     emit_blank()
 
@@ -11679,9 +11649,11 @@ fun gen_functions(ast: i64):
         node: i64 = nl_get(ast, i)
         nt: i32 = nd_type(node)
 
+        IOOps.io_println(Str.concat(Str.concat("[gen_fn] node ", Convert.i64_to_str(i as i64)), Str.concat(" type=", Convert.i64_to_str(nt as i64))))
         if nt == NODE_EXTERN_BLOCK:
             if ts_extern_block_has_reachable(node) == 1:
                 gen_extern_block(node)
+                IOOps.io_println("[gen_fn] extern done")
         elif nt == NODE_STRUCT_DECL:
             sdbg: str = Memory.read_i64(node + 8) as str
             # Skip @transparent structs — they have no MLIR representation
@@ -11762,15 +11734,18 @@ fun has_user_main(ast: i64) -> i32:
 # ==========================================
 fun generate(ast: i64) -> str:
     init_all_registries()
+    IOOps.io_println("[gen] init done")
 
     # Phase 1: Collect declarations
     collect_declarations(ast)
+    IOOps.io_println("[gen] collect_declarations done")
 
     # Phase 1.5: Tree shaking (opt-in)
     run_tree_shaking(ast)
 
     # Phase 2: Collect string literals
     collect_all_strings(ast)
+    IOOps.io_println("[gen] collect_strings done")
 
     # Phase 3: Emit module
     emit("// MLIR generated by Dolet Self-Hosting Compiler")
@@ -11780,6 +11755,7 @@ fun generate(ast: i64) -> str:
     indent_inc()
 
     # String constants
+    IOOps.io_println("[gen] emitting string constants")
     gen_string_constants()
 
     # Platform-specific helpers (e.g., _fltused, __chkstk) are now in
@@ -11795,6 +11771,7 @@ fun generate(ast: i64) -> str:
     gen_static_field_decls()
 
     # User-defined functions
+    IOOps.io_println("[gen] emitting functions")
     gen_functions(ast)
 
     # Main function (if user didn't define one)
@@ -12829,6 +12806,34 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
     result: str = ""
     if Memory.strlen(mod_line) > 0:
         result = Str.concat("\n", Str.concat(mod_line, "\n"))
+    # Preserve "import X" lines from the module so the outer transitive scanner
+    # in resolve_and_load_imports() can discover and resolve the module's own deps.
+    # These NODE_IMPORT lines are skipped at codegen time, so keeping them is harmless.
+    ii: i64 = 0
+    ils: i64 = 0
+    while ii <= slen:
+        ic: i8 = 0
+        if ii < slen:
+            ic = Memory.read_i8((mod_content as i64) + ii)
+        if ic == 10 or ic == 13 or ii == slen:
+            il_len: i64 = ii - ils
+            if il_len > 7:
+                ip0: i8 = Memory.read_i8((mod_content as i64) + ils)
+                ip1: i8 = Memory.read_i8((mod_content as i64) + ils + 1)
+                ip2: i8 = Memory.read_i8((mod_content as i64) + ils + 2)
+                ip3: i8 = Memory.read_i8((mod_content as i64) + ils + 3)
+                ip4: i8 = Memory.read_i8((mod_content as i64) + ils + 4)
+                ip5: i8 = Memory.read_i8((mod_content as i64) + ils + 5)
+                ip6: i8 = Memory.read_i8((mod_content as i64) + ils + 6)
+                if ip0 == 105 and ip1 == 109 and ip2 == 112 and ip3 == 111 and ip4 == 114 and ip5 == 116 and ip6 == 32:
+                    imp_line: str = str_from_range(mod_content, ils, ii)
+                    result = Str.concat(result, Str.concat(imp_line, "\n"))
+            if ic == 13 and (ii + 1) < slen:
+                inr: i8 = Memory.read_i8((mod_content as i64) + ii + 1)
+                if inr == 10:
+                    ii = ii + 1
+            ils = ii + 1
+        ii = ii + 1
     i = 0
     line_start = 0
 
@@ -13100,13 +13105,19 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
     return ""
 
 fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
-    # Scan user_src for lines starting with "import " (ASCII: 105,109,112,111,114,116,32)
-    # Extract module name, resolve, read file, accumulate
+    # Scan source for lines starting with "import " (ASCII: 105,109,112,111,114,116,32)
+    # Extract module name, resolve, read file, accumulate.
+    # Transitive: after loading a module, re-scan accumulated content until no new imports found.
     imported: str = ""
     # Track loaded module names to prevent duplicate loading
     loaded_names: i64 = Memory.malloc_zeroed(8192)
     loaded_count: i32 = 0
-    slen: i64 = Memory.strlen(user_src)
+    # scan_src is what we're currently scanning for imports.
+    # On first pass it's user_src; subsequent passes re-scan accumulated imported.
+    scan_src: str = user_src
+    slen: i64 = Memory.strlen(scan_src)
+    # Outer-loop sentinel: set to 1 whenever a module is newly loaded in a pass
+    any_new: i32 = 1
     i: i64 = 0
     line_start: i64 = 0
     # Hoisted from loop to avoid alloca-in-loop stack overflow
@@ -13157,130 +13168,140 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
     fc_c: i8 = 0 as i8
     nr: i8 = 0 as i8
 
-    while i <= slen:
-        c = 0 as i8
-        if i < slen:
-            c = Memory.read_i8((user_src as i64) + i)
-        # End of line or end of string
-        if c == 10 or c == 13 or i == slen:
-            # Check if line starts with "import "
-            line_len = i - line_start
-            if line_len > 7:
-                i0 = Memory.read_i8((user_src as i64) + line_start)
-                i1 = Memory.read_i8((user_src as i64) + line_start + 1)
-                i2 = Memory.read_i8((user_src as i64) + line_start + 2)
-                i3 = Memory.read_i8((user_src as i64) + line_start + 3)
-                i4 = Memory.read_i8((user_src as i64) + line_start + 4)
-                i5 = Memory.read_i8((user_src as i64) + line_start + 5)
-                i6 = Memory.read_i8((user_src as i64) + line_start + 6)
-                if i0 == 105 and i1 == 109 and i2 == 112 and i3 == 111 and i4 == 114 and i5 == 116 and i6 == 32:
-                    # Extract module name (after "import ", until space/newline/end)
-                    name_start = line_start + 7
-                    # Skip leading whitespace
-                    while name_start < i:
-                        wc = Memory.read_i8((user_src as i64) + name_start)
-                        if wc != 32:
-                            break
-                        name_start = name_start + 1
-                    # Find end of module name (stop at space, newline, or end)
-                    name_end = name_start
-                    while name_end < i:
-                        nc = Memory.read_i8((user_src as i64) + name_end)
-                        if nc == 32 or nc == 10 or nc == 13:
-                            break
-                        name_end = name_end + 1
-                    if name_end > name_start:
-                        mod_name = str_from_range(user_src, name_start, name_end)
-                        # Skip "import std" and "import std.X" — handled in main
-                        skip_std = 0
-                        if str_eq(mod_name, "std") == 1:
-                            skip_std = 1
-                        # Check if starts with "std." (s=115 t=116 d=100 .=46)
-                        mn_len = Memory.strlen(mod_name)
-                        if mn_len > 4:
-                            ms0 = Memory.read_i8((mod_name as i64))
-                            ms1 = Memory.read_i8((mod_name as i64) + 1)
-                            ms2 = Memory.read_i8((mod_name as i64) + 2)
-                            ms3 = Memory.read_i8((mod_name as i64) + 3)
-                            if ms0 == 115 and ms1 == 116 and ms2 == 100 and ms3 == 46:
+    while any_new == 1:
+        any_new = 0
+        i = 0
+        line_start = 0
+        slen = Memory.strlen(scan_src)
+        while i <= slen:
+            c = 0 as i8
+            if i < slen:
+                c = Memory.read_i8((scan_src as i64) + i)
+            # End of line or end of string
+            if c == 10 or c == 13 or i == slen:
+                # Check if line starts with "import "
+                line_len = i - line_start
+                if line_len > 7:
+                    i0 = Memory.read_i8((scan_src as i64) + line_start)
+                    i1 = Memory.read_i8((scan_src as i64) + line_start + 1)
+                    i2 = Memory.read_i8((scan_src as i64) + line_start + 2)
+                    i3 = Memory.read_i8((scan_src as i64) + line_start + 3)
+                    i4 = Memory.read_i8((scan_src as i64) + line_start + 4)
+                    i5 = Memory.read_i8((scan_src as i64) + line_start + 5)
+                    i6 = Memory.read_i8((scan_src as i64) + line_start + 6)
+                    if i0 == 105 and i1 == 109 and i2 == 112 and i3 == 111 and i4 == 114 and i5 == 116 and i6 == 32:
+                        # Extract module name (after "import ", until space/newline/end)
+                        name_start = line_start + 7
+                        # Skip leading whitespace
+                        while name_start < i:
+                            wc = Memory.read_i8((scan_src as i64) + name_start)
+                            if wc != 32:
+                                break
+                            name_start = name_start + 1
+                        # Find end of module name (stop at space, newline, or end)
+                        name_end = name_start
+                        while name_end < i:
+                            nc = Memory.read_i8((scan_src as i64) + name_end)
+                            if nc == 32 or nc == 10 or nc == 13:
+                                break
+                            name_end = name_end + 1
+                        if name_end > name_start:
+                            mod_name = str_from_range(scan_src, name_start, name_end)
+                            # Skip "import std" and "import std.X" — handled in main
+                            skip_std = 0
+                            if str_eq(mod_name, "std") == 1:
                                 skip_std = 1
-                        if skip_std == 1:
-                            i = i + 1
-                            line_start = i
-                            i = i - 1
-                        else:
-                            # Check if already loaded
-                            already = 0
-                            li = 0
-                            while li < loaded_count:
-                                ln = Memory.read_i64(loaded_names + ((li as i64) * 8)) as str
-                                if str_eq(ln, mod_name) == 1:
-                                    already = 1
-                                    break
-                                li = li + 1
-                            if already == 0:
-                                resolved = try_resolve_module(mod_name, std_base, src_dir)
-                                if Memory.strlen(resolved) > 0:
-                                    # Check if resolved is a mod.dlt — needs load_module processing
-                                    rlen = Memory.strlen(resolved)
-                                    is_mod = 0
-                                    if rlen > 7:
-                                        # Check if ends with "mod.dlt" (7 chars)
-                                        m1 = Memory.read_i8((resolved as i64) + rlen - 7)
-                                        m2 = Memory.read_i8((resolved as i64) + rlen - 6)
-                                        m3 = Memory.read_i8((resolved as i64) + rlen - 5)
-                                        m4 = Memory.read_i8((resolved as i64) + rlen - 4)
-                                        m5 = Memory.read_i8((resolved as i64) + rlen - 3)
-                                        m6 = Memory.read_i8((resolved as i64) + rlen - 2)
-                                        m7 = Memory.read_i8((resolved as i64) + rlen - 1)
-                                        if m1 == 109 and m2 == 111 and m3 == 100 and m4 == 46 and m5 == 100 and m6 == 108 and m7 == 116:
-                                            is_mod = 1
-                                    mod_src = ""
-                                    if is_mod == 1:
-                                        # Compute library_root: resolved minus mod_name_path/mod.dlt
-                                        # Build mod_name as path: dots -> backslashes
-                                        mn_path = ""
-                                        mni = 0
-                                        mn_len = Memory.strlen(mod_name)
-                                        mnc = 0 as i8
-                                        while mni < mn_len:
-                                            mnc = Memory.read_i8((mod_name as i64) + mni)
-                                            if mnc == 46:
-                                                mn_path = Str.concat(mn_path, "\\")
-                                            else:
-                                                Memory.write_i8(mnbuf, mnc)
-                                                mn_path = Str.concat(mn_path, mnbuf as str)
-                                            mni = mni + 1
-                                        mod_rel = Str.concat(mn_path, "\\mod.dlt")
-                                        mr_len = Memory.strlen(mod_rel)
-                                        lib_root = str_from_range(resolved, 0, rlen - mr_len)
-                                        mod_src = load_module(lib_root, mod_rel)
-                                    else:
-                                        mod_src = read_file_to_string(resolved)
-                                    if Memory.strlen(mod_src) > 0:
-                                        IOOps.io_println(Str.concat(Str.concat("[import] ", mod_name), Str.concat(" -> ", resolved)))
-                                        imported = Str.concat(imported, Str.concat("\n", mod_src))
-                                        # Track loaded module
-                                        Memory.write_i64(loaded_names + ((loaded_count as i64) * 8), mod_name as i64)
-                                        loaded_count = loaded_count + 1
-                                        # Register first component as module name for parser
-                                        first_comp = mod_name
-                                        fc_len = Memory.strlen(mod_name)
-                                        fc_i = 0
-                                        while fc_i < fc_len:
-                                            fc_c = Memory.read_i8((mod_name as i64) + fc_i)
-                                            if fc_c == 46:
-                                                first_comp = str_from_range(mod_name, 0, fc_i)
-                                                break
-                                            fc_i = fc_i + 1
-                                        register_module_name(first_comp)
-            # Move past newline chars
-            if c == 13 and (i + 1) < slen:
-                nr = Memory.read_i8((user_src as i64) + i + 1)
-                if nr == 10:
-                    i = i + 1
-            line_start = i + 1
-        i = i + 1
+                            # Check if starts with "std." (s=115 t=116 d=100 .=46)
+                            mn_len = Memory.strlen(mod_name)
+                            if mn_len > 4:
+                                ms0 = Memory.read_i8((mod_name as i64))
+                                ms1 = Memory.read_i8((mod_name as i64) + 1)
+                                ms2 = Memory.read_i8((mod_name as i64) + 2)
+                                ms3 = Memory.read_i8((mod_name as i64) + 3)
+                                if ms0 == 115 and ms1 == 116 and ms2 == 100 and ms3 == 46:
+                                    skip_std = 1
+                            if skip_std == 1:
+                                i = i + 1
+                                line_start = i
+                                i = i - 1
+                            else:
+                                # Check if already loaded
+                                already = 0
+                                li = 0
+                                while li < loaded_count:
+                                    ln = Memory.read_i64(loaded_names + ((li as i64) * 8)) as str
+                                    if str_eq(ln, mod_name) == 1:
+                                        already = 1
+                                        break
+                                    li = li + 1
+                                if already == 0:
+                                    resolved = try_resolve_module(mod_name, std_base, src_dir)
+                                    if Memory.strlen(resolved) > 0:
+                                        # Check if resolved is a mod.dlt — needs load_module processing
+                                        rlen = Memory.strlen(resolved)
+                                        is_mod = 0
+                                        if rlen > 7:
+                                            # Check if ends with "mod.dlt" (7 chars)
+                                            m1 = Memory.read_i8((resolved as i64) + rlen - 7)
+                                            m2 = Memory.read_i8((resolved as i64) + rlen - 6)
+                                            m3 = Memory.read_i8((resolved as i64) + rlen - 5)
+                                            m4 = Memory.read_i8((resolved as i64) + rlen - 4)
+                                            m5 = Memory.read_i8((resolved as i64) + rlen - 3)
+                                            m6 = Memory.read_i8((resolved as i64) + rlen - 2)
+                                            m7 = Memory.read_i8((resolved as i64) + rlen - 1)
+                                            if m1 == 109 and m2 == 111 and m3 == 100 and m4 == 46 and m5 == 100 and m6 == 108 and m7 == 116:
+                                                is_mod = 1
+                                        mod_src = ""
+                                        if is_mod == 1:
+                                            # Compute library_root: resolved minus mod_name_path/mod.dlt
+                                            # Build mod_name as path: dots -> backslashes
+                                            mn_path = ""
+                                            mni = 0
+                                            mn_len = Memory.strlen(mod_name)
+                                            mnc = 0 as i8
+                                            while mni < mn_len:
+                                                mnc = Memory.read_i8((mod_name as i64) + mni)
+                                                if mnc == 46:
+                                                    mn_path = Str.concat(mn_path, "\\")
+                                                else:
+                                                    Memory.write_i8(mnbuf, mnc)
+                                                    mn_path = Str.concat(mn_path, mnbuf as str)
+                                                mni = mni + 1
+                                            mod_rel = Str.concat(mn_path, "\\mod.dlt")
+                                            mr_len = Memory.strlen(mod_rel)
+                                            lib_root = str_from_range(resolved, 0, rlen - mr_len)
+                                            mod_src = load_module(lib_root, mod_rel)
+                                        else:
+                                            mod_src = read_file_to_string(resolved)
+                                        if Memory.strlen(mod_src) > 0:
+                                            IOOps.io_println(Str.concat(Str.concat("[import] ", mod_name), Str.concat(" -> ", resolved)))
+                                            # Prepend: deeper transitive deps load later but must appear earlier
+                                            # so definitions precede uses (DLT requires definition-before-use).
+                                            imported = Str.concat(mod_src, Str.concat("\n", imported))
+                                            # Track loaded module
+                                            Memory.write_i64(loaded_names + ((loaded_count as i64) * 8), mod_name as i64)
+                                            loaded_count = loaded_count + 1
+                                            any_new = 1
+                                            # Register first component as module name for parser
+                                            first_comp = mod_name
+                                            fc_len = Memory.strlen(mod_name)
+                                            fc_i = 0
+                                            while fc_i < fc_len:
+                                                fc_c = Memory.read_i8((mod_name as i64) + fc_i)
+                                                if fc_c == 46:
+                                                    first_comp = str_from_range(mod_name, 0, fc_i)
+                                                    break
+                                                fc_i = fc_i + 1
+                                            register_module_name(first_comp)
+                # Move past newline chars
+                if c == 13 and (i + 1) < slen:
+                    nr = Memory.read_i8((scan_src as i64) + i + 1)
+                    if nr == 10:
+                        i = i + 1
+                line_start = i + 1
+            i = i + 1
+        # Next pass: re-scan accumulated imported for transitive imports
+        scan_src = imported
     return imported
 
 # ==========================================
