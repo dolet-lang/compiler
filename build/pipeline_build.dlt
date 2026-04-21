@@ -13566,7 +13566,7 @@ fun main() -> i32:
 
     argc: i32 = Args.count()
     if argc < 2:
-        IOOps.io_println("Dolet Compiler v1.2.1-beta")
+        IOOps.io_println("Dolet Compiler v1.3.0-beta")
         IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--platform <name>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
@@ -13592,7 +13592,7 @@ fun main() -> i32:
     while ai < argc:
         arg: str = Args.get(ai)
         if str_eq(arg, "--version") == 1:
-            IOOps.io_println("Dolet Compiler v1.2.1-beta")
+            IOOps.io_println("Dolet Compiler v1.3.0-beta")
             return 0
         elif str_eq(arg, "--no-runtime") == 1:
             no_runtime = 1
