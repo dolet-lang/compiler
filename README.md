@@ -15,7 +15,7 @@
 
 **A self-hosting systems programming language that compiles to native code via MLIR/LLVM.**
 
-[![Version](https://img.shields.io/badge/version-v1.2.0--beta-green)]()
+[![Version](https://img.shields.io/badge/version-v1.3.1--beta-green)]()
 [![Written in Dolet](https://img.shields.io/badge/written%20in-Dolet-blue)]()
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)]()
 

@@ -139,8 +139,8 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
     skip_newlines()
 
     # Parse fields
-    fields: i64 = mk_node_list(64)
-    methods: i64 = mk_node_list(256)
+    fields: i64 = mk_node_list(512)
+    methods: i64 = mk_node_list(512)
 
     while cur_kind() != TK_EOF:
         ci: i32 = cur_indent()

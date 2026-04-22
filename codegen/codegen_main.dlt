@@ -227,7 +227,7 @@ fun collect_declarations(ast: i64):
                     parent_fields = get_struct_fields(base_class)
                     if parent_fields != 0:
                         pfc = nl_count(parent_fields)
-                        merged = mk_node_list(64)
+                        merged = mk_node_list(512)
                         pi = 0
                         while pi < pfc:
                             nl_add(merged, nl_get(parent_fields, pi))
@@ -243,7 +243,7 @@ fun collect_declarations(ast: i64):
                 if fields != 0:
                     # Separate instance fields from static fields
                     total_fc = nl_count(fields)
-                    inst_fields = mk_node_list(64)
+                    inst_fields = mk_node_list(512)
                     sfi = 0
                     while sfi < total_fc:
                         sf_node = nl_get(fields, sfi)
