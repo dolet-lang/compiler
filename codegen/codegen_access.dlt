@@ -344,6 +344,19 @@ fun gen_fun_call(node: i64) -> str:
 
     call_name: str = resolve_overload(fname, arg_types_str)
 
+    # Arena-dispatch: inside a bracketed function / loop iteration / main,
+    # rewrite heap-allocating formatters to arena-backed variants so their
+    # results are auto-freed on the next pop. Call sites outside the
+    # arena (str-returning compiler helpers, etc.) keep the heap path so
+    # existing escapes into globals still work.
+    if g_arena_emit == 1:
+        if str_eq(call_name, "Convert_i32_to_str") == 1:
+            call_name = "_arena_i32_to_str"
+        elif str_eq(call_name, "Convert_i64_to_str") == 1:
+            call_name = "_arena_i64_to_str"
+        elif str_eq(call_name, "Convert_bool_to_str") == 1:
+            call_name = "_arena_bool_to_str"
+
     # Build argument list
     arg_str: str = ""
     type_str: str = ""
@@ -410,6 +423,17 @@ fun gen_static_method_call(node: i64) -> str:
 
     # Mangled name: StructName_methodName
     mangled: str = Str.concat(Str.concat(sname, "_"), mname)
+
+    # Arena-dispatch for heap-allocating formatters (see gen_fun_call for
+    # full rationale). Inside a bracketed context we pick the arena
+    # variant so the returned string is freed on the next pop.
+    if g_arena_emit == 1:
+        if str_eq(mangled, "Convert_i32_to_str") == 1:
+            mangled = "_arena_i32_to_str"
+        elif str_eq(mangled, "Convert_i64_to_str") == 1:
+            mangled = "_arena_i64_to_str"
+        elif str_eq(mangled, "Convert_bool_to_str") == 1:
+            mangled = "_arena_bool_to_str"
 
     # Build argument list
     arg_str: str = ""

@@ -723,13 +723,46 @@ fun generate(ast: i64) -> str:
         emit_ind("llvm.func @main() -> i32 {")
         indent_inc()
 
+        # Activate entry block buffer so every alloca inside main (struct
+        # locals, scratch slots, arena frame handle) ends up at main's
+        # single function-entry prologue — one `sub rsp, N` — instead of
+        # being scattered mid-function. Without this, a caller-side
+        # `llvm.alloca` between a struct-returning call and the ensuing
+        # 13-field copy loop runs `sub rsp, N` on top of the callee's
+        # just-popped alloca, stomping the very bytes we're about to
+        # read. That's the root of the test2/test4 segfaults and of the
+        # dangling pointers that manifested as RAM "leaks" in test5/6.
+        old_entry_active_m:     i32 = g_entry_active
+        old_entry_count_m:      i32 = g_entry_count
+        old_entry_insert_pos_m: i32 = g_entry_insert_pos
+        g_entry_active     = 1
+        g_entry_count      = 0
+        g_entry_insert_pos = g_out_count
+
+        # Arena prologue for main — top-level `+` calls benefit, and the
+        # per-iteration brackets inside while loops give per-frame reset.
+        old_arena_main: i32 = g_arena_emit
+        g_arena_emit = 1
+        emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
+
         # Generate all top-level statements in source order
         # (var decls with init values are generated inline, preserving execution order)
         gen_main_body(ast)
 
-        # Return 0
+        # Flush hoisted allocas into main's entry block. Because we
+        # recorded g_entry_insert_pos BEFORE emitting the arena push,
+        # the flush slides allocas in ABOVE the push — final prologue
+        # order is: allocas → arena push → body.
+        flush_entry_allocas()
+        g_entry_active     = old_entry_active_m
+        g_entry_count      = old_entry_count_m
+        g_entry_insert_pos = old_entry_insert_pos_m
+
+        # Arena epilogue + return
         c0: str = emit_const_i32(0)
+        emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
         emit_ind(Str.concat(Str.concat("llvm.return ", c0), " : i32"))
+        g_arena_emit = old_arena_main
 
         indent_dec()
         emit_ind("}")

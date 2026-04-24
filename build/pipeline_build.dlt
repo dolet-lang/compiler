@@ -6042,6 +6042,62 @@ g_cur_method_struct: str = ""
 g_break_label: str = ""
 g_continue_label: str = ""
 
+# Arena bracketing — set by gen_fun_def, read by gen_return.
+# 1 = wrap the function body with _scope_arena_push/pop.
+# 0 = compiler internals (Memory.* / _scope_arena_* / _str_*) — skip.
+g_arena_emit: i32 = 0
+
+fun is_arena_exempt(mlir_fname: str) -> i32:
+    # Scope arena helpers themselves — must never recurse through arena.
+    if str_eq(mlir_fname, "_scope_arena_push") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_pop") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_alloc") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_init") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_used") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_capacity") == 1:
+        return 1
+    # String builtins that allocate through the arena — they can't
+    # push their own frame without self-recursion.
+    if str_eq(mlir_fname, "_str_plus") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_dupe") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_heap_dupe") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_heap_free") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_promote_return") == 1:
+        return 1
+    # Arena-backed integer/bool formatters — they allocate from the
+    # arena directly, so bracketing them would create a useless frame.
+    if str_eq(mlir_fname, "_arena_i32_to_str") == 1:
+        return 1
+    if str_eq(mlir_fname, "_arena_i64_to_str") == 1:
+        return 1
+    if str_eq(mlir_fname, "_arena_bool_to_str") == 1:
+        return 1
+    # All Memory.* primitives are arena-exempt. Not only to prevent the
+    # Memory.malloc <-> _scope_arena_init recursion, but because
+    # read_i8/write_i8/strlen/copy are HOT and any extra push/pop per
+    # call adds up. On top of that, we observed that adding a bracket
+    # around Memory_read_i8 (called byte-by-byte from DrawCanvas.text)
+    # corrupted the return path on tight inlining and crashed the
+    # callers. Blanket-exempt the whole family.
+    if Str.starts_with(mlir_fname, "Memory_") == true:
+        return 1
+    if str_eq(mlir_fname, "Memory_malloc_count") == 1:
+        return 1
+    if str_eq(mlir_fname, "Memory_free_count") == 1:
+        return 1
+    if str_eq(mlir_fname, "Memory_alloc_balance") == 1:
+        return 1
+    return 0
+
 # ==========================================
 # Annotation Registry
 # Parallel arrays storing custom annotation definitions
@@ -7684,12 +7740,20 @@ fun gen_binary_op(node: i64, expected: str) -> str:
     lt: str = infer_expr_type(left_node)
     rt: str = infer_expr_type(right_node)
 
-    # String concatenation: str + str => Str_concat
+    # String concatenation: str + str
+    # - Inside an arena-bracketed function (g_arena_emit == 1): lower to
+    #   _str_plus so the result lives in the scope arena and is freed on
+    #   pop. Zero-cost bump allocation.
+    # - Otherwise (str-returning function, compiler internal, etc.): keep
+    #   the old Str_concat heap path until Step 6 escape tracking is in.
     if str_eq(op_str, "+") == 1:
         if is_string_type(lt) == 1 or is_string_type(rt) == 1:
             lv: str = gen_expr(left_node, "string")
             rv: str = gen_expr(right_node, "string")
-            return emit_call("Str_concat", Str.concat(Str.concat(lv, ", "), rv), "!llvm.ptr, !llvm.ptr", "!llvm.ptr")
+            plus_fn: str = "Str_concat"
+            if g_arena_emit == 1:
+                plus_fn = "_str_plus"
+            return emit_call(plus_fn, Str.concat(Str.concat(lv, ", "), rv), "!llvm.ptr, !llvm.ptr", "!llvm.ptr")
 
     result_type: str = "i32"
     if str_eq(lt, "i64") == 1 or str_eq(rt, "i64") == 1:
@@ -8725,8 +8789,20 @@ fun gen_while_loop(node: i64):
 
     # Body block
     emit(Str.concat("  ", Str.concat(body_label, ":")))
+    # Per-iteration arena frame: push at top of body, pop before falling
+    # back to the condition. Everything that `+` allocates inside the
+    # iteration (via _str_plus) is released when the iteration ends.
+    # Note: break / continue paths skip the pop, so cursor accumulates
+    # until the enclosing function pops. That's acceptable — it just
+    # means break-heavy loops lose some of the benefit.
+    iter_frame: str = ""
+    if g_arena_emit == 1:
+        iter_frame = new_tmp()
+        emit_ind(Str.concat(iter_frame, " = llvm.call @_scope_arena_push() : () -> i64"))
     gen_block(body)
     if block_always_returns(body) == 0:
+        if g_arena_emit == 1:
+            emit_ind(Str.concat(Str.concat("llvm.call @_scope_arena_pop(", iter_frame), ") : (i64) -> ()"))
         emit_ind(Str.concat("llvm.br ", cond_label))
 
     # End block
@@ -8928,6 +9004,8 @@ fun gen_foreach_loop(node: i64):
 fun gen_return(node: i64):
     val_node: i64 = Memory.read_i64(node + 8)
     if val_node == 0:
+        if g_arena_emit == 1:
+            emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
         emit_ind("llvm.return")
         return
 
@@ -8938,6 +9016,19 @@ fun gen_return(node: i64):
         val = implicit_cast(val, vt, ret_type)
 
     mt: str = mlir_type(ret_type)
+    # If the function returns a `str`, promote the value out of the arena
+    # BEFORE popping. _str_promote_return copies the string down to the
+    # caller's arena region and leaves the cursor there, so a subsequent
+    # pop won't clobber it. For non-str return types just pop.
+    if g_arena_emit == 1:
+        if is_string_type(ret_type) == 1:
+            promoted: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(promoted, " = llvm.call @_str_promote_return("), val), ", %__arena_frame) : (!llvm.ptr, i64) -> "), "!llvm.ptr"))
+            val = promoted
+            # Note: _str_promote_return has already reset the cursor to
+            # the caller's frame, so we skip the explicit pop here.
+        else:
+            emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
     emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", val), " : "), mt))
 
 # ==========================================
@@ -9408,9 +9499,22 @@ fun gen_fun_def(node: i64):
     old_in_fn: i32 = g_in_function
     old_ret_type: str = g_cur_fn_ret_type
     old_fn_name: str = g_cur_fn_name
+    old_arena_emit: i32 = g_arena_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = fname
+    # Decide whether to bracket this function with an arena push/pop.
+    # Compiler internals (is_arena_exempt) skip to avoid self-recursion.
+    # Str-returning functions also skip in this step — their return
+    # path requires escape tracking that we haven't added yet. Without
+    # it we'd break every compiler function that returns a heap-
+    # allocated Str.concat pointer by copying it into the arena.
+    if is_arena_exempt(mlir_fname) == 1:
+        g_arena_emit = 0
+    elif has_return == 1 and is_string_type(ret_type) == 1:
+        g_arena_emit = 0
+    else:
+        g_arena_emit = 1
 
     push_var_scope()
 
@@ -9437,6 +9541,13 @@ fun gen_fun_def(node: i64):
     g_entry_count = 0
     g_entry_insert_pos = g_out_count
 
+    # Arena prologue (see codegen_core.is_arena_exempt for skip list).
+    # The push instruction is emitted AFTER g_entry_insert_pos is recorded,
+    # so flush_entry_allocas later slides allocas in above it — allocas
+    # still sit at function entry, then %__arena_frame, then body.
+    if g_arena_emit == 1:
+        emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
+
     if body != 0:
         gen_block(body)
 
@@ -9449,20 +9560,28 @@ fun gen_fun_def(node: i64):
     # Add implicit return if no return at end
     if has_return == 0:
         if body == 0 or block_always_returns(body) == 0:
+            if g_arena_emit == 1:
+                emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
             emit_ind("llvm.return")
     else:
         if body == 0 or block_always_returns(body) == 0:
             # Add default return
             if str_eq(ret_mt, "!llvm.ptr") == 1:
                 def_ret: str = emit_zero_ptr()
+                if g_arena_emit == 1:
+                    emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
                 emit_ind(Str.concat(Str.concat("llvm.return ", def_ret), " : !llvm.ptr"))
             elif is_int_type(ret_type) == 1:
                 def_ret2: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret2, " = llvm.mlir.constant(0 : "), ret_mt), Str.concat(") : ", ret_mt)))
+                if g_arena_emit == 1:
+                    emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret2), " : "), ret_mt))
             elif is_float_type(ret_type) == 1:
                 def_ret3: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret3, " = llvm.mlir.constant(0.0 : "), ret_mt), Str.concat(") : ", ret_mt)))
+                if g_arena_emit == 1:
+                    emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret3), " : "), ret_mt))
 
     pop_var_scope()
@@ -9471,6 +9590,7 @@ fun gen_fun_def(node: i64):
     g_in_function = old_in_fn
     g_cur_fn_ret_type = old_ret_type
     g_cur_fn_name = old_fn_name
+    g_arena_emit = old_arena_emit
 
     indent_dec()
     emit_ind("}")
@@ -9637,10 +9757,20 @@ fun gen_method_def(struct_name: str, node: i64):
     old_ret_type: str = g_cur_fn_ret_type
     old_fn_name: str = g_cur_fn_name
     old_method_struct: str = g_cur_method_struct
+    old_arena_emit_m: i32 = g_arena_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = mangled
     g_cur_method_struct = struct_name
+    # Mirror gen_fun_def: void-returning methods get an arena bracket;
+    # str-returning methods stay heap (escape-safe until Step 6 lands).
+    # Compiler-internal / exempt names also skip.
+    if is_arena_exempt(mangled) == 1:
+        g_arena_emit = 0
+    elif has_return == 1 and is_string_type(ret_type) == 1:
+        g_arena_emit = 0
+    else:
+        g_arena_emit = 1
 
     push_var_scope()
 
@@ -9671,6 +9801,10 @@ fun gen_method_def(struct_name: str, node: i64):
     g_entry_count = 0
     g_entry_insert_pos = g_out_count
 
+    # Arena prologue (same shape as gen_fun_def — see the note there).
+    if g_arena_emit == 1:
+        emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
+
     if body != 0:
         gen_block(body)
 
@@ -9682,6 +9816,8 @@ fun gen_method_def(struct_name: str, node: i64):
 
     if has_return == 0:
         if body == 0 or block_always_returns(body) == 0:
+            if g_arena_emit == 1:
+                emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
             emit_ind("llvm.return")
 
     pop_var_scope()
@@ -9690,6 +9826,7 @@ fun gen_method_def(struct_name: str, node: i64):
     g_cur_fn_ret_type = old_ret_type
     g_cur_fn_name = old_fn_name
     g_cur_method_struct = old_method_struct
+    g_arena_emit = old_arena_emit_m
 
     indent_dec()
     emit_ind("}")
@@ -10189,6 +10326,19 @@ fun gen_fun_call(node: i64) -> str:
 
     call_name: str = resolve_overload(fname, arg_types_str)
 
+    # Arena-dispatch: inside a bracketed function / loop iteration / main,
+    # rewrite heap-allocating formatters to arena-backed variants so their
+    # results are auto-freed on the next pop. Call sites outside the
+    # arena (str-returning compiler helpers, etc.) keep the heap path so
+    # existing escapes into globals still work.
+    if g_arena_emit == 1:
+        if str_eq(call_name, "Convert_i32_to_str") == 1:
+            call_name = "_arena_i32_to_str"
+        elif str_eq(call_name, "Convert_i64_to_str") == 1:
+            call_name = "_arena_i64_to_str"
+        elif str_eq(call_name, "Convert_bool_to_str") == 1:
+            call_name = "_arena_bool_to_str"
+
     # Build argument list
     arg_str: str = ""
     type_str: str = ""
@@ -10255,6 +10405,17 @@ fun gen_static_method_call(node: i64) -> str:
 
     # Mangled name: StructName_methodName
     mangled: str = Str.concat(Str.concat(sname, "_"), mname)
+
+    # Arena-dispatch for heap-allocating formatters (see gen_fun_call for
+    # full rationale). Inside a bracketed context we pick the arena
+    # variant so the returned string is freed on the next pop.
+    if g_arena_emit == 1:
+        if str_eq(mangled, "Convert_i32_to_str") == 1:
+            mangled = "_arena_i32_to_str"
+        elif str_eq(mangled, "Convert_i64_to_str") == 1:
+            mangled = "_arena_i64_to_str"
+        elif str_eq(mangled, "Convert_bool_to_str") == 1:
+            mangled = "_arena_bool_to_str"
 
     # Build argument list
     arg_str: str = ""
@@ -11795,13 +11956,46 @@ fun generate(ast: i64) -> str:
         emit_ind("llvm.func @main() -> i32 {")
         indent_inc()
 
+        # Activate entry block buffer so every alloca inside main (struct
+        # locals, scratch slots, arena frame handle) ends up at main's
+        # single function-entry prologue — one `sub rsp, N` — instead of
+        # being scattered mid-function. Without this, a caller-side
+        # `llvm.alloca` between a struct-returning call and the ensuing
+        # 13-field copy loop runs `sub rsp, N` on top of the callee's
+        # just-popped alloca, stomping the very bytes we're about to
+        # read. That's the root of the test2/test4 segfaults and of the
+        # dangling pointers that manifested as RAM "leaks" in test5/6.
+        old_entry_active_m:     i32 = g_entry_active
+        old_entry_count_m:      i32 = g_entry_count
+        old_entry_insert_pos_m: i32 = g_entry_insert_pos
+        g_entry_active     = 1
+        g_entry_count      = 0
+        g_entry_insert_pos = g_out_count
+
+        # Arena prologue for main — top-level `+` calls benefit, and the
+        # per-iteration brackets inside while loops give per-frame reset.
+        old_arena_main: i32 = g_arena_emit
+        g_arena_emit = 1
+        emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
+
         # Generate all top-level statements in source order
         # (var decls with init values are generated inline, preserving execution order)
         gen_main_body(ast)
 
-        # Return 0
+        # Flush hoisted allocas into main's entry block. Because we
+        # recorded g_entry_insert_pos BEFORE emitting the arena push,
+        # the flush slides allocas in ABOVE the push — final prologue
+        # order is: allocas → arena push → body.
+        flush_entry_allocas()
+        g_entry_active     = old_entry_active_m
+        g_entry_count      = old_entry_count_m
+        g_entry_insert_pos = old_entry_insert_pos_m
+
+        # Arena epilogue + return
         c0: str = emit_const_i32(0)
+        emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
         emit_ind(Str.concat(Str.concat("llvm.return ", c0), " : i32"))
+        g_arena_emit = old_arena_main
 
         indent_dec()
         emit_ind("}")
@@ -13581,7 +13775,7 @@ fun main() -> i32:
 
     argc: i32 = Args.count()
     if argc < 2:
-        IOOps.io_println("Dolet Compiler v1.3.1-beta")
+        IOOps.io_println("Dolet Compiler v1.4.0-beta")
         IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--platform <name>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
@@ -13607,7 +13801,7 @@ fun main() -> i32:
     while ai < argc:
         arg: str = Args.get(ai)
         if str_eq(arg, "--version") == 1:
-            IOOps.io_println("Dolet Compiler v1.3.1-beta")
+            IOOps.io_println("Dolet Compiler v1.4.0-beta")
             return 0
         elif str_eq(arg, "--no-runtime") == 1:
             no_runtime = 1

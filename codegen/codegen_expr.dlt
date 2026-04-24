@@ -315,12 +315,20 @@ fun gen_binary_op(node: i64, expected: str) -> str:
     lt: str = infer_expr_type(left_node)
     rt: str = infer_expr_type(right_node)
 
-    # String concatenation: str + str => Str_concat
+    # String concatenation: str + str
+    # - Inside an arena-bracketed function (g_arena_emit == 1): lower to
+    #   _str_plus so the result lives in the scope arena and is freed on
+    #   pop. Zero-cost bump allocation.
+    # - Otherwise (str-returning function, compiler internal, etc.): keep
+    #   the old Str_concat heap path until Step 6 escape tracking is in.
     if str_eq(op_str, "+") == 1:
         if is_string_type(lt) == 1 or is_string_type(rt) == 1:
             lv: str = gen_expr(left_node, "string")
             rv: str = gen_expr(right_node, "string")
-            return emit_call("Str_concat", Str.concat(Str.concat(lv, ", "), rv), "!llvm.ptr, !llvm.ptr", "!llvm.ptr")
+            plus_fn: str = "Str_concat"
+            if g_arena_emit == 1:
+                plus_fn = "_str_plus"
+            return emit_call(plus_fn, Str.concat(Str.concat(lv, ", "), rv), "!llvm.ptr, !llvm.ptr", "!llvm.ptr")
 
     result_type: str = "i32"
     if str_eq(lt, "i64") == 1 or str_eq(rt, "i64") == 1:

@@ -282,8 +282,20 @@ fun gen_while_loop(node: i64):
 
     # Body block
     emit(Str.concat("  ", Str.concat(body_label, ":")))
+    # Per-iteration arena frame: push at top of body, pop before falling
+    # back to the condition. Everything that `+` allocates inside the
+    # iteration (via _str_plus) is released when the iteration ends.
+    # Note: break / continue paths skip the pop, so cursor accumulates
+    # until the enclosing function pops. That's acceptable — it just
+    # means break-heavy loops lose some of the benefit.
+    iter_frame: str = ""
+    if g_arena_emit == 1:
+        iter_frame = new_tmp()
+        emit_ind(Str.concat(iter_frame, " = llvm.call @_scope_arena_push() : () -> i64"))
     gen_block(body)
     if block_always_returns(body) == 0:
+        if g_arena_emit == 1:
+            emit_ind(Str.concat(Str.concat("llvm.call @_scope_arena_pop(", iter_frame), ") : (i64) -> ()"))
         emit_ind(Str.concat("llvm.br ", cond_label))
 
     # End block
@@ -485,6 +497,8 @@ fun gen_foreach_loop(node: i64):
 fun gen_return(node: i64):
     val_node: i64 = Memory.read_i64(node + 8)
     if val_node == 0:
+        if g_arena_emit == 1:
+            emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
         emit_ind("llvm.return")
         return
 
@@ -495,6 +509,19 @@ fun gen_return(node: i64):
         val = implicit_cast(val, vt, ret_type)
 
     mt: str = mlir_type(ret_type)
+    # If the function returns a `str`, promote the value out of the arena
+    # BEFORE popping. _str_promote_return copies the string down to the
+    # caller's arena region and leaves the cursor there, so a subsequent
+    # pop won't clobber it. For non-str return types just pop.
+    if g_arena_emit == 1:
+        if is_string_type(ret_type) == 1:
+            promoted: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(promoted, " = llvm.call @_str_promote_return("), val), ", %__arena_frame) : (!llvm.ptr, i64) -> "), "!llvm.ptr"))
+            val = promoted
+            # Note: _str_promote_return has already reset the cursor to
+            # the caller's frame, so we skip the explicit pop here.
+        else:
+            emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
     emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", val), " : "), mt))
 
 # ==========================================

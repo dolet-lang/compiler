@@ -95,9 +95,22 @@ fun gen_fun_def(node: i64):
     old_in_fn: i32 = g_in_function
     old_ret_type: str = g_cur_fn_ret_type
     old_fn_name: str = g_cur_fn_name
+    old_arena_emit: i32 = g_arena_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = fname
+    # Decide whether to bracket this function with an arena push/pop.
+    # Compiler internals (is_arena_exempt) skip to avoid self-recursion.
+    # Str-returning functions also skip in this step — their return
+    # path requires escape tracking that we haven't added yet. Without
+    # it we'd break every compiler function that returns a heap-
+    # allocated Str.concat pointer by copying it into the arena.
+    if is_arena_exempt(mlir_fname) == 1:
+        g_arena_emit = 0
+    elif has_return == 1 and is_string_type(ret_type) == 1:
+        g_arena_emit = 0
+    else:
+        g_arena_emit = 1
 
     push_var_scope()
 
@@ -124,6 +137,13 @@ fun gen_fun_def(node: i64):
     g_entry_count = 0
     g_entry_insert_pos = g_out_count
 
+    # Arena prologue (see codegen_core.is_arena_exempt for skip list).
+    # The push instruction is emitted AFTER g_entry_insert_pos is recorded,
+    # so flush_entry_allocas later slides allocas in above it — allocas
+    # still sit at function entry, then %__arena_frame, then body.
+    if g_arena_emit == 1:
+        emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
+
     if body != 0:
         gen_block(body)
 
@@ -136,20 +156,28 @@ fun gen_fun_def(node: i64):
     # Add implicit return if no return at end
     if has_return == 0:
         if body == 0 or block_always_returns(body) == 0:
+            if g_arena_emit == 1:
+                emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
             emit_ind("llvm.return")
     else:
         if body == 0 or block_always_returns(body) == 0:
             # Add default return
             if str_eq(ret_mt, "!llvm.ptr") == 1:
                 def_ret: str = emit_zero_ptr()
+                if g_arena_emit == 1:
+                    emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
                 emit_ind(Str.concat(Str.concat("llvm.return ", def_ret), " : !llvm.ptr"))
             elif is_int_type(ret_type) == 1:
                 def_ret2: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret2, " = llvm.mlir.constant(0 : "), ret_mt), Str.concat(") : ", ret_mt)))
+                if g_arena_emit == 1:
+                    emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret2), " : "), ret_mt))
             elif is_float_type(ret_type) == 1:
                 def_ret3: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret3, " = llvm.mlir.constant(0.0 : "), ret_mt), Str.concat(") : ", ret_mt)))
+                if g_arena_emit == 1:
+                    emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret3), " : "), ret_mt))
 
     pop_var_scope()
@@ -158,6 +186,7 @@ fun gen_fun_def(node: i64):
     g_in_function = old_in_fn
     g_cur_fn_ret_type = old_ret_type
     g_cur_fn_name = old_fn_name
+    g_arena_emit = old_arena_emit
 
     indent_dec()
     emit_ind("}")
@@ -324,10 +353,20 @@ fun gen_method_def(struct_name: str, node: i64):
     old_ret_type: str = g_cur_fn_ret_type
     old_fn_name: str = g_cur_fn_name
     old_method_struct: str = g_cur_method_struct
+    old_arena_emit_m: i32 = g_arena_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = mangled
     g_cur_method_struct = struct_name
+    # Mirror gen_fun_def: void-returning methods get an arena bracket;
+    # str-returning methods stay heap (escape-safe until Step 6 lands).
+    # Compiler-internal / exempt names also skip.
+    if is_arena_exempt(mangled) == 1:
+        g_arena_emit = 0
+    elif has_return == 1 and is_string_type(ret_type) == 1:
+        g_arena_emit = 0
+    else:
+        g_arena_emit = 1
 
     push_var_scope()
 
@@ -358,6 +397,10 @@ fun gen_method_def(struct_name: str, node: i64):
     g_entry_count = 0
     g_entry_insert_pos = g_out_count
 
+    # Arena prologue (same shape as gen_fun_def — see the note there).
+    if g_arena_emit == 1:
+        emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
+
     if body != 0:
         gen_block(body)
 
@@ -369,6 +412,8 @@ fun gen_method_def(struct_name: str, node: i64):
 
     if has_return == 0:
         if body == 0 or block_always_returns(body) == 0:
+            if g_arena_emit == 1:
+                emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
             emit_ind("llvm.return")
 
     pop_var_scope()
@@ -377,6 +422,7 @@ fun gen_method_def(struct_name: str, node: i64):
     g_cur_fn_ret_type = old_ret_type
     g_cur_fn_name = old_fn_name
     g_cur_method_struct = old_method_struct
+    g_arena_emit = old_arena_emit_m
 
     indent_dec()
     emit_ind("}")

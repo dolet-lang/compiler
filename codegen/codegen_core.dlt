@@ -855,6 +855,62 @@ g_cur_method_struct: str = ""
 g_break_label: str = ""
 g_continue_label: str = ""
 
+# Arena bracketing — set by gen_fun_def, read by gen_return.
+# 1 = wrap the function body with _scope_arena_push/pop.
+# 0 = compiler internals (Memory.* / _scope_arena_* / _str_*) — skip.
+g_arena_emit: i32 = 0
+
+fun is_arena_exempt(mlir_fname: str) -> i32:
+    # Scope arena helpers themselves — must never recurse through arena.
+    if str_eq(mlir_fname, "_scope_arena_push") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_pop") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_alloc") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_init") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_used") == 1:
+        return 1
+    if str_eq(mlir_fname, "_scope_arena_capacity") == 1:
+        return 1
+    # String builtins that allocate through the arena — they can't
+    # push their own frame without self-recursion.
+    if str_eq(mlir_fname, "_str_plus") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_dupe") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_heap_dupe") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_heap_free") == 1:
+        return 1
+    if str_eq(mlir_fname, "_str_promote_return") == 1:
+        return 1
+    # Arena-backed integer/bool formatters — they allocate from the
+    # arena directly, so bracketing them would create a useless frame.
+    if str_eq(mlir_fname, "_arena_i32_to_str") == 1:
+        return 1
+    if str_eq(mlir_fname, "_arena_i64_to_str") == 1:
+        return 1
+    if str_eq(mlir_fname, "_arena_bool_to_str") == 1:
+        return 1
+    # All Memory.* primitives are arena-exempt. Not only to prevent the
+    # Memory.malloc <-> _scope_arena_init recursion, but because
+    # read_i8/write_i8/strlen/copy are HOT and any extra push/pop per
+    # call adds up. On top of that, we observed that adding a bracket
+    # around Memory_read_i8 (called byte-by-byte from DrawCanvas.text)
+    # corrupted the return path on tight inlining and crashed the
+    # callers. Blanket-exempt the whole family.
+    if Str.starts_with(mlir_fname, "Memory_") == true:
+        return 1
+    if str_eq(mlir_fname, "Memory_malloc_count") == 1:
+        return 1
+    if str_eq(mlir_fname, "Memory_free_count") == 1:
+        return 1
+    if str_eq(mlir_fname, "Memory_alloc_balance") == 1:
+        return 1
+    return 0
+
 # ==========================================
 # Annotation Registry
 # Parallel arrays storing custom annotation definitions
