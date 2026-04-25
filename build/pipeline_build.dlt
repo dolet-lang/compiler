@@ -10589,6 +10589,17 @@ fun gen_instance_method_call(node: i64) -> str:
     # Resolve overloaded method name
     mangled = resolve_overload(mangled, call_arg_types)
 
+    # Arena-dispatch for `a.concat(b)` on `str`. The `extend str`
+    # wrapper is str-returning, so inside its body g_arena_emit==0
+    # and the inner `+` would route through heap Str_concat,
+    # defeating the purpose. Intercept at the call site — mirrors the
+    # Convert.*_to_str dispatch in gen_fun_call / gen_static_method_call
+    # above — so the result lives in the scope arena and is freed on
+    # the next pop.
+    if g_arena_emit == 1:
+        if str_eq(mangled, "str_concat") == 1:
+            mangled = "_str_plus"
+
     # Get return type
     ret_type: str = get_fun_ret_type(mangled)
     # If method not found on child type, try parent type (inheritance)

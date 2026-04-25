@@ -63,6 +63,16 @@ doletc <input.dlt> [-o output] [--platform <os>] [--release] [--keep-mlir] [--ke
 | `--keep-mlir` | Keep intermediate `.mlir` file |
 | `--keep-llvm` | Keep intermediate `.ll` file |
 
+## Idioms
+
+- **String concatenation:** use `a + b` or `a.concat(b)`. Both are
+  compiler-dispatched to an arena-backed builtin inside a bracketed
+  scope, so the intermediate string is freed automatically when the
+  scope exits. Never use `Str.concat()` (the static form) in user
+  code — it always heap-allocates and the caller must remember to
+  `Memory.free`. It exists for compiler internals and rare cases
+  where a long-lived heap string is genuinely wanted.
+
 ## Language Features
 
 - **Static typing** with type inference
