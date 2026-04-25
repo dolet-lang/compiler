@@ -362,6 +362,21 @@ fun infer_expr_type(node: i64) -> str:
     if ntype == NODE_NESTED_METHOD:
         nm_base: i64 = Memory.read_i64(node + 8)
         nm_mname: str = Memory.read_i64(node + 16) as str
+
+        # 3-level static A.B.method() — same dispatch as in
+        # gen_nested_method_call. When both idents are registered
+        # struct types, resolve as B.method() so the inferred
+        # return type matches what the call site emits.
+        if Memory.read_i32(nm_base) == NODE_STATIC_FIELD:
+            ns_a: str = Memory.read_i64(nm_base + 8) as str
+            ns_b: str = Memory.read_i64(nm_base + 16) as str
+            if is_struct_type(ns_a) == 1:
+                if is_struct_type(ns_b) == 1:
+                    ns_mangled: str = Str.concat(Str.concat(ns_b, "_"), nm_mname)
+                    ns_rt: str = get_fun_ret_type(ns_mangled)
+                    if str_eq(ns_rt, "unknown") == 0 and str_eq(ns_rt, "") == 0:
+                        return ns_rt
+
         nm_base_type: str = infer_expr_type(nm_base)
         if str_eq(nm_base_type, "") == 0 and str_eq(nm_base_type, "unknown") == 0:
             nm_mangled: str = Str.concat(Str.concat(nm_base_type, "_"), nm_mname)

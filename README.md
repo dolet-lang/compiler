@@ -42,7 +42,7 @@ The runtime uses **no C runtime** — all runtime functions (memory, I/O, string
 Download the latest release from [Releases](https://github.com/dolet-lang/dolet-compiler/releases), extract, and run:
 
 ```batch
-doletc hello.dlt -o hello --platform windows
+doletc hello.dlt -o hello --target windows
 ```
 
 ### Option 2: Build from Source
@@ -52,13 +52,13 @@ See [Building from Source](#building-from-source) below.
 ## Usage
 
 ```
-doletc <input.dlt> [-o output] [--platform <os>] [--release] [--keep-mlir] [--keep-llvm]
+doletc <input.dlt> [-o output] [--target <os>] [--release] [--keep-mlir] [--keep-llvm]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-o <path>` | Output executable path (extension added from platform config) |
-| `--platform <os>` | Target platform — loads `library/platform/<os>/platform.conf` |
+| `--target <os>` | Target platform — loads `library/platform/<os>/platform.conf` |
 | `--release` | Build as GUI app (no console window, Windows only) |
 | `--keep-mlir` | Keep intermediate `.mlir` file |
 | `--keep-llvm` | Keep intermediate `.ll` file |
@@ -183,13 +183,13 @@ build.bat
 Or manually:
 
 ```batch
-python bootstrap\doletc.py build\pipeline_build.dlt -o bin\doletc.exe --platform windows
+python bootstrap\doletc.py build\pipeline_build.dlt -o bin\doletc.exe --target windows
 ```
 
 ### 4. Verify (Self-Hosting)
 
 ```batch
-bin\doletc.exe build\pipeline_build.dlt -o bin\doletc2.exe --platform windows
+bin\doletc.exe build\pipeline_build.dlt -o bin\doletc2.exe --target windows
 ```
 
 If `doletc2.exe` compiles successfully, the compiler can compile itself.
@@ -240,7 +240,7 @@ flag_entry = -entry:{name}
 stack = -stack:{size}
 ```
 
-To add a new platform, create `library/platform/<name>/platform.conf` and use `--platform <name>`.
+To add a new platform, create `library/platform/<name>/platform.conf` and use `--target <name>`.
 
 ## Related Repositories
 

@@ -1590,11 +1590,11 @@ fun main() -> i32:
     argc: i32 = Args.count()
     if argc < 2:
         IOOps.io_println("Dolet Compiler v1.4.0-beta")
-        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--platform <name>]")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--target <name>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
         IOOps.io_println("  -o <path>          Output executable path")
-        IOOps.io_println("  --platform <name>  Target platform (reads platform/<name>/platform.conf)")
+        IOOps.io_println("  --target <name>    Target platform (reads platform/<name>/platform.conf)")
         IOOps.io_println("  --keep-mlir        Keep intermediate .mlir file")
         IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
         IOOps.io_println("  --no-runtime       Don't auto-import runtime libraries")
@@ -1627,7 +1627,7 @@ fun main() -> i32:
             g_tree_shake_enabled = 1
         elif str_eq(arg, "--no-console") == 1:
             no_console = 1
-        elif str_eq(arg, "--platform") == 1:
+        elif str_eq(arg, "--target") == 1:
             ai = ai + 1
             if ai < argc:
                 target_platform = Args.get(ai)

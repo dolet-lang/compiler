@@ -160,6 +160,19 @@ fun gen_nested_method_call(node: i64) -> str:
     method_name: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
 
+    # 3-level static: A.B.method() where A and B are both struct
+    # types. The parser builds NODE_NESTED_METHOD with base =
+    # NODE_STATIC_FIELD(A, B) when both idents are uppercase. A
+    # acts as a namespace qualifier; resolve as B.method() so the
+    # MLIR call is identical to a plain `B.method(args)`.
+    if Memory.read_i32(base_node) == NODE_STATIC_FIELD:
+        a_name: str = Memory.read_i64(base_node + 8) as str
+        b_name: str = Memory.read_i64(base_node + 16) as str
+        if is_struct_type(a_name) == 1:
+            if is_struct_type(b_name) == 1:
+                proxy: i64 = mk_static_method(b_name, method_name, args_list)
+                return gen_static_method_call(proxy)
+
     # Get the pointer to the nested struct field
     base_ptr: str = gen_nested_field_ptr(base_node)
 

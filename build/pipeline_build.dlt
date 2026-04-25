@@ -7262,6 +7262,21 @@ fun infer_expr_type(node: i64) -> str:
     if ntype == NODE_NESTED_METHOD:
         nm_base: i64 = Memory.read_i64(node + 8)
         nm_mname: str = Memory.read_i64(node + 16) as str
+
+        # 3-level static A.B.method() — same dispatch as in
+        # gen_nested_method_call. When both idents are registered
+        # struct types, resolve as B.method() so the inferred
+        # return type matches what the call site emits.
+        if Memory.read_i32(nm_base) == NODE_STATIC_FIELD:
+            ns_a: str = Memory.read_i64(nm_base + 8) as str
+            ns_b: str = Memory.read_i64(nm_base + 16) as str
+            if is_struct_type(ns_a) == 1:
+                if is_struct_type(ns_b) == 1:
+                    ns_mangled: str = Str.concat(Str.concat(ns_b, "_"), nm_mname)
+                    ns_rt: str = get_fun_ret_type(ns_mangled)
+                    if str_eq(ns_rt, "unknown") == 0 and str_eq(ns_rt, "") == 0:
+                        return ns_rt
+
         nm_base_type: str = infer_expr_type(nm_base)
         if str_eq(nm_base_type, "") == 0 and str_eq(nm_base_type, "unknown") == 0:
             nm_mangled: str = Str.concat(Str.concat(nm_base_type, "_"), nm_mname)
@@ -10141,6 +10156,19 @@ fun gen_nested_method_call(node: i64) -> str:
     base_node: i64 = Memory.read_i64(node + 8)
     method_name: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
+
+    # 3-level static: A.B.method() where A and B are both struct
+    # types. The parser builds NODE_NESTED_METHOD with base =
+    # NODE_STATIC_FIELD(A, B) when both idents are uppercase. A
+    # acts as a namespace qualifier; resolve as B.method() so the
+    # MLIR call is identical to a plain `B.method(args)`.
+    if Memory.read_i32(base_node) == NODE_STATIC_FIELD:
+        a_name: str = Memory.read_i64(base_node + 8) as str
+        b_name: str = Memory.read_i64(base_node + 16) as str
+        if is_struct_type(a_name) == 1:
+            if is_struct_type(b_name) == 1:
+                proxy: i64 = mk_static_method(b_name, method_name, args_list)
+                return gen_static_method_call(proxy)
 
     # Get the pointer to the nested struct field
     base_ptr: str = gen_nested_field_ptr(base_node)
@@ -13787,11 +13815,11 @@ fun main() -> i32:
     argc: i32 = Args.count()
     if argc < 2:
         IOOps.io_println("Dolet Compiler v1.4.0-beta")
-        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--platform <name>]")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--target <name>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
         IOOps.io_println("  -o <path>          Output executable path")
-        IOOps.io_println("  --platform <name>  Target platform (reads platform/<name>/platform.conf)")
+        IOOps.io_println("  --target <name>    Target platform (reads platform/<name>/platform.conf)")
         IOOps.io_println("  --keep-mlir        Keep intermediate .mlir file")
         IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
         IOOps.io_println("  --no-runtime       Don't auto-import runtime libraries")
@@ -13824,7 +13852,7 @@ fun main() -> i32:
             g_tree_shake_enabled = 1
         elif str_eq(arg, "--no-console") == 1:
             no_console = 1
-        elif str_eq(arg, "--platform") == 1:
+        elif str_eq(arg, "--target") == 1:
             ai = ai + 1
             if ai < argc:
                 target_platform = Args.get(ai)
