@@ -15,20 +15,8 @@ fun check_i32(label: str, got: i32, expected: i32):
         print("FAIL " + label + " expected " + Convert.i32_to_str(expected) + " got " + Convert.i32_to_str(got))
 
 fun check_str(label: str, got: str, expected: str):
-    # Length proxy + substring check (no public str_eq exposed).
-    glen: i64 = Memory.strlen(got)
-    elen: i64 = Memory.strlen(expected)
-    if glen != elen:
-        print("FAIL " + label + " length expected " + Convert.i64_to_str(elen) + " got " + Convert.i64_to_str(glen))
-        return
-    matches: i64 = 0
-    if elen == 0:
-        matches = 1
-    else:
-        contains_check: bool = Str.starts_with(got, expected)
-        if contains_check:
-            matches = 1
-    if matches == 1:
+    eq: bool = Str.equals(got, expected)
+    if eq:
         print("PASS " + label + " = '" + got + "'")
     else:
         print("FAIL " + label + " expected '" + expected + "' got '" + got + "'")
@@ -77,8 +65,7 @@ i: i32 = 0
 all_x: i32 = 1
 while i < 50:
     junk: str = System.Command.capture("cmd /c echo x")
-    junk_len: i64 = Memory.strlen(junk)
-    if junk_len != 1 as i64:
+    if Str.equals(junk, "x") == false:
         all_x = 0
     i = i + 1
 check_i32("repeated capture (50x)", all_x, 1)

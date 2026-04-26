@@ -1364,6 +1364,69 @@ inventing parallel infrastructure:
 
 ---
 
+# BUGS — known compiler bugs awaiting dedicated fix sessions
+
+## B-01. Chained extend-str return type loss ⬜
+
+**Symptom:** Calls into `extend str` methods (or any user method
+on a primitive type, when chained or used in a non-assignment
+context) emit `llvm.call @<method>(...) : (...) -> ()` (void),
+losing the actual return type. Downstream code then breaks:
+`llvm.return : !llvm.ptr` (no value), or
+`llvm.store , %X : T, !llvm.ptr` (empty operand).
+
+**Reproduce:**
+```dolet
+import std
+a: str = "x"
+b: str = "x"
+ok: bool = a.equals(b)        # FAIL: equals lowered as void
+```
+or
+```dolet
+fun f(cmd: str) -> str:
+    return Process.run_capture(cmd).trim()    # FAIL: trim void
+```
+
+**Impact:** We've worked around this 4+ times by introducing
+intermediate variables (`raw: str = ...; return raw.trim()`). Any
+new `extend str` method that returns a primitive (bool, i32) is
+unusable in chained or expression contexts.
+
+**Specific example shipped today:** `library/std/string.dlt`
+intentionally OMITS `equals(self, other)` from the `extend str`
+block. Only `Str.equals(a, b)` (static form) is exposed. When
+this bug is fixed, add the wrapper back and update tests.
+
+**Trace (from prior investigation):**
+- Parser builds `NODE_INST_METHOD(obj=ident, method, args)` for
+  `var.method()` and `NODE_NESTED_METHOD(base=node, method, args)`
+  for `f().method()`.
+- `gen_instance_method_call` mangles to `<base_type>_<method>`
+  (e.g. `str_equals`) and calls `get_fun_ret_type(mangled)`.
+- For some reason the return type lookup returns
+  `unknown` / `""` for `extend str` methods that return
+  primitives — the call emits as void.
+- Direct static-method calls (`Str.equals(a, b)`) work, so
+  the registration during NODE_EXTEND_BLOCK processing in
+  `codegen_main.dlt:311+` captures the signature correctly under
+  one mangling but lookup uses a different mangling.
+
+**Likely fix:** check what name `register_overload` produces for
+extend-str methods (probably `str_equals$` or similar) vs what
+`gen_instance_method_call` looks up at line 569 (`base_type + "_" + mname`).
+Equalize the mangling rule on both sides.
+
+**Estimate:** 1 medium session. Discrete codegen bug.
+
+**Why deferred today:** session quality bar — we have to choose
+between many small fixes or one big feature. This bug is small
+but affects a class of user code; B1 (Result/Option) is bigger
+but unlocks a whole programming pattern. Each deserves its own
+session.
+
+---
+
 # Out-of-roadmap (explicitly NOT planned)
 
 - **Garbage collection.** The arena + heap split is the model.
