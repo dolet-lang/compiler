@@ -121,6 +121,7 @@ for %%f in (
     panic_basic
     visibility_ok
     error_paths
+    str_utils
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

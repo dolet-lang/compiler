@@ -1,0 +1,38 @@
+import std
+
+# index_of
+i1: i64 = Str.index_of("hello world", "world")
+print("index_of 'world' in 'hello world' = " + Convert.i64_to_str(i1))    # 6
+
+i2: i64 = Str.index_of("hello", "xyz")
+print("index_of 'xyz' in 'hello' = " + Convert.i64_to_str(i2))             # -1
+
+i3: i64 = Str.index_of("abc", "")
+print("index_of '' in 'abc' = " + Convert.i64_to_str(i3))                  # 0
+
+# replace
+r1: str = Str.replace("hello world", "world", "Dolet")
+print("replace: " + r1)                                                     # hello Dolet
+
+r2: str = Str.replace("aaa", "a", "bb")
+print("replace: " + r2)                                                     # bbbbbb
+
+r3: str = Str.replace("abc", "x", "y")
+print("replace: " + r3)                                                     # abc (unchanged)
+
+# repeat
+p1: str = Str.repeat("ab", 3 as i64)
+print("repeat: " + p1)                                                      # ababab
+
+p2: str = Str.repeat("x", 0 as i64)
+print("repeat empty: [" + p2 + "]")                                         # []
+
+# Chained extend-str (now that B-01 is fixed)
+s: str = "  hello world  "
+trimmed: str = s.trim()
+print("trim+replace: " + trimmed.replace("hello", "hi"))                    # hi world
+
+# Method on variable holding string literal
+abc: str = "abcdef"
+idx: i64 = abc.index_of("cd")
+print("var index_of: " + Convert.i64_to_str(idx))                           # 2
