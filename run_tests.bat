@@ -122,6 +122,7 @@ for %%f in (
     visibility_ok
     error_paths
     str_utils
+    str_parse
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

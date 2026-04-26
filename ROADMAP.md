@@ -1396,6 +1396,57 @@ codegen investigation.
 
 ---
 
+## B-02. Overload-blind `find_impl_method` ⬜
+
+**Symptom:** Calling an overloaded instance method picks the wrong
+overload's parameter types at the call site, producing a type
+mismatch in MLIR.
+
+**Concrete repro:** `list.append` has 13 overloads (i8, i16, i32,
+i64, u8, u16, u32, u64, f32, f64, str, bool, char). Calling
+`my_str_list.append(some_str)` produces:
+
+```mlir
+llvm.call @list_append__str(%list, %s) : (!llvm.ptr, i8) -> ()
+                                                       ^^^
+                              wrong: should be !llvm.ptr (str)
+```
+
+Function name is correct (`list_append__str` — overload resolution
+worked for the NAME), but the parameter type annotation is `i8`
+because `find_impl_method(base_type, mname)` returns the FIRST
+method named `append` in the impl table — the i8 overload — and
+its params are used to render the call's MLIR types.
+
+**Trace:**
+- `gen_instance_method_call` at `codegen/codegen_access.dlt:638`:
+  `method_node2 = find_impl_method(base_type, mname)`
+- `method_params2 = Memory.read_i64(method_node2 + 16)` — params of
+  the FIRST registered overload (regardless of arg types passed)
+- For each arg, `expected_pt2 = mp_node2 + 16` reads the i8
+  variant's param type
+- Later, `mangled = resolve_overload(mangled, call_arg_types)` at
+  line 679 fixes the function NAME but the type annotations were
+  already emitted with the wrong type
+
+**Likely fix:** either
+1. Two-pass approach: compute `call_arg_types` from arg expressions
+   first, then call `find_impl_method_overload(base_type, mname,
+   arg_types)` to get the right overload's node, THEN emit args
+   with correct types.
+2. Defer type-annotation emission until after `resolve_overload`
+   (re-render the signature based on the resolved name).
+
+**Estimate:** 1 medium session. Discrete codegen bug.
+
+**Specific impact today:** `library/std/string.dlt` deliberately
+OMITS `split(self, delim) -> list<str>` and `lines(self) -> list<str>`
+because both need `result.append(str_value)` which trips this bug.
+When B-02 is fixed, re-add both methods (the implementations are
+preserved in git history of the previous commit).
+
+---
+
 # Out-of-roadmap (explicitly NOT planned)
 
 - **Garbage collection.** The arena + heap split is the model.

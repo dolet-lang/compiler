@@ -1,0 +1,25 @@
+import std
+
+# Str.parse_i64 — happy path
+print(Convert.i64_to_str(Str.parse_i64("42")))
+print(Convert.i64_to_str(Str.parse_i64("-17")))
+print(Convert.i64_to_str(Str.parse_i64("+99")))
+print(Convert.i64_to_str(Str.parse_i64("  123")))
+
+# Str.parse_i64 — error returns 0
+print(Convert.i64_to_str(Str.parse_i64("xyz")))
+print(Convert.i64_to_str(Str.parse_i64("")))
+print(Convert.i64_to_str(Str.parse_i64("0")))
+
+# Str.is_int
+print(Convert.bool_to_str(Str.is_int("42")))
+print(Convert.bool_to_str(Str.is_int("-17")))
+print(Convert.bool_to_str(Str.is_int("3.14")))
+print(Convert.bool_to_str(Str.is_int("xyz")))
+print(Convert.bool_to_str(Str.is_int("")))
+
+# extend str method form (B-01 fixed)
+abc: str = "  -42  "
+trimmed: str = abc.trim()
+n: i64 = trimmed.parse_i64()
+print(Convert.i64_to_str(n))
