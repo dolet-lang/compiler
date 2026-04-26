@@ -1366,64 +1366,33 @@ inventing parallel infrastructure:
 
 # BUGS — known compiler bugs awaiting dedicated fix sessions
 
-## B-01. Chained extend-str return type loss ⬜
+## B-01. Chained extend-str return type loss ✅
 
-**Symptom:** Calls into `extend str` methods (or any user method
-on a primitive type, when chained or used in a non-assignment
-context) emit `llvm.call @<method>(...) : (...) -> ()` (void),
-losing the actual return type. Downstream code then breaks:
-`llvm.return : !llvm.ptr` (no value), or
-`llvm.store , %X : T, !llvm.ptr` (empty operand).
+**Shipped.** Root cause was a missing `load std/string` in
+`library/std/mod.dlt` — every other extend block (i32, i64, f64,
+bool, list, etc.) was loaded but `extend str` was silently absent.
+Result: `extend str` methods were defined in source but never
+parsed by the user-program compilation context, so `str_contains`,
+`str_trim`, `str_equals`, etc. were not registered in the function
+signature table. The codegen `gen_instance_method_call` then saw
+unknown return type and fell back to `-> ()` (void), corrupting
+downstream MLIR.
 
-**Reproduce:**
-```dolet
-import std
-a: str = "x"
-b: str = "x"
-ok: bool = a.equals(b)        # FAIL: equals lowered as void
-```
-or
-```dolet
-fun f(cmd: str) -> str:
-    return Process.run_capture(cmd).trim()    # FAIL: trim void
-```
+**Fix:** one-line addition `load std/string` to `library/std/mod.dlt`.
+No codegen changes needed. The dispatch was correct all along.
 
-**Impact:** We've worked around this 4+ times by introducing
-intermediate variables (`raw: str = ...; return raw.trim()`). Any
-new `extend str` method that returns a primitive (bool, i32) is
-unusable in chained or expression contexts.
+**What's now possible:**
+- `a.contains(b)`, `a.starts_with(b)`, `a.ends_with(b)` (bool returns)
+- `a.to_upper()`, `a.to_lower()`, `a.trim()`, `a.substring(s, e)` (str returns)
+- `a.equals(b)` (re-added in std/string.dlt)
+- `a.length()` (i64)
+- `a.concat(b)` (str)
+- Chained calls like `Process.run_capture(cmd).trim()` work directly
+  (no need for an intermediate variable workaround)
 
-**Specific example shipped today:** `library/std/string.dlt`
-intentionally OMITS `equals(self, other)` from the `extend str`
-block. Only `Str.equals(a, b)` (static form) is exposed. When
-this bug is fixed, add the wrapper back and update tests.
-
-**Trace (from prior investigation):**
-- Parser builds `NODE_INST_METHOD(obj=ident, method, args)` for
-  `var.method()` and `NODE_NESTED_METHOD(base=node, method, args)`
-  for `f().method()`.
-- `gen_instance_method_call` mangles to `<base_type>_<method>`
-  (e.g. `str_equals`) and calls `get_fun_ret_type(mangled)`.
-- For some reason the return type lookup returns
-  `unknown` / `""` for `extend str` methods that return
-  primitives — the call emits as void.
-- Direct static-method calls (`Str.equals(a, b)`) work, so
-  the registration during NODE_EXTEND_BLOCK processing in
-  `codegen_main.dlt:311+` captures the signature correctly under
-  one mangling but lookup uses a different mangling.
-
-**Likely fix:** check what name `register_overload` produces for
-extend-str methods (probably `str_equals$` or similar) vs what
-`gen_instance_method_call` looks up at line 569 (`base_type + "_" + mname`).
-Equalize the mangling rule on both sides.
-
-**Estimate:** 1 medium session. Discrete codegen bug.
-
-**Why deferred today:** session quality bar — we have to choose
-between many small fixes or one big feature. This bug is small
-but affects a class of user code; B1 (Result/Option) is bigger
-but unlocks a whole programming pattern. Each deserves its own
-session.
+Lesson learned: **always check whether new library files are wired
+into mod.dlt before assuming a codegen bug.** Saved a multi-hour
+codegen investigation.
 
 ---
 
