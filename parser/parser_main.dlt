@@ -171,6 +171,13 @@ fun parse_statement() -> i64:
     if k == TK_PASS:
         return parse_pass_stmt()
 
+    # Panic statement: `panic "message"`
+    # Detected only when followed by a string literal — the function-call
+    # form `panic(...)` falls through to expression-statement handling
+    # so the existing internal `fun panic(msg)` definitions keep working.
+    if k == TK_IDENT and str_eq(cur_val(), "panic") == 1 and peek_kind(1) == TK_STRING:
+        return parse_panic_stmt()
+
     # Import
     if k == TK_IMPORT:
         return parse_import_stmt()

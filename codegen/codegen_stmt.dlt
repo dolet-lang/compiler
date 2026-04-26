@@ -89,7 +89,7 @@ fun gen_field_assignment(node: i64):
     # Get struct type of object
     obj_type: str = get_var_type(obj_name)
 
-    # Access control enforcement for field assignment
+    # Access control enforcement for field assignment — hard failure.
     acc: str = get_field_access(obj_type, field_name)
     if str_eq(acc, "private") == 1:
         in_struct: i32 = 0
@@ -98,8 +98,7 @@ fun gen_field_assignment(node: i64):
                 if str_eq(g_cur_method_struct, obj_type) == 1:
                     in_struct = 1
         if in_struct == 0:
-            IOOps.io_println(Str.concat("[error] Cannot assign to private field: ", field_name))
-            return
+            panic(Str.concat(Str.concat(Str.concat("private field '", field_name), Str.concat("' of struct '", obj_type)), "' cannot be assigned from outside the struct's methods"))
     elif str_eq(acc, "protected") == 1:
         allowed2: i32 = 0
         if (g_cur_method_struct as i64) != 0:
@@ -113,8 +112,7 @@ fun gen_field_assignment(node: i64):
                             if str_eq(par2, obj_type) == 1:
                                 allowed2 = 1
         if allowed2 == 0:
-            IOOps.io_println(Str.concat("[error] Cannot assign to protected field: ", field_name))
-            return
+            panic(Str.concat(Str.concat(Str.concat("protected field '", field_name), Str.concat("' of struct '", obj_type)), "' cannot be assigned from outside the struct hierarchy"))
 
     # ptr[T].value = x → store through typed pointer
     if str_eq(field_name, "value") == 1:
@@ -497,6 +495,12 @@ fun gen_foreach_loop(node: i64):
 fun gen_return(node: i64):
     val_node: i64 = Memory.read_i64(node + 8)
     if val_node == 0:
+        # Validation: a bare `return` is only valid in void functions.
+        # Catches accidental `return` in functions declared to return T.
+        if g_validate_enabled == 1:
+            if str_eq(g_cur_fn_ret_type, "") == 0:
+                if str_eq(g_cur_fn_ret_type, "void") == 0:
+                    panic(Str.concat(Str.concat("bare 'return' in function declared to return non-void type '", g_cur_fn_ret_type), "' — supply a return value"))
         if g_arena_emit == 1:
             emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
         emit_ind("llvm.return")
@@ -507,6 +511,18 @@ fun gen_return(node: i64):
     vt: str = infer_expr_type(val_node)
     if str_eq(vt, ret_type) == 0 and str_eq(vt, "unknown") == 0:
         val = implicit_cast(val, vt, ret_type)
+
+    # Validation: gen_expr returning empty string for a non-void
+    # return type means the inner expression's type/codegen path
+    # failed silently — this would emit `llvm.return  : T` (no
+    # value) which produces garbled MLIR and crashes mlir-translate.
+    # Catch it at codegen time with a clear error pointing at the
+    # function whose body went wrong (the str_trim → () regression).
+    if g_validate_enabled == 1:
+        if str_eq(val, "") == 1:
+            if str_eq(ret_type, "") == 0:
+                if str_eq(ret_type, "void") == 0:
+                    panic(Str.concat(Str.concat("internal codegen error: return value resolved to empty for non-void return type '", ret_type), "'. Likely cause: a chained method call (e.g. f().method()) lost its return type during codegen."))
 
     mt: str = mlir_type(ret_type)
     # If the function returns a `str`, promote the value out of the arena
@@ -854,6 +870,16 @@ fun gen_statement(node: i64):
     elif nt == NODE_PASS:
         # No-op
         return
+    elif nt == NODE_PANIC:
+        # `panic "msg"` desugars to a call to the runtime helper
+        # dolet_panic(msg) which prints "[panic] msg" and exits 101.
+        # Synthesize the FUN_CALL AST and dispatch to the existing
+        # function-call codegen path — no special MLIR emission needed.
+        pmsg: str = panic_msg(node)
+        pargs: i64 = mk_node_list(1)
+        nl_add(pargs, mk_str_lit(pmsg))
+        pproxy: i64 = mk_fun_call("dolet_panic", pargs, 0)
+        gen_fun_call(pproxy)
     elif nt == NODE_FUN_CALL:
         gen_fun_call(node)
     elif nt == NODE_STATIC_METHOD:

@@ -42,6 +42,7 @@ NODE_BREAK: i32 = 44
 NODE_CONTINUE: i32 = 45
 NODE_PASS: i32 = 46
 NODE_RETURN: i32 = 47
+NODE_PANIC: i32 = 51
 NODE_MATCH: i32 = 48
 NODE_CASE: i32 = 49
 NODE_PATTERN: i32 = 50
@@ -139,7 +140,7 @@ IMPORT_SELECTIVE_ALIASED: i32 = 4
 # Core Infrastructure
 # ==========================================
 
-NODE_SIZE: i32 = 88
+NODE_SIZE: i32 = 96
 
 fun alloc_node(ntype: i32) -> i64:
     n: i64 = Memory.malloc_zeroed(NODE_SIZE as i64)
@@ -513,6 +514,17 @@ fun mk_continue() -> i64:
 
 fun mk_pass() -> i64:
     return alloc_node(NODE_PASS)
+
+# PanicNode: f0=msg (str literal). User code: `panic "message"`.
+# Codegen lowers to a call into the runtime helper dolet_panic(msg)
+# which prints `[panic] msg` and exits with code 101.
+fun mk_panic(msg: str) -> i64:
+    n: i64 = alloc_node(NODE_PANIC)
+    Memory.write_i64(n + 8, msg as i64)
+    return n
+
+fun panic_msg(n: i64) -> str:
+    return Memory.read_i64(n + 8) as str
 
 fun mk_self() -> i64:
     return alloc_node(NODE_SELF)

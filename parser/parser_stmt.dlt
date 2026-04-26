@@ -227,6 +227,18 @@ fun parse_pass_stmt() -> i64:
     eat(TK_PASS)
     return mk_pass()
 
+# Panic statement:  panic "message"
+# Caller has already verified cur_kind() == TK_IDENT with value "panic"
+# and peek_kind(1) == TK_STRING. We just consume both tokens and build
+# the AST.
+fun parse_panic_stmt() -> i64:
+    advance()                       # consume the 'panic' identifier
+    if cur_kind() != TK_STRING:
+        panic("panic statement requires a string literal")
+    msg: str = cur_val()
+    advance()                       # consume the string literal
+    return mk_panic(msg)
+
 # ==========================================
 # Match Statement
 # ==========================================

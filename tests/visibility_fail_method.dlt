@@ -1,0 +1,12 @@
+import std
+
+struct Account:
+    public name: str
+    private balance: i64
+
+    private fun set_balance(self, b: i64):
+        self.balance = b
+
+a: Account = Account(name="alice", balance=100 as i64)
+# This MUST fail to compile — private method called from outside.
+a.set_balance(999 as i64)

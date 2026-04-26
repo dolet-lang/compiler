@@ -1,0 +1,86 @@
+import std
+
+# ============================================================
+# Error-path tests for std/system + File.
+#
+# Locks in the failure-mode behaviour so future changes can't
+# silently regress them. Each line prints "  expected ... got ..."
+# format. The runner greps for "FAIL" to detect regressions.
+# ============================================================
+
+fun check_i32(label: str, got: i32, expected: i32):
+    if got == expected:
+        print("PASS " + label + " = " + Convert.i32_to_str(got))
+    else:
+        print("FAIL " + label + " expected " + Convert.i32_to_str(expected) + " got " + Convert.i32_to_str(got))
+
+fun check_str(label: str, got: str, expected: str):
+    # Length proxy + substring check (no public str_eq exposed).
+    glen: i64 = Memory.strlen(got)
+    elen: i64 = Memory.strlen(expected)
+    if glen != elen:
+        print("FAIL " + label + " length expected " + Convert.i64_to_str(elen) + " got " + Convert.i64_to_str(glen))
+        return
+    matches: i64 = 0
+    if elen == 0:
+        matches = 1
+    else:
+        contains_check: bool = Str.starts_with(got, expected)
+        if contains_check:
+            matches = 1
+    if matches == 1:
+        print("PASS " + label + " = '" + got + "'")
+    else:
+        print("FAIL " + label + " expected '" + expected + "' got '" + got + "'")
+
+# --- System.exists ---
+check_i32("exists nonexistent",  System.exists("X:\\nope_xyz_123"), 0)
+check_i32("exists root",         System.exists("C:\\"),              1)
+check_i32("exists empty",        System.exists(""),                  0)
+
+# --- Command.run ---
+check_i32("run nonexistent",     System.Command.run("doesnotexist123"), -1)
+check_i32("run exit 0",          System.Command.run("cmd /c exit 0"),    0)
+check_i32("run exit 7",          System.Command.run("cmd /c exit 7"),    7)
+
+# --- Command.capture ---
+check_str("capture echo",        System.Command.capture("cmd /c echo hi"), "hi")
+check_str("capture nonexistent", System.Command.capture("doesnotexist123"), "")
+
+# --- Command.output ---
+r1: Output = System.Command.output("cmd /c echo hi")
+check_i32("output ok code",      r1.code,   0)
+check_str("output ok stdout",    r1.stdout, "hi")
+check_str("output ok stderr",    r1.stderr, "")
+
+r2: Output = System.Command.output("cmd /c exit 7")
+check_i32("output exit-7 code",  r2.code, 7)
+
+r3: Output = System.Command.output("cmd /c echo out & echo err 1>&2 & exit 3")
+check_i32("output mixed code",   r3.code, 3)
+check_str("output mixed stdout", r3.stdout, "out")
+check_str("output mixed stderr", r3.stderr, "err")
+
+r4: Output = System.Command.output("doesnotexist123")
+check_i32("output not-found code", r4.code, -1)
+
+# --- File ---
+fbad: File = File.open("X:\\nope\\nofile.txt", "r")
+fbad_valid: bool = fbad.is_valid()
+fbad_int: i32 = 0
+if fbad_valid:
+    fbad_int = 1
+check_i32("file open missing",   fbad_int, 0)
+
+# --- Repeated calls — should not crash, captures should be consistent ---
+i: i32 = 0
+all_x: i32 = 1
+while i < 50:
+    junk: str = System.Command.capture("cmd /c echo x")
+    junk_len: i64 = Memory.strlen(junk)
+    if junk_len != 1 as i64:
+        all_x = 0
+    i = i + 1
+check_i32("repeated capture (50x)", all_x, 1)
+
+print("=== done ===")

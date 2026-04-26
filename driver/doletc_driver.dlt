@@ -1611,6 +1611,10 @@ fun main() -> i32:
     output_exe: str = ""
     target_platform: str = ""
 
+    # Init validator default ON (file-scope non-zero initializers
+    # don't take effect at startup in Dolet; assignment here does).
+    g_validate_enabled = 1
+
     ai: i32 = 1
     while ai < argc:
         arg: str = Args.get(ai)
@@ -1631,6 +1635,10 @@ fun main() -> i32:
             ai = ai + 1
             if ai < argc:
                 target_platform = Args.get(ai)
+        elif str_eq(arg, "--no-validate") == 1:
+            g_validate_enabled = 0
+        elif str_eq(arg, "--validate") == 1:
+            g_validate_enabled = 1
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:

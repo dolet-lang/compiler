@@ -1,0 +1,8 @@
+import std
+
+# This MUST fail to compile — bare `return` in non-void function.
+fun must_return_int() -> i32:
+    return
+
+x: i32 = must_return_int()
+print(Convert.i32_to_str(x))

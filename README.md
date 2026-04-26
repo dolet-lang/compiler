@@ -73,6 +73,16 @@ doletc <input.dlt> [-o output] [--target <os>] [--release] [--keep-mlir] [--keep
   `Memory.free`. It exists for compiler internals and rare cases
   where a long-lived heap string is genuinely wanted.
 
+## Error Model
+
+- **Recoverable errors** (planned): return `Result<T, E>`.
+- **Unrecoverable errors**: `panic "message"` — prints `[panic] message`
+  to stdout and exits with code `101` (matches the Rust convention).
+  ```dolet
+  if denominator == 0:
+      panic "division by zero"
+  ```
+
 ## Language Features
 
 - **Static typing** with type inference

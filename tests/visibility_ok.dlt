@@ -1,0 +1,22 @@
+import std
+
+# All access in this file is LEGAL — must compile and run.
+struct Account:
+    public name: str
+    private balance: i64
+
+    private fun set_balance(self, b: i64):
+        self.balance = b
+
+    fun deposit(self, amt: i64):
+        # Both lines below are inside Account's own method, so private
+        # field access AND private method call are allowed.
+        self.set_balance(self.balance + amt)
+
+    fun get_balance(self) -> i64:
+        return self.balance
+
+a: Account = Account(name="alice", balance=100 as i64)
+a.deposit(50 as i64)
+print(a.name)                                       # public read
+print(Convert.i64_to_str(a.get_balance()))          # public method

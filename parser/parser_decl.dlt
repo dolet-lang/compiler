@@ -175,6 +175,10 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
             if cur_kind() == TK_FUN:
                 m: i64 = parse_fun_def(0)
                 Memory.write_i64(m + 72, is_static)
+                # Offset 80 is reserved for annotations; access modifier
+                # goes at offset 88 (NODE_SIZE was bumped from 88 to 96
+                # specifically to make room).
+                Memory.write_i64(m + 88, access as i64)
                 nl_add(methods, m)
             else:
                 # Field: name: type = default

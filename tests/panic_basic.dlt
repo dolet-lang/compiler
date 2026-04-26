@@ -1,0 +1,10 @@
+import std
+
+# This program must:
+#   1. Print: [panic] this is a test panic
+#   2. Exit with code 101
+#   3. NOT print "UNREACHABLE"
+
+print("before panic")
+panic "this is a test panic"
+print("UNREACHABLE — should not print")

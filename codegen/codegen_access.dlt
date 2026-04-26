@@ -19,7 +19,7 @@ fun gen_field_access(node: i64) -> str:
 
     obj_type: str = get_var_type(obj_name)
 
-    # Access control enforcement
+    # Access control enforcement — hard failure on violation.
     acc: str = get_field_access(obj_type, field_name)
     if str_eq(acc, "private") == 1:
         in_struct: i32 = 0
@@ -28,7 +28,7 @@ fun gen_field_access(node: i64) -> str:
                 if str_eq(g_cur_method_struct, obj_type) == 1:
                     in_struct = 1
         if in_struct == 0:
-            IOOps.io_println(Str.concat("[error] Cannot access private field: ", field_name))
+            panic(Str.concat(Str.concat(Str.concat("private field '", field_name), Str.concat("' of struct '", obj_type)), "' cannot be read from outside the struct's methods"))
     elif str_eq(acc, "protected") == 1:
         allowed: i32 = 0
         if (g_cur_method_struct as i64) != 0:
@@ -42,7 +42,7 @@ fun gen_field_access(node: i64) -> str:
                             if str_eq(par, obj_type) == 1:
                                 allowed = 1
         if allowed == 0:
-            IOOps.io_println(Str.concat("[error] Cannot access protected field: ", field_name))
+            panic(Str.concat(Str.concat(Str.concat("protected field '", field_name), Str.concat("' of struct '", obj_type)), "' cannot be read from outside the struct hierarchy"))
 
     # ptr[T].value — dereference typed pointer
     if str_eq(field_name, "value") == 1:
@@ -434,6 +434,35 @@ fun gen_static_method_call(node: i64) -> str:
         Memory.write_i64(proxy + 16, args_list)
         return gen_fun_call(proxy)
 
+    # Method visibility enforcement (private/protected) — hard failure.
+    # Only enforce for known struct types; externs and top-level calls
+    # have no access modifier and are skipped. Guard against null
+    # access strings (methods without explicit modifier default to public).
+    if is_struct_type(sname) == 1:
+        sm_node: i64 = find_impl_method(sname, mname)
+        if sm_node != 0:
+            # Methods declared inside a struct use NODE_FUN_DEF; the
+            # parser writes the access modifier at offset +80.
+            sm_acc_raw: i64 = Memory.read_i64(sm_node + 88)
+            if sm_acc_raw != 0:
+                sm_acc: str = sm_acc_raw as str
+                if Memory.strlen(sm_acc) > 0:
+                    if str_eq(sm_acc, "private") == 1:
+                        if str_eq(g_cur_method_struct, sname) == 0:
+                            panic(Str.concat(Str.concat(Str.concat("private method '", mname), Str.concat("' of struct '", sname)), "' cannot be called from outside the struct's methods"))
+                    elif str_eq(sm_acc, "protected") == 1:
+                        sm_ok: i32 = 0
+                        if str_eq(g_cur_method_struct, sname) == 1:
+                            sm_ok = 1
+                        if sm_ok == 0:
+                            sm_par: str = get_parent_struct(g_cur_method_struct)
+                            if (sm_par as i64) != 0:
+                                if Memory.strlen(sm_par) > 0:
+                                    if str_eq(sm_par, sname) == 1:
+                                        sm_ok = 1
+                        if sm_ok == 0:
+                            panic(Str.concat(Str.concat(Str.concat("protected method '", mname), Str.concat("' of struct '", sname)), "' cannot be called from outside the struct hierarchy"))
+
     # Mangled name: StructName_methodName
     mangled: str = Str.concat(Str.concat(sname, "_"), mname)
 
@@ -541,6 +570,35 @@ fun gen_instance_method_call(node: i64) -> str:
             base_type = str_from_range(obj_type, 0, bt_i)
             bt_i = bt_len
         bt_i = bt_i + 1
+
+    # Method visibility enforcement (private/protected) — hard failure.
+    # `self.method()` from inside the struct's own method is always
+    # allowed; otherwise we check the modifier. Guard against null
+    # access strings (default to public when unset).
+    if is_struct_type(base_type) == 1:
+        im_node: i64 = find_impl_method(base_type, mname)
+        if im_node != 0:
+            # NODE_FUN_DEF stores the access modifier at offset +80
+            # (see parser_decl.dlt struct method parsing).
+            im_acc_raw: i64 = Memory.read_i64(im_node + 88)
+            if im_acc_raw != 0:
+                im_acc: str = im_acc_raw as str
+                if Memory.strlen(im_acc) > 0:
+                    if str_eq(im_acc, "private") == 1:
+                        if str_eq(g_cur_method_struct, base_type) == 0:
+                            panic(Str.concat(Str.concat(Str.concat("private method '", mname), Str.concat("' of struct '", base_type)), "' cannot be called from outside the struct's methods"))
+                    elif str_eq(im_acc, "protected") == 1:
+                        im_ok: i32 = 0
+                        if str_eq(g_cur_method_struct, base_type) == 1:
+                            im_ok = 1
+                        if im_ok == 0:
+                            im_par: str = get_parent_struct(g_cur_method_struct)
+                            if (im_par as i64) != 0:
+                                if Memory.strlen(im_par) > 0:
+                                    if str_eq(im_par, base_type) == 1:
+                                        im_ok = 1
+                        if im_ok == 0:
+                            panic(Str.concat(Str.concat(Str.concat("protected method '", mname), Str.concat("' of struct '", base_type)), "' cannot be called from outside the struct hierarchy"))
 
     # Mangled name
     mangled: str = Str.concat(Str.concat(base_type, "_"), mname)
@@ -756,8 +814,8 @@ fun gen_ns_fun_call(node: i64) -> str:
         if is_struct_type(ns_var_type) == 1:
             # Redirect to instance method call: ns.fname(args)
             # Build a proxy NODE_INST_METHOD node (+8=obj, +16=method, +24=args)
-            proxy_im: i64 = Memory.malloc_zeroed(88)
-            Memory.write_i32(proxy_im, 88)
+            proxy_im: i64 = Memory.malloc_zeroed(NODE_SIZE as i64)
+            Memory.write_i32(proxy_im, 88)   # NODE_INST_METHOD = 88
             Memory.write_i64(proxy_im + 8, ns as i64)
             Memory.write_i64(proxy_im + 16, fname as i64)
             Memory.write_i64(proxy_im + 24, args_list)

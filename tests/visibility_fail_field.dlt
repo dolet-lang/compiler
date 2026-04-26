@@ -1,0 +1,9 @@
+import std
+
+struct Account:
+    public name: str
+    private balance: i64
+
+a: Account = Account(name="alice", balance=100 as i64)
+# This MUST fail to compile — private field read from outside.
+print(Convert.i64_to_str(a.balance))

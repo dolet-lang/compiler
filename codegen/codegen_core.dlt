@@ -132,7 +132,7 @@ fun init_ast_constants():
     NODE_ANNOT_DEF = 170
     NODE_ANNOT_PARAM = 171
     NODE_ANNOT_USE = 172
-    NODE_SIZE = 88
+    NODE_SIZE = 96
     IMPORT_FULL = 1
     IMPORT_FROM = 2
     IMPORT_AS = 3
@@ -850,6 +850,7 @@ fun find_impl_method(sname: str, mname: str) -> i64:
 # ==========================================
 g_in_function: i32 = 0
 g_cur_fn_ret_type: str = ""
+g_validate_enabled: i32 = 1
 g_cur_fn_name: str = ""
 g_cur_method_struct: str = ""
 g_break_label: str = ""
