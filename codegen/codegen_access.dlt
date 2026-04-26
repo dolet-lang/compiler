@@ -484,8 +484,26 @@ fun gen_static_method_call(node: i64) -> str:
     if args_list != 0:
         ac = nl_count(args_list)
 
-    # Look up method node to get param types
-    method_node: i64 = find_impl_method(sname, mname)
+    # Pre-pass: infer arg types so the impl-method lookup picks
+    # the right overload (B-02 fix — same rationale as in
+    # gen_instance_method_call). Static methods don't have an
+    # implicit `self`, so call-arg-types == param-types-of-method.
+    pre_arg_types_s: str = ""
+    psi: i32 = 0
+    while psi < ac:
+        psa: i64 = nl_get(args_list, psi)
+        pst: str = infer_expr_type(psa)
+        if str_eq(pst, "unknown") == 1:
+            pst = "i64"
+        pst = normalize_type(pst)
+        if Memory.strlen(pre_arg_types_s) > 0:
+            pre_arg_types_s = Str.concat(pre_arg_types_s, Str.concat(",", pst))
+        else:
+            pre_arg_types_s = pst
+        psi = psi + 1
+
+    # Look up method node — overload-aware
+    method_node: i64 = find_impl_method_overload(sname, mname, pre_arg_types_s)
     method_params: i64 = 0
     if method_node != 0:
         method_params = Memory.read_i64(method_node + 16)
@@ -634,8 +652,30 @@ fun gen_instance_method_call(node: i64) -> str:
     if args_list != 0:
         ac = nl_count(args_list)
 
-    # Look up method node to get param types for implicit casting
-    method_node2: i64 = find_impl_method(base_type, mname)
+    # Pre-pass: infer arg types WITHOUT emitting MLIR, so we can
+    # find the right overload before the emit loop. Without this,
+    # find_impl_method returned the FIRST overload (e.g. list.append
+    # for i8) and the call's type annotations were rendered against
+    # the wrong overload's params, producing MLIR mismatches like
+    # `@list_append__str(...) : (!llvm.ptr, i8) -> ()` (B-02 fix).
+    pre_arg_types: str = ""
+    pi: i32 = 0
+    while pi < ac:
+        pa: i64 = nl_get(args_list, pi)
+        pt: str = infer_expr_type(pa)
+        if str_eq(pt, "unknown") == 1:
+            pt = "i64"
+        # Normalize so "string" matches registered "str", etc.
+        pt = normalize_type(pt)
+        if Memory.strlen(pre_arg_types) > 0:
+            pre_arg_types = Str.concat(pre_arg_types, Str.concat(",", pt))
+        else:
+            pre_arg_types = pt
+        pi = pi + 1
+
+    # Look up method node — overload-aware so the param types we
+    # use to render the call match the function we'll resolve to.
+    method_node2: i64 = find_impl_method_overload(base_type, mname, pre_arg_types)
     method_params2: i64 = 0
     if method_node2 != 0:
         method_params2 = Memory.read_i64(method_node2 + 16)
@@ -668,11 +708,13 @@ fun gen_instance_method_call(node: i64) -> str:
             arg_str = Str.concat(arg_str, Str.concat(", ", av2))
             type_str = Str.concat(type_str, Str.concat(", ", amt2))
 
-        # Build overload type string
+        # Build overload type string (normalize so "string" matches
+        # registered "str" etc. — see B-02 fix rationale).
+        at_norm: str = normalize_type(at)
         if Memory.strlen(call_arg_types) > 0:
-            call_arg_types = Str.concat(call_arg_types, Str.concat(",", at))
+            call_arg_types = Str.concat(call_arg_types, Str.concat(",", at_norm))
         else:
-            call_arg_types = at
+            call_arg_types = at_norm
         i = i + 1
 
     # Resolve overloaded method name

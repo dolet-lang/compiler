@@ -1,0 +1,37 @@
+import std
+
+# Single-char delim
+s: str = "a,b,c,d"
+parts: list<str> = s.split(",")
+print("count: " + Convert.i64_to_str(parts.size()))
+print("[0]: " + parts.get_str(0 as i64))
+print("[1]: " + parts.get_str(1 as i64))
+print("[3]: " + parts.get_str(3 as i64))
+
+# Multi-char delim
+csv: str = "alice|||bob|||carol"
+names: list<str> = csv.split("|||")
+print("names: " + Convert.i64_to_str(names.size()))
+print("name[1]: " + names.get_str(1 as i64))
+
+# CRLF lines
+text: str = "first\r\nsecond\r\nthird"
+ls: list<str> = text.lines()
+print("lines: " + Convert.i64_to_str(ls.size()))
+print("ln[0]: [" + ls.get_str(0 as i64) + "]")
+print("ln[1]: [" + ls.get_str(1 as i64) + "]")
+print("ln[2]: [" + ls.get_str(2 as i64) + "]")
+
+# Overloaded list.append (the bug we just fixed)
+items: list<str> = []
+items.append("hello")
+items.append("world")
+print("items: " + Convert.i64_to_str(items.size()))
+print("items[0]: " + items.get_str(0 as i64))
+
+# Overloaded list.append for i32 (must still work — different overload)
+nums: list<i32> = []
+nums.append(42)
+nums.append(99)
+print("nums: " + Convert.i64_to_str(nums.size()))
+print("nums[0]: " + Convert.i32_to_str(nums.get_i32(0 as i64)))

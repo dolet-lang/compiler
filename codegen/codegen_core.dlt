@@ -845,6 +845,26 @@ fun find_impl_method(sname: str, mname: str) -> i64:
         i = i + 1
     return 0
 
+# Overload-aware variant: finds the impl-method node whose
+# param-type string (sans self) matches `arg_types_str` exactly.
+# Falls back to find_impl_method (first match) if no exact overload
+# is found — preserves legacy behaviour for non-overloaded methods
+# and for callers that pass partial type info.
+fun find_impl_method_overload(sname: str, mname: str, arg_types_str: str) -> i64:
+    i: i32 = 0
+    while i < g_impl_count:
+        off: i64 = (i as i64) * 8
+        s: str = Memory.read_i64(g_impl_struct + off) as str
+        m: str = Memory.read_i64(g_impl_method_name + off) as str
+        if str_eq(s, sname) == 1 and str_eq(m, mname) == 1:
+            mnode: i64 = Memory.read_i64(g_impl_method_node + off)
+            mparams: i64 = Memory.read_i64(mnode + 16)
+            mp_str: str = build_param_types_str_no_self(mparams)
+            if str_eq(mp_str, arg_types_str) == 1:
+                return mnode
+        i = i + 1
+    return find_impl_method(sname, mname)
+
 # ==========================================
 # Codegen State
 # ==========================================

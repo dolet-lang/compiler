@@ -1396,54 +1396,35 @@ codegen investigation.
 
 ---
 
-## B-02. Overload-blind `find_impl_method` ⬜
+## B-02. Overload-blind `find_impl_method` ✅
 
-**Symptom:** Calling an overloaded instance method picks the wrong
-overload's parameter types at the call site, producing a type
-mismatch in MLIR.
+**Shipped.** Fixed by adding `find_impl_method_overload(sname,
+mname, arg_types_str)` that linearly scans the impl table and
+returns the method node whose param types (sans self) exactly
+match `arg_types_str`. Falls back to the legacy first-match
+`find_impl_method` for non-overloaded methods.
 
-**Concrete repro:** `list.append` has 13 overloads (i8, i16, i32,
-i64, u8, u16, u32, u64, f32, f64, str, bool, char). Calling
-`my_str_list.append(some_str)` produces:
+Both `gen_instance_method_call` and `gen_static_method_call` now
+do a pre-pass: walk args, call `infer_expr_type + normalize_type`
+(no MLIR emission) to build the call-arg-types string, then look
+up the right overload with `find_impl_method_overload`. The emit
+loop then uses the correct overload's params for type annotations.
 
-```mlir
-llvm.call @list_append__str(%list, %s) : (!llvm.ptr, i8) -> ()
-                                                       ^^^
-                              wrong: should be !llvm.ptr (str)
-```
+Also normalized `at` in the call-arg-types built during the main
+emit loop (previously "string" was passed to resolve_overload but
+registered as "str" — overload lookup failed and fell back to
+the unsuffixed first variant, producing the wrong function name).
 
-Function name is correct (`list_append__str` — overload resolution
-worked for the NAME), but the parameter type annotation is `i8`
-because `find_impl_method(base_type, mname)` returns the FIRST
-method named `append` in the impl table — the i8 overload — and
-its params are used to render the call's MLIR types.
+What now works (previously broken):
+- `list<str>.append(str)` — picks the str overload correctly
+- Any user code calling overloaded `extend` methods (the i8
+  variant was always picked, masking 12 other overloads)
+- `Str.split(...)` and `Str.lines(...)` re-enabled in
+  std/string.dlt — they need `result.append(str)`
 
-**Trace:**
-- `gen_instance_method_call` at `codegen/codegen_access.dlt:638`:
-  `method_node2 = find_impl_method(base_type, mname)`
-- `method_params2 = Memory.read_i64(method_node2 + 16)` — params of
-  the FIRST registered overload (regardless of arg types passed)
-- For each arg, `expected_pt2 = mp_node2 + 16` reads the i8
-  variant's param type
-- Later, `mangled = resolve_overload(mangled, call_arg_types)` at
-  line 679 fixes the function NAME but the type annotations were
-  already emitted with the wrong type
-
-**Likely fix:** either
-1. Two-pass approach: compute `call_arg_types` from arg expressions
-   first, then call `find_impl_method_overload(base_type, mname,
-   arg_types)` to get the right overload's node, THEN emit args
-   with correct types.
-2. Defer type-annotation emission until after `resolve_overload`
-   (re-render the signature based on the resolved name).
-
-**Estimate:** 1 medium session. Discrete codegen bug.
-
-**Specific impact today:** `library/std/string.dlt` deliberately
-OMITS `split(self, delim) -> list<str>` and `lines(self) -> list<str>`
-because both need `result.append(str_value)` which trips this bug.
-When B-02 is fixed, re-add both methods (the implementations are
-preserved in git history of the previous commit).
+Verification: tests/str_split.dlt covers list append for both
+str and i32; tests/str_utils.dlt + tests/str_parse.dlt continue
+passing. Suite is now 57/57 PASS.
 
 ---
 

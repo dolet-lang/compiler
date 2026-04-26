@@ -123,6 +123,7 @@ for %%f in (
     error_paths
     str_utils
     str_parse
+    str_split
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
