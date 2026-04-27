@@ -65,11 +65,15 @@ fun parse_primary() -> i64:
         advance()
         return mk_float_lit(v2)
 
-    # String literal
+    # String literal — supports postfix `.method()` chaining like
+    # `"hello".trim()` or `"a,b".split(",")` via parse_chained_dot.
     if k == TK_STRING:
         v3: str = cur_val()
         advance()
-        return mk_str_lit(v3)
+        sl: i64 = mk_str_lit(v3)
+        if cur_kind() == TK_DOT:
+            return parse_chained_dot(sl)
+        return sl
 
     # F-string literal — parse {expr} interpolation into parts
     if k == TK_FSTRING:

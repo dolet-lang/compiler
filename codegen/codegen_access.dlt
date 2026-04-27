@@ -176,8 +176,11 @@ fun gen_nested_method_call(node: i64) -> str:
     # Get the pointer to the nested struct field
     base_ptr: str = gen_nested_field_ptr(base_node)
 
-    # Get the type of the nested struct
-    base_type: str = infer_expr_type(base_node)
+    # Get the type of the nested struct. Normalize so "string" maps
+    # to the registered "str" — without this, calls like
+    # "abc".trim() get mangled as `string_trim` and miss the
+    # registered `str_trim`.
+    base_type: str = normalize_type(infer_expr_type(base_node))
 
     # Build proxy NODE_INST_METHOD for the method call on the nested struct
     # We use base_ptr as the self pointer and delegate to instance method logic

@@ -377,7 +377,11 @@ fun infer_expr_type(node: i64) -> str:
                     if str_eq(ns_rt, "unknown") == 0 and str_eq(ns_rt, "") == 0:
                         return ns_rt
 
-        nm_base_type: str = infer_expr_type(nm_base)
+        # Normalize so "string" maps to registered "str" — without
+        # this, chained calls like "abc".trim().parse_i64() see the
+        # outer's base as "string" and mangle to `string_parse_i64`
+        # which doesn't exist, falling back to "unknown" type.
+        nm_base_type: str = normalize_type(infer_expr_type(nm_base))
         if str_eq(nm_base_type, "") == 0 and str_eq(nm_base_type, "unknown") == 0:
             nm_mangled: str = Str.concat(Str.concat(nm_base_type, "_"), nm_mname)
             nm_rt: str = get_fun_ret_type(nm_mangled)

@@ -1,0 +1,25 @@
+import std
+
+# String literal method call — single
+trimmed: str = "  hello  ".trim()
+print("[" + trimmed + "]")
+
+# String literal method call — bool return
+ok: bool = "hello world".contains("world")
+print(Convert.bool_to_str(ok))
+
+# String literal method call — i64 return
+n: i64 = "42".parse_i64()
+print(Convert.i64_to_str(n))
+
+# String literal → list
+parts: list<str> = "a,b,c".split(",")
+print("count: " + Convert.i64_to_str(parts.size()))
+
+# Two-step chain on a literal
+result: i64 = "  -99  ".trim().parse_i64()
+print(Convert.i64_to_str(result))
+
+# Three-step chain
+upper: str = "hi there".to_upper().replace("THERE", "WORLD")
+print(upper)
