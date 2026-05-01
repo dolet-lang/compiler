@@ -127,6 +127,7 @@ for %%f in (
     str_literal_method
     str_parse_f64
     hex_compare
+    dir_list
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

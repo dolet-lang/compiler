@@ -1,0 +1,22 @@
+import std
+
+# Basic list
+files: list<str> = Dir.list("tests")
+n: i64 = files.size()
+if n > 0 as i64:
+    print("dir has entries: ok")
+
+# Verify "." and ".." were filtered
+i: i64 = 0
+saw_dot: bool = false
+while i < n:
+    name: str = files.get_str(i)
+    if Str.equals(name, ".") or Str.equals(name, ".."):
+        saw_dot = true
+    i = i + 1
+if saw_dot == false:
+    print("dot entries filtered: ok")
+
+# Nonexistent dir → empty
+empty: list<str> = Dir.list("X:\\nope_xyz_123")
+print("empty: " + Convert.i64_to_str(empty.size()))
