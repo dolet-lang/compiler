@@ -746,6 +746,16 @@ fun gen_instance_method_call(node: i64) -> str:
             if str_eq(parent_rt, "unknown") == 0:
                 mangled = parent_mangled
                 ret_type = parent_rt
+
+    # Validation: catch typos and unregistered methods at codegen
+    # time instead of letting them silently emit `-> ()` (void),
+    # which produces broken MLIR downstream. This is the same
+    # class of failure as B-01 (extend-str load missing) and B-02
+    # (overload-blind lookup) — fail loud rather than silently miscompile.
+    if g_validate_enabled == 1:
+        if fun_is_registered(mangled) == 0:
+            panic(Str.concat(Str.concat(Str.concat(Str.concat("unknown method: '", mname), "' on type '"), base_type), Str.concat("' (mangled '", Str.concat(mangled, "' not registered) — typo, missing import, or method defined on a different type?"))))
+
     ret_mt: str = ""
     if str_eq(ret_type, "unknown") == 0 and str_eq(ret_type, "") == 0 and str_eq(ret_type, "void") == 0:
         ret_mt = mlir_type(ret_type)

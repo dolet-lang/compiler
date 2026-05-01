@@ -156,6 +156,7 @@ for %%f in (
     visibility_fail_field
     visibility_fail_method
     validate_bare_return
+    validate_typo_method
 ) do (
     echo [TEST-MUST-FAIL] %%f
     if exist "tests\%%f.dlt" (

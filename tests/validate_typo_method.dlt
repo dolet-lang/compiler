@@ -1,0 +1,8 @@
+import std
+
+# This MUST fail to compile — typo on extend-str method name.
+# The validator should catch it and print:
+#   "unknown method: 'contians' on type 'str' (mangled 'str_contians' ...)"
+s: str = "hello"
+ok: bool = s.contians("world")
+print(Convert.bool_to_str(ok))
