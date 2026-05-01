@@ -1,0 +1,24 @@
+import std
+
+# Convert.i64_to_hex
+print(Convert.i64_to_hex(0 as i64))
+print(Convert.i64_to_hex(255 as i64))
+print(Convert.i64_to_hex(256 as i64))
+print(Convert.i64_to_hex(0xdeadbeef as i64))
+print(Convert.i64_to_hex(0 - 1 as i64))
+
+# Convert.i32_to_hex
+print(Convert.i32_to_hex(0xcafe))
+print(Convert.i32_to_hex(42))
+
+# Memory.compare
+a: str = "hello"
+b: str = "hello"
+c: str = "world"
+print("eq: " + Convert.i32_to_str(Memory.compare(a as i64, b as i64, 5 as i64)))
+neg: i32 = Memory.compare(a as i64, c as i64, 5 as i64)
+if neg < 0:
+    print("a<c: ok")
+pos: i32 = Memory.compare(c as i64, a as i64, 5 as i64)
+if pos > 0:
+    print("c>a: ok")
