@@ -125,6 +125,7 @@ for %%f in (
     str_parse
     str_split
     str_literal_method
+    str_parse_f64
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
