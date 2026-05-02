@@ -129,6 +129,7 @@ for %%f in (
     hex_compare
     dir_list
     option_basic
+    result_basic
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

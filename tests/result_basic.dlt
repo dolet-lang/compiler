@@ -1,0 +1,34 @@
+import std
+
+fun parse_pos(s: str) -> result<i64, str>:
+    n: i64 = Str.parse_i64(s)
+    if n < 0 as i64:
+        return Err("negative number")
+    return Ok(n)
+
+# Ok path
+ok: result<i64, str> = parse_pos("42")
+print("ok is_ok: " + Convert.bool_to_str(ok.is_ok()))
+print("ok value: " + Convert.i64_to_str(ok.unwrap_i64()))
+
+# Err path
+bad: result<i64, str> = parse_pos("-5")
+print("bad is_err: " + Convert.bool_to_str(bad.is_err()))
+print("bad error: " + bad.unwrap_err_str())
+
+# unwrap_or
+fallback: i64 = bad.unwrap_or_i64(0 as i64)
+print("fallback: " + Convert.i64_to_str(fallback))
+
+# Different value types
+sr: result<str, str> = Ok("hello")
+print("sr value: " + sr.unwrap_str())
+
+br: result<bool, str> = Ok(true)
+print("br value: " + Convert.bool_to_str(br.unwrap_bool()))
+
+ir: result<i32, str> = Ok(7)
+print("ir value: " + Convert.i32_to_str(ir.unwrap_i32()))
+
+fr: result<f64, str> = Ok(2.5)
+print("fr value: " + Convert.f64_to_str(fr.unwrap_f64()))
