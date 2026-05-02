@@ -128,6 +128,7 @@ for %%f in (
     str_parse_f64
     hex_compare
     dir_list
+    option_basic
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

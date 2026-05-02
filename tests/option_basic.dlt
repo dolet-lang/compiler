@@ -1,0 +1,40 @@
+import std
+
+# Some(i64)
+a: option<i64> = Some(42 as i64)
+print("a is_some: " + Convert.bool_to_str(a.is_some()))
+print("a value: " + Convert.i64_to_str(a.unwrap_i64()))
+
+# Some(str)
+s: option<str> = Some("hello")
+print("s value: " + s.unwrap_str())
+
+# None — type-erased, assignable to any option<T>
+n: option<i64> = None()
+print("n is_none: " + Convert.bool_to_str(n.is_none()))
+print("n unwrap_or: " + Convert.i64_to_str(n.unwrap_or_i64(99 as i64)))
+
+# Some(i32)
+i: option<i32> = Some(7)
+print("i value: " + Convert.i32_to_str(i.unwrap_i32()))
+
+# Some(bool)
+b: option<bool> = Some(true)
+print("b value: " + Convert.bool_to_str(b.unwrap_bool()))
+
+# Some(f64)
+f: option<f64> = Some(3.14)
+print("f value: " + Convert.f64_to_str(f.unwrap_f64()))
+
+# Realistic divide-by-zero example
+fun safe_divide(num: i64, den: i64) -> option<i64>:
+    if den == 0 as i64:
+        return None()
+    return Some(num / den)
+
+ok: option<i64> = safe_divide(10 as i64, 2 as i64)
+print("10/2 = " + Convert.i64_to_str(ok.unwrap_i64()))
+
+bad: option<i64> = safe_divide(10 as i64, 0 as i64)
+if bad.is_none():
+    print("div by zero handled")
