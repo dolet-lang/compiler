@@ -1,0 +1,24 @@
+import std
+
+# Regression test for B-03 (parser bug in else-body parsing).
+# Before fix: when `else:` body started with a nested `if`, the
+# parser incorrectly consumed ONLY the inner if and dropped any
+# subsequent statements. The outer if's then-body would then
+# fall through into those dropped statements at the outer if/else
+# merge point.
+
+fun trace(x: i32):
+    if x == 1:
+        print("THEN")
+    else:
+        if x == 2:
+            print("inner")
+        else:
+            print("inner-else")
+        print("after-inner")    # MUST only print when x != 1
+        print("end-of-else")
+
+# x==1 → outer if fires → expect ONLY "THEN", no "after-inner"
+trace(1)
+# x==99 → outer else fires → expect "inner-else" + "after-inner" + "end-of-else"
+trace(99)

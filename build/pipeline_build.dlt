@@ -3545,13 +3545,13 @@ fun parse_if_stmt() -> i64:
         else:
             skip_newlines()
 
-            # else if (two keywords)
-            if cur_kind() == TK_IF:
-                else_if: i64 = parse_if_stmt()
-                else_body = mk_node_list(4)
-                nl_add(else_body, else_if)
-            else:
-                else_body = parse_indented_block(if_indent)
+            # Always parse the else body as an indented block so any
+            # statements AFTER a leading nested `if` are included.
+            # The previous special-case for `else \n if` (build a
+            # singleton else_body with just the inner if) silently
+            # dropped trailing siblings — exactly the kind of bug
+            # that surfaces only with deeply structured code.
+            else_body = parse_indented_block(if_indent)
 
     return mk_if(cond, then_body, else_body)
 

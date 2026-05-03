@@ -131,6 +131,7 @@ for %%f in (
     option_basic
     result_basic
     try_op
+    if_else_nested
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
