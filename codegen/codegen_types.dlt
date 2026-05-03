@@ -389,6 +389,19 @@ fun infer_expr_type(node: i64) -> str:
                 return nm_rt
         return "unknown"
 
+    # Try-op `expr?` — returns T from result[T,E] or option[T]
+    if ntype == NODE_TRY_OP:
+        to_inner: i64 = Memory.read_i64(node + 8)
+        to_inner_t: str = infer_expr_type(to_inner)
+        if Str.starts_with(to_inner_t, "result[") or Str.starts_with(to_inner_t, "option["):
+            to_open: i64 = Str.index_of(to_inner_t, "[")
+            to_end: i64 = Memory.strlen(to_inner_t) - (1 as i64)
+            to_comma: i64 = Str.index_of(to_inner_t, ",")
+            if to_comma > 0 as i64:
+                to_end = to_comma
+            return Str.substring(to_inner_t, to_open + (1 as i64), to_end)
+        return "unknown"
+
     if ntype == NODE_ARRAY_LIT or ntype == NODE_LIST_LIT:
         return "list"
 

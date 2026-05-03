@@ -1,0 +1,40 @@
+import std
+
+fun parse_pos(s: str) -> result<i64, str>:
+    n: i64 = Str.parse_i64(s)
+    if n < 0 as i64:
+        return Err("negative")
+    return Ok(n)
+
+# ? in result-returning function
+fun double_parsed(s: str) -> result<i64, str>:
+    n: i64 = parse_pos(s)?
+    return Ok(n * 2)
+
+# Happy path
+ok: result<i64, str> = double_parsed("21")
+print("ok: " + Convert.i64_to_str(ok.unwrap_i64()))
+
+# Error propagation
+bad: result<i64, str> = double_parsed("-5")
+print("bad is_err: " + Convert.bool_to_str(bad.is_err()))
+print("bad msg: " + bad.unwrap_err_str())
+
+# Two-step chain
+fun triple_parsed(s: str) -> result<i64, str>:
+    n: i64 = parse_pos(s)?
+    m: i64 = parse_pos("7")?
+    return Ok(n + m)
+
+three: result<i64, str> = triple_parsed("8")
+print("triple: " + Convert.i64_to_str(three.unwrap_i64()))
+
+# Error in second ? step
+fun bad_chain(s: str) -> result<i64, str>:
+    a: i64 = parse_pos("5")?
+    b: i64 = parse_pos(s)?
+    return Ok(a + b)
+
+stop: result<i64, str> = bad_chain("-99")
+print("stop is_err: " + Convert.bool_to_str(stop.is_err()))
+print("stop msg: " + stop.unwrap_err_str())

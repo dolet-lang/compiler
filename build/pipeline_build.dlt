@@ -980,6 +980,7 @@ NODE_CONTINUE: i32 = 45
 NODE_PASS: i32 = 46
 NODE_RETURN: i32 = 47
 NODE_PANIC: i32 = 51
+NODE_TRY_OP: i32 = 52
 NODE_MATCH: i32 = 48
 NODE_CASE: i32 = 49
 NODE_PATTERN: i32 = 50
@@ -1462,6 +1463,18 @@ fun mk_panic(msg: str) -> i64:
 
 fun panic_msg(n: i64) -> str:
     return Memory.read_i64(n + 8) as str
+
+# TryOpNode: f0=inner (the wrapped expression). Postfix `?` operator
+# that propagates Err/None from result/option types. Codegen
+# desugars `expr?` to: temp = expr; if temp.is_err()/is_none():
+# return temp; else: temp.unwrap_<T>().
+fun mk_try_op(inner: i64) -> i64:
+    n: i64 = alloc_node(NODE_TRY_OP)
+    Memory.write_i64(n + 8, inner)
+    return n
+
+fun tryop_inner(n: i64) -> i64:
+    return Memory.read_i64(n + 8)
 
 fun mk_self() -> i64:
     return alloc_node(NODE_SELF)
@@ -2840,7 +2853,7 @@ fun parse_primary() -> i64:
         v3: str = cur_val()
         advance()
         sl: i64 = mk_str_lit(v3)
-        if cur_kind() == TK_DOT:
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION:
             return parse_chained_dot(sl)
         return sl
 
@@ -3004,7 +3017,7 @@ fun parse_ident_expr() -> i64:
     if cur_kind() == TK_LPAREN:
         cargs: i64 = parse_arg_list()
         fc_node: i64 = mk_fun_call(name, cargs, 0)
-        if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
             return parse_chained_dot(fc_node)
         return fc_node
 
@@ -3043,7 +3056,7 @@ fun parse_dot_access(first: str) -> i64:
                 ns_node = mk_ns_struct_inst(first, member, nargs, 0)
             else:
                 ns_node = mk_ns_fun_call(first, member, nargs, 0)
-            if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+            if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
                 return parse_chained_dot(ns_node)
             return ns_node
         # ns.Struct.method(args) or ns.sub.something
@@ -3059,7 +3072,7 @@ fun parse_dot_access(first: str) -> i64:
                     ns_node2 = mk_ns_static_method(first, member, third, targs)
                 else:
                     ns_node2 = mk_ns_fun_call(first, third, targs, 0)
-                if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+                if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
                     return parse_chained_dot(ns_node2)
                 return ns_node2
             # ns.Struct.field — simple access
@@ -3078,7 +3091,7 @@ fun parse_dot_access(first: str) -> i64:
         else:
             node = mk_inst_method(first, member, margs)
         # Check for chaining continuation (direct dot or newline+dot)
-        if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
             return parse_chained_dot(node)
         return node
 
@@ -3127,32 +3140,35 @@ fun parse_dot_access(first: str) -> i64:
 fun parse_chained_dot(base: i64) -> i64:
     result: i64 = base
     while 1 == 1:
-        # Direct dot continuation
-        if cur_kind() == TK_DOT:
-            pass
-        elif cur_kind() == TK_NEWLINE:
-            # Peek past newlines to see if next non-NL token is TK_DOT
-            save_pos: i32 = p_pos
-            skip_newlines()
-            if cur_kind() == TK_DOT:
-                pass
+        tk: i32 = cur_kind()
+        # Try-op postfix: expr? — propagates Err/None
+        if tk == TK_QUESTION:
+            advance()
+            result = mk_try_op(result)
+        elif tk == TK_DOT or tk == TK_NEWLINE:
+            # Newlines are only valid here if followed by a `.`
+            # (allows `obj\n  .method()` style multiline chains).
+            if tk == TK_NEWLINE:
+                save_pos: i32 = p_pos
+                skip_newlines()
+                if cur_kind() != TK_DOT:
+                    p_pos = save_pos
+                    break
+            # Consume the dot and read the identifier
+            advance()
+            nxt: str = cur_val()
+            eat(TK_IDENT)
+            if cur_kind() == TK_LPAREN:
+                nargs: i64 = parse_arg_list()
+                result = mk_nested_method(result, nxt, nargs)
+            elif cur_kind() == TK_ASSIGN:
+                advance()
+                nval: i64 = parse_expression()
+                result = mk_field_assign("", nxt, nval)
             else:
-                p_pos = save_pos
-                break
+                result = mk_nested_field(result, nxt)
         else:
             break
-        advance()
-        nxt: str = cur_val()
-        eat(TK_IDENT)
-        if cur_kind() == TK_LPAREN:
-            nargs: i64 = parse_arg_list()
-            result = mk_nested_method(result, nxt, nargs)
-        elif cur_kind() == TK_ASSIGN:
-            advance()
-            nval: i64 = parse_expression()
-            result = mk_field_assign("", nxt, nval)
-        else:
-            result = mk_nested_field(result, nxt)
     return result
 
 # ==========================================
@@ -7363,6 +7379,19 @@ fun infer_expr_type(node: i64) -> str:
                 return nm_rt
         return "unknown"
 
+    # Try-op `expr?` — returns T from result[T,E] or option[T]
+    if ntype == NODE_TRY_OP:
+        to_inner: i64 = Memory.read_i64(node + 8)
+        to_inner_t: str = infer_expr_type(to_inner)
+        if Str.starts_with(to_inner_t, "result[") or Str.starts_with(to_inner_t, "option["):
+            to_open: i64 = Str.index_of(to_inner_t, "[")
+            to_end: i64 = Memory.strlen(to_inner_t) - (1 as i64)
+            to_comma: i64 = Str.index_of(to_inner_t, ",")
+            if to_comma > 0 as i64:
+                to_end = to_comma
+            return Str.substring(to_inner_t, to_open + (1 as i64), to_end)
+        return "unknown"
+
     if ntype == NODE_ARRAY_LIT or ntype == NODE_LIST_LIT:
         return "list"
 
@@ -7634,6 +7663,10 @@ fun gen_expr(node: i64, expected: str) -> str:
     # Nested method call (e.g., self.field.method(args))
     if nt == NODE_NESTED_METHOD:
         return gen_nested_method_call(node)
+
+    # Try-op postfix `?` — propagate Err/None from result/option
+    if nt == NODE_TRY_OP:
+        return gen_try_op(node, expected)
 
     # Self reference
     if nt == NODE_SELF:
@@ -8597,6 +8630,88 @@ fun gen_builtin_call(node: i64) -> str:
         return result
 
     return emit_zero_ptr()
+
+# ==========================================
+# Try-op postfix `?` — propagate Err / None
+# ==========================================
+# `expr?` desugars to:
+#   __tmp = expr
+#   if __tmp.is_err()  (or .is_none() for option):
+#       return __tmp        # propagate up the call stack
+#   __tmp.unwrap_<T>()      # value of the ? expression
+#
+# Inner type must be result[T,E] or option[T]. Mapping T to the
+# right unwrap_X method matches the per-type pattern in
+# core/types/{result,option}.dlt (see ROADMAP B1).
+fun gen_try_op(node: i64, expected: str) -> str:
+    inner: i64 = tryop_inner(node)
+    inner_type: str = infer_expr_type(inner)
+    is_res: bool = Str.starts_with(inner_type, "result[")
+    is_opt: bool = Str.starts_with(inner_type, "option[")
+    if is_res == false:
+        if is_opt == false:
+            panic(Str.concat("? operator requires result/option, got '", Str.concat(inner_type, "'")))
+
+    # Extract T (between [ and , for result, [ and ] for option)
+    open_pos: i64 = Str.index_of(inner_type, "[")
+    inner_close: i64 = Memory.strlen(inner_type) - (1 as i64)
+    t_end: i64 = inner_close
+    if is_res:
+        comma_pos: i64 = Str.index_of(inner_type, ",")
+        if comma_pos > 0 as i64:
+            t_end = comma_pos
+    t_type: str = Str.substring(inner_type, open_pos + (1 as i64), t_end)
+
+    # Pick unwrap method based on T
+    unwrap_name: str = ""
+    if Str.equals(t_type, "i32"):
+        unwrap_name = "unwrap_i32"
+    elif Str.equals(t_type, "i64"):
+        unwrap_name = "unwrap_i64"
+    elif Str.equals(t_type, "str"):
+        unwrap_name = "unwrap_str"
+    elif Str.equals(t_type, "bool"):
+        unwrap_name = "unwrap_bool"
+    elif Str.equals(t_type, "f64"):
+        unwrap_name = "unwrap_f64"
+    else:
+        panic(Str.concat("? operator: unsupported inner type '", Str.concat(t_type, "' (add unwrap_X for it in core/types/result.dlt and core/types/option.dlt)")))
+
+    # Method name prefix and is_check name based on container type
+    struct_prefix: str = "option"
+    is_check: str = "is_none"
+    if is_res:
+        struct_prefix = "result"
+        is_check = "is_err"
+
+    # Step 1: evaluate inner expression — yields !llvm.ptr
+    inner_val: str = gen_expr(inner, inner_type)
+
+    # Step 2: call is_check (is_err or is_none) — returns i1
+    check_mangled: str = Str.concat(struct_prefix, Str.concat("_", is_check))
+    is_bad: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(is_bad, " = llvm.call @"), check_mangled), Str.concat("(", inner_val)), ") : (!llvm.ptr) -> i1"))
+
+    # Step 3: cond_br to either propagate (return inner_val) or continue
+    propagate_label: str = new_label()
+    continue_label: str = new_label()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", is_bad), ", "), propagate_label), Str.concat(", ", continue_label)))
+
+    # Step 4: propagate label — return inner_val from enclosing function
+    # The enclosing fn must return result/option (its return type matches
+    # inner's type at the surface; both are !llvm.ptr at MLIR level).
+    emit(Str.concat("  ", Str.concat(propagate_label, ":")))
+    if g_arena_emit == 1:
+        emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+    emit_ind(Str.concat(Str.concat("llvm.return ", inner_val), " : !llvm.ptr"))
+
+    # Step 5: continue label — call unwrap_X to get T
+    emit(Str.concat("  ", Str.concat(continue_label, ":")))
+    unwrap_mangled: str = Str.concat(struct_prefix, Str.concat("_", unwrap_name))
+    result_val: str = new_tmp()
+    unwrap_ret_mt: str = mlir_type(t_type)
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result_val, " = llvm.call @"), unwrap_mangled), "("), Str.concat(inner_val, ") : (!llvm.ptr) -> ")), unwrap_ret_mt))
+    return result_val
 
 ##############################
 # MLIR Codegen Statements

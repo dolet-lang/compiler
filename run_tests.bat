@@ -130,6 +130,7 @@ for %%f in (
     dir_list
     option_basic
     result_basic
+    try_op
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

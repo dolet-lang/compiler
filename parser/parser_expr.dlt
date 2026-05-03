@@ -71,7 +71,7 @@ fun parse_primary() -> i64:
         v3: str = cur_val()
         advance()
         sl: i64 = mk_str_lit(v3)
-        if cur_kind() == TK_DOT:
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION:
             return parse_chained_dot(sl)
         return sl
 
@@ -235,7 +235,7 @@ fun parse_ident_expr() -> i64:
     if cur_kind() == TK_LPAREN:
         cargs: i64 = parse_arg_list()
         fc_node: i64 = mk_fun_call(name, cargs, 0)
-        if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
             return parse_chained_dot(fc_node)
         return fc_node
 
@@ -274,7 +274,7 @@ fun parse_dot_access(first: str) -> i64:
                 ns_node = mk_ns_struct_inst(first, member, nargs, 0)
             else:
                 ns_node = mk_ns_fun_call(first, member, nargs, 0)
-            if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+            if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
                 return parse_chained_dot(ns_node)
             return ns_node
         # ns.Struct.method(args) or ns.sub.something
@@ -290,7 +290,7 @@ fun parse_dot_access(first: str) -> i64:
                     ns_node2 = mk_ns_static_method(first, member, third, targs)
                 else:
                     ns_node2 = mk_ns_fun_call(first, third, targs, 0)
-                if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+                if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
                     return parse_chained_dot(ns_node2)
                 return ns_node2
             # ns.Struct.field — simple access
@@ -309,7 +309,7 @@ fun parse_dot_access(first: str) -> i64:
         else:
             node = mk_inst_method(first, member, margs)
         # Check for chaining continuation (direct dot or newline+dot)
-        if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
             return parse_chained_dot(node)
         return node
 
@@ -358,32 +358,35 @@ fun parse_dot_access(first: str) -> i64:
 fun parse_chained_dot(base: i64) -> i64:
     result: i64 = base
     while 1 == 1:
-        # Direct dot continuation
-        if cur_kind() == TK_DOT:
-            pass
-        elif cur_kind() == TK_NEWLINE:
-            # Peek past newlines to see if next non-NL token is TK_DOT
-            save_pos: i32 = p_pos
-            skip_newlines()
-            if cur_kind() == TK_DOT:
-                pass
+        tk: i32 = cur_kind()
+        # Try-op postfix: expr? — propagates Err/None
+        if tk == TK_QUESTION:
+            advance()
+            result = mk_try_op(result)
+        elif tk == TK_DOT or tk == TK_NEWLINE:
+            # Newlines are only valid here if followed by a `.`
+            # (allows `obj\n  .method()` style multiline chains).
+            if tk == TK_NEWLINE:
+                save_pos: i32 = p_pos
+                skip_newlines()
+                if cur_kind() != TK_DOT:
+                    p_pos = save_pos
+                    break
+            # Consume the dot and read the identifier
+            advance()
+            nxt: str = cur_val()
+            eat(TK_IDENT)
+            if cur_kind() == TK_LPAREN:
+                nargs: i64 = parse_arg_list()
+                result = mk_nested_method(result, nxt, nargs)
+            elif cur_kind() == TK_ASSIGN:
+                advance()
+                nval: i64 = parse_expression()
+                result = mk_field_assign("", nxt, nval)
             else:
-                p_pos = save_pos
-                break
+                result = mk_nested_field(result, nxt)
         else:
             break
-        advance()
-        nxt: str = cur_val()
-        eat(TK_IDENT)
-        if cur_kind() == TK_LPAREN:
-            nargs: i64 = parse_arg_list()
-            result = mk_nested_method(result, nxt, nargs)
-        elif cur_kind() == TK_ASSIGN:
-            advance()
-            nval: i64 = parse_expression()
-            result = mk_field_assign("", nxt, nval)
-        else:
-            result = mk_nested_field(result, nxt)
     return result
 
 # ==========================================

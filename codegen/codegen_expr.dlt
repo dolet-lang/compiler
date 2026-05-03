@@ -117,6 +117,10 @@ fun gen_expr(node: i64, expected: str) -> str:
     if nt == NODE_NESTED_METHOD:
         return gen_nested_method_call(node)
 
+    # Try-op postfix `?` — propagate Err/None from result/option
+    if nt == NODE_TRY_OP:
+        return gen_try_op(node, expected)
+
     # Self reference
     if nt == NODE_SELF:
         return "%self"
@@ -1079,3 +1083,85 @@ fun gen_builtin_call(node: i64) -> str:
         return result
 
     return emit_zero_ptr()
+
+# ==========================================
+# Try-op postfix `?` — propagate Err / None
+# ==========================================
+# `expr?` desugars to:
+#   __tmp = expr
+#   if __tmp.is_err()  (or .is_none() for option):
+#       return __tmp        # propagate up the call stack
+#   __tmp.unwrap_<T>()      # value of the ? expression
+#
+# Inner type must be result[T,E] or option[T]. Mapping T to the
+# right unwrap_X method matches the per-type pattern in
+# core/types/{result,option}.dlt (see ROADMAP B1).
+fun gen_try_op(node: i64, expected: str) -> str:
+    inner: i64 = tryop_inner(node)
+    inner_type: str = infer_expr_type(inner)
+    is_res: bool = Str.starts_with(inner_type, "result[")
+    is_opt: bool = Str.starts_with(inner_type, "option[")
+    if is_res == false:
+        if is_opt == false:
+            panic(Str.concat("? operator requires result/option, got '", Str.concat(inner_type, "'")))
+
+    # Extract T (between [ and , for result, [ and ] for option)
+    open_pos: i64 = Str.index_of(inner_type, "[")
+    inner_close: i64 = Memory.strlen(inner_type) - (1 as i64)
+    t_end: i64 = inner_close
+    if is_res:
+        comma_pos: i64 = Str.index_of(inner_type, ",")
+        if comma_pos > 0 as i64:
+            t_end = comma_pos
+    t_type: str = Str.substring(inner_type, open_pos + (1 as i64), t_end)
+
+    # Pick unwrap method based on T
+    unwrap_name: str = ""
+    if Str.equals(t_type, "i32"):
+        unwrap_name = "unwrap_i32"
+    elif Str.equals(t_type, "i64"):
+        unwrap_name = "unwrap_i64"
+    elif Str.equals(t_type, "str"):
+        unwrap_name = "unwrap_str"
+    elif Str.equals(t_type, "bool"):
+        unwrap_name = "unwrap_bool"
+    elif Str.equals(t_type, "f64"):
+        unwrap_name = "unwrap_f64"
+    else:
+        panic(Str.concat("? operator: unsupported inner type '", Str.concat(t_type, "' (add unwrap_X for it in core/types/result.dlt and core/types/option.dlt)")))
+
+    # Method name prefix and is_check name based on container type
+    struct_prefix: str = "option"
+    is_check: str = "is_none"
+    if is_res:
+        struct_prefix = "result"
+        is_check = "is_err"
+
+    # Step 1: evaluate inner expression — yields !llvm.ptr
+    inner_val: str = gen_expr(inner, inner_type)
+
+    # Step 2: call is_check (is_err or is_none) — returns i1
+    check_mangled: str = Str.concat(struct_prefix, Str.concat("_", is_check))
+    is_bad: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(is_bad, " = llvm.call @"), check_mangled), Str.concat("(", inner_val)), ") : (!llvm.ptr) -> i1"))
+
+    # Step 3: cond_br to either propagate (return inner_val) or continue
+    propagate_label: str = new_label()
+    continue_label: str = new_label()
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", is_bad), ", "), propagate_label), Str.concat(", ", continue_label)))
+
+    # Step 4: propagate label — return inner_val from enclosing function
+    # The enclosing fn must return result/option (its return type matches
+    # inner's type at the surface; both are !llvm.ptr at MLIR level).
+    emit(Str.concat("  ", Str.concat(propagate_label, ":")))
+    if g_arena_emit == 1:
+        emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+    emit_ind(Str.concat(Str.concat("llvm.return ", inner_val), " : !llvm.ptr"))
+
+    # Step 5: continue label — call unwrap_X to get T
+    emit(Str.concat("  ", Str.concat(continue_label, ":")))
+    unwrap_mangled: str = Str.concat(struct_prefix, Str.concat("_", unwrap_name))
+    result_val: str = new_tmp()
+    unwrap_ret_mt: str = mlir_type(t_type)
+    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat(result_val, " = llvm.call @"), unwrap_mangled), "("), Str.concat(inner_val, ") : (!llvm.ptr) -> ")), unwrap_ret_mt))
+    return result_val
