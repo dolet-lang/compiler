@@ -4,6 +4,45 @@
 > Pick one per session, follow the detailed plan, ship it, tick it off.
 > Designed so a future session can resume cold from this file alone.
 
+## Current Status (snapshot)
+
+**Tests:** 66 / 66 PASS · **Bootstrap:** byte-stable stage 1→2→3 ·
+**Apps:** simple-app-eqoi, FileManager, DisplayManager, DesktopShell
+all rebuild with `--target windows --release`.
+
+### ✅ Shipped recently
+
+- **A1-A4** Foundation (panic, visibility, validation layer, error tests)
+- **B1.1** Option<T> as @transparent built-in generic
+- **B1.4** Result<T, E> as @transparent built-in generic
+- **B2** `?` postfix operator (Err/None propagation)
+- **B-01** Bug fix: extend-str load missing in std/mod.dlt
+- **B-02** Bug fix: overload-blind find_impl_method
+- **B-03** Bug fix: parser dropped trailing siblings after nested else-if
+- **String literal method calls** (`"hi".trim()`)
+- **Str library** (15 methods: equals, index_of, replace, repeat, split,
+  lines, parse_i64, parse_i32, parse_f64, is_int, is_empty, ...)
+- **Convert.{i32_to_hex, i64_to_hex}**, **Memory.compare**, **Dir.list**
+- **Fail-loud unknown methods** in codegen validation layer
+
+### ⬜ Remaining (each genuinely multi-session)
+
+| Item | Why it's big |
+|---|---|
+| B1.5 polymorphic Some/None sugar | Needs context-type inference at call site |
+| B1.6 pattern matching for Option/Result | Needs `case Some(x):` parser + tag-dispatch codegen |
+| B3 user-defined generics + monomorphization | Needs T-substitution in fields, methods; per-instantiation struct emission. 3-5 sessions |
+| C1 closures with captures | Anonymous fn syntax, free-var analysis, lambda lifting, env struct, fn-ptr type. 5-7 sessions |
+| C2 DWARF/CodeView debug info | Source-position tracking through pipeline, MLIR DI ops, llvm DI passes. 5+ sessions |
+| C3 real threading + atomics + mutexes | CreateThread/clone wrappers, atomic intrinsics, memory model. 5+ sessions |
+| C4 incremental builds | Per-module compilation, signature hashing, cache invalidation. 7-10 sessions |
+| D1 Linux platform pipes | Real pipe()/dup2()/fork() chain. Needs Linux box for verification. 1-2 sessions |
+
+**Honest reality:** every remaining item is a focused session
+(or several) of careful work. None are "few-line additions."
+Pick one per session per the original plan; do NOT try to land
+multiple in parallel.
+
 ## Status Legend
 
 - ⬜ **TODO** — not started
@@ -28,12 +67,22 @@
 
 ## Tier-Order Index
 
-| Tier | Items | Total Estimate | When |
+| Tier | Items | Total Estimate | Status |
 |---|---|---|---|
-| **1. Foundation** | A1 panic · A2 visibility · A3 validation · A4 error-tests | 1 session | Next session |
-| **2. Type System** | B1 Result/Option · B2 `?` · B3 user-generics | 4-7 sessions | After Tier 1 |
-| **3. Major Features** | C1 closures · C2 DWARF · C3 threading · C4 incremental | 20+ sessions | Long-term |
-| **4. Platform Parity** | D1 Linux pipes | 1-2 sessions | When Linux box available |
+| **1. Foundation** | A1 panic · A2 visibility · A3 validation · A4 error-tests | 1 session | ✅ Shipped |
+| **2. Type System** | B1.1 Option · B1.4 Result · B2 `?` (DONE) · B1.5 polymorphic ctor · B1.6 pattern match · B3 user-generics | 4-7 sessions remaining | 🟡 Half done — Option/Result/`?` shipped; pattern match + sugar + user-generics remain |
+| **3. Major Features** | C1 closures · C2 DWARF · C3 threading · C4 incremental | 20+ sessions | ⬜ All pending |
+| **4. Platform Parity** | D1 Linux pipes | 1-2 sessions | ⬜ Needs Linux box |
+
+### Pick-one-per-session priority (highest user impact first)
+
+1. **B1.6 pattern matching** — small-medium, immediately makes Result/Option ergonomic. Mirror `case Direction.UP:` enum support to handle `case Some(x):` / `case Ok(x):`.
+2. **C1 closures** — biggest leap; unblocks event-driven UI, async, iterators. ~5 sessions.
+3. **C2 DWARF** — turns the language from "guess what crashed" to "read the stack trace". ~5 sessions.
+4. **B3 user-generics** — concrete pull (replace per-type method overloads with single generic body). ~3-5 sessions.
+5. **C3 threading** — needed for any CPU-bound real work. ~5 sessions.
+6. **C4 incremental** — only matters once codebases hit 10k+ LOC. ~7-10 sessions.
+7. **D1 Linux** — only matters when Linux machine available. ~1-2 sessions.
 
 ---
 
