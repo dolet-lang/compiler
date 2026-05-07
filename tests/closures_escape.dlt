@@ -1,0 +1,14 @@
+import std
+
+# Escape test: a closure returned from a factory function.
+# With Phase 2 heap-allocated env, this should work.
+
+fun make_adder(n: i32) -> fun(i32) -> i32:
+    return |x: i32| -> i32 x + n
+
+add5: fun(i32) -> i32 = make_adder(5)
+add100: fun(i32) -> i32 = make_adder(100)
+
+print("add5(10)=" + Convert.i32_to_str(add5(10)))      # 15
+print("add100(50)=" + Convert.i32_to_str(add100(50)))  # 150
+print("add5(3)=" + Convert.i32_to_str(add5(3)))        # 8 (verify same closure works again)

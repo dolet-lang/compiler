@@ -143,6 +143,8 @@ for %%f in (
     generic_function
     closures_basic
     closures_local
+    closures_advanced
+    closures_escape
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

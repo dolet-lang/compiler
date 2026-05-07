@@ -6,7 +6,7 @@
 
 ## Current Status (snapshot)
 
-**Tests:** 78 / 78 PASS · **Bootstrap:** byte-stable stage 1→2→3 ·
+**Tests:** 80 / 80 PASS · **Bootstrap:** byte-stable stage 1→2→3 ·
 **Apps:** simple-app-eqoi, FileManager, DisplayManager, DesktopShell
 all rebuild with `--target windows --release`.
 
@@ -26,7 +26,7 @@ all rebuild with `--target windows --release`.
 - **Bug fix** `init_gen_fn_registry` was being called twice and zeroing the populated registry — now called once via `init_all_registries`.
 - **Bug fix** `init_ast_constants` was missing `NODE_LAMBDA = 180` — lambda nodes were silently created with type=0 and ignored by walkers. Now properly registered.
 - **C1 Phase 1** Lambdas without captures — `|x: i32| -> i32 x + 1` parses and lifts to a top-level `__lambda_N` fn.
-- **C1 Phase 2** Lambdas with local captures — capture analysis finds free vars, generates a heap-allocated env (fn_ptr at offset 0, captures after), prepends capture-init var-decls in the lifted fn, replaces the lambda expression with a factory call. Calling convention: closure value is env_ptr; `f(args)` loads fn from `*env_ptr` and calls `fn(env_ptr, args)`. Stack vs heap escape analysis (Phase 3) not yet — currently always heap.
+- **C1 Phase 2** Lambdas with local captures — capture analysis finds free vars, generates a heap-allocated env (fn_ptr at offset 0, captures after), prepends capture-init var-decls in the lifted fn, replaces the lambda expression with a factory call. Calling convention: closure value is env_ptr; `f(args)` loads fn from `*env_ptr` and calls `fn(env_ptr, args)`. **Verified: closures support escape (return from fn) since env is on heap; passing closures as fn args works; multiple captures + str captures work.** Phase 3 (stack-alloc for non-escaping) is pure optimization — correctness is complete.
 - **B2** `?` postfix operator (Err/None propagation)
 - **B-01** Bug fix: extend-str load missing in std/mod.dlt
 - **B-02** Bug fix: overload-blind find_impl_method
