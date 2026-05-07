@@ -804,19 +804,24 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
     # NOTE: even non-capturing lambdas go through env convention so the
     # gen_indirect_call site has uniform handling. Tiny env = {fn_ptr}.
 
-    # Allocation rule:
+    # Allocation rule (one consistent pattern: stack default, `@heap`
+    # explicit). Same as Dolet's `@heap struct` annotation — the user
+    # is always explicit when they want heap.
     #   - var-decl:  stack by default; `@heap fun(...)` opts in to heap.
-    #   - return:    heap always (stack-return-of-closure is provably
-    #                UAF, never has a valid use case — so we don't
-    #                expose it). `@heap` annotation on the return type
-    #                is allowed for documentation but redundant.
+    #   - return:    require `@heap` on the return type. Stack return
+    #                is provably UAF, so we refuse to compile and tell
+    #                the user how to fix it.
     #   - elsewhere: stack (passed-as-arg, etc.)
     use_stack: i32 = 1
     if g_lift_parent_type == NODE_VAR_DECL:
         if Str.starts_with(g_lift_target_type, "@heap ") == 1:
             use_stack = 0
     elif g_lift_parent_type == NODE_RETURN:
-        use_stack = 0
+        if Str.starts_with(g_lift_scope_ret_type, "@heap ") == 1:
+            use_stack = 0
+        else:
+            msg: str = "closure escapes via return; mark return type with `@heap` (e.g. `fun foo() -> @heap fun(i32) -> i32`)"
+            panic(msg)
 
     # Phase 2 path — captures present. Build:
     #   1) cap_types[]    — types of each captured name (from enclosing scope)

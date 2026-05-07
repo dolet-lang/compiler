@@ -1,0 +1,7 @@
+import std
+
+# Must FAIL to compile: closure escapes via return without @heap.
+# Compiler points the user at the fix (`add @heap to return type`).
+
+fun bad(n: i32) -> fun(i32) -> i32:
+    return |x: i32| -> i32 x + n
