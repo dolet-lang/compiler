@@ -281,6 +281,9 @@ fun infer_expr_type(node: i64) -> str:
 
     if ntype == NODE_FUN_CALL:
         fname: str = Memory.read_i64(node + 8) as str
+        # Struct instantiation via fun-call form returns a struct ptr
+        if is_struct_type(fname) == 1:
+            return fname
         rt_dir: str = get_fun_ret_type(fname)
         if str_eq(rt_dir, "unknown") == 0 and str_eq(rt_dir, "") == 0:
             return rt_dir

@@ -7425,6 +7425,9 @@ fun infer_expr_type(node: i64) -> str:
 
     if ntype == NODE_FUN_CALL:
         fname: str = Memory.read_i64(node + 8) as str
+        # Struct instantiation via fun-call form returns a struct ptr
+        if is_struct_type(fname) == 1:
+            return fname
         rt_dir: str = get_fun_ret_type(fname)
         if str_eq(rt_dir, "unknown") == 0 and str_eq(rt_dir, "") == 0:
             return rt_dir
@@ -12667,6 +12670,9 @@ fun mem_write_for_type(t: str) -> str:
 # to look up types of captured local vars.
 g_lift_scope_body: i64 = 0
 g_lift_scope_params: i64 = 0
+# Phase 3: parent-context tracking. Set by the walker before recursing
+# into a child. Used by lift_one_lambda to decide stack vs heap env.
+g_lift_parent_type: i32 = 0
 
 # Lift one lambda node into a top-level fun_def. If the body has free
 # variables (captures from enclosing scope), generate an env-allocating
@@ -12685,7 +12691,17 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
 
     # NOTE: even non-capturing lambdas go through env convention so the
     # gen_indirect_call site has uniform handling. Tiny env = {fn_ptr}.
-    # cap_count is 0 here for that case.
+
+    # Phase 3: decide stack vs heap allocation based on parent context.
+    # Stack-safe ONLY when:
+    #   - we're inside a function (not top-level)
+    #   - the lambda is the immediate value of a NODE_VAR_DECL
+    # Top-level lambdas need heap (env outlives the eval point).
+    # Returned/passed lambdas need heap (escape).
+    use_stack: i32 = 0
+    if g_lift_scope_body != 0:
+        if g_lift_parent_type == NODE_VAR_DECL:
+            use_stack = 1
 
     # Phase 2 path — captures present. Build:
     #   1) cap_types[]    — types of each captured name (from enclosing scope)
@@ -12749,13 +12765,38 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
     fn_mang: str = register_overload(name, fn_pt)
     register_fun_sig_with_params(fn_mang, ret_type, fn_pt)
 
-    # ------ Build factory fn ------
-    # fun __lambda_N_make(c1: T1, c2: T2, ...) -> ptr:
-    #     addr: i64 = Memory.malloc(sz as i64) as i64
-    #     Memory.write_i64(addr, __lambda_N as i64)
-    #     Memory.write_X(addr + 8,  c1)
-    #     Memory.write_X(addr + 16, c2)
-    #     return addr as ptr
+    if use_stack == 1:
+        # Phase 3: stack-allocate via struct. Each capture stored as
+        # i64 to match the lifted fn's Memory.read_X(env + 8*n) layout.
+        env_struct_name: str = Str.concat(name, "_env")
+        env_fields: i64 = mk_node_list(8)
+        nl_add(env_fields, mk_struct_field("__fn", "ptr", 0, 0, "public", 0))
+        cs: i32 = 0
+        while cs < cap_count:
+            cn_s: str = nl_get(captures, cs) as str
+            nl_add(env_fields, mk_struct_field(cn_s, "i64", 0, 0, "public", 0))
+            cs = cs + 1
+        env_struct_decl: i64 = mk_struct_decl(env_struct_name, env_fields, 0, "", 0, 0, 0, 0)
+        nl_add(ast, env_struct_decl)
+        register_struct(env_struct_name, env_fields)
+
+        # Build field-val args: __fn=__lambda_N_ref, cap1=cap1_value (cast to i64), ...
+        sval_args: i64 = mk_node_list(8)
+        nl_add(sval_args, mk_field_val("__fn", mk_fun_ref(name)))
+        cs2: i32 = 0
+        while cs2 < cap_count:
+            cn_s2: str = nl_get(captures, cs2) as str
+            ct_s2: str = nl_get(cap_types, cs2) as str
+            v_expr: i64 = mk_var_ref(cn_s2)
+            if str_eq(ct_s2, "i64") == 0:
+                v_expr = mk_cast(v_expr, "i64")
+            nl_add(sval_args, mk_field_val(cn_s2, v_expr))
+            cs2 = cs2 + 1
+        # Returning struct instantiation — gen_struct_instantiation emits
+        # alloca + field stores in the caller's stack frame.
+        return mk_fun_call(env_struct_name, sval_args, 0)
+
+    # ------ Heap path: build factory fn that mallocs env ------
     fact_params: i64 = mk_node_list(8)
     ck: i32 = 0
     while ck < cap_count:
@@ -12765,18 +12806,15 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
         ck = ck + 1
     fact_body: i64 = mk_node_list(16)
     sz_bytes: i64 = 8 + (cap_count as i64) * 8
-    # addr: i64 = Memory.malloc(sz)
     malloc_args: i64 = mk_node_list(2)
     nl_add(malloc_args, mk_int_lit(sz_bytes))
     malloc_call: i64 = mk_static_method("Memory", "malloc", malloc_args)
     addr_decl: i64 = mk_var_decl("i64", "__addr", mk_cast(malloc_call, "i64"), 0, 0, 0)
     nl_add(fact_body, addr_decl)
-    # Memory.write_i64(addr, __lambda_N as i64)
     fnref_args: i64 = mk_node_list(2)
     nl_add(fnref_args, mk_var_ref("__addr"))
     nl_add(fnref_args, mk_cast(mk_fun_ref(name), "i64"))
     nl_add(fact_body, mk_static_method("Memory", "write_i64", fnref_args))
-    # Per-capture writes
     cm: i32 = 0
     while cm < cap_count:
         cn4: str = nl_get(captures, cm) as str
@@ -12785,14 +12823,12 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
         write_addr: i64 = mk_binary_op("+", mk_var_ref("__addr"), write_off)
         write_args: i64 = mk_node_list(2)
         nl_add(write_args, write_addr)
-        # str needs cast to i64
         write_val: i64 = mk_var_ref(cn4)
         if str_eq(ct4, "str") == 1:
             write_val = mk_cast(mk_var_ref(cn4), "i64")
         nl_add(write_args, write_val)
         nl_add(fact_body, mk_static_method("Memory", mem_write_for_type(ct4), write_args))
         cm = cm + 1
-    # return __addr as ptr
     nl_add(fact_body, mk_return(mk_cast(mk_var_ref("__addr"), "ptr")))
 
     fact_def: i64 = mk_fun_def(factory_name, fact_params, "ptr", fact_body, 0, 0, "", 0)
@@ -12827,26 +12863,32 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
         return lift_one_lambda(ast, node)
 
     if nt == NODE_VAR_DECL:
+        # Phase 3: tell child it's a var-decl value (stack-safe)
+        old_pt: i32 = g_lift_parent_type
+        g_lift_parent_type = NODE_VAR_DECL
         v: i64 = Memory.read_i64(node + 24)
         nv: i64 = lift_lambdas_in(ast, v)
+        g_lift_parent_type = old_pt
         if nv != v:
             Memory.write_i64(node + 24, nv)
         return node
     if nt == NODE_RETURN:
+        # Phase 3: lambda inside a return — escapes, must heap-alloc
+        old_pt2: i32 = g_lift_parent_type
+        g_lift_parent_type = NODE_RETURN
         v2: i64 = Memory.read_i64(node + 8)
         nv2: i64 = lift_lambdas_in(ast, v2)
+        g_lift_parent_type = old_pt2
         if nv2 != v2:
             Memory.write_i64(node + 8, nv2)
         return node
     if nt == NODE_ASSIGN:
-        # NODE_ASSIGN: name@+8 (str), value@+16
         v3: i64 = Memory.read_i64(node + 16)
         nv3: i64 = lift_lambdas_in(ast, v3)
         if nv3 != v3:
             Memory.write_i64(node + 16, nv3)
         return node
     if nt == NODE_FIELD_ASSIGN:
-        # NODE_FIELD_ASSIGN: obj@+8 (str), field@+16 (str), value@+24
         v3b: i64 = Memory.read_i64(node + 24)
         nv3b: i64 = lift_lambdas_in(ast, v3b)
         if nv3b != v3b:
