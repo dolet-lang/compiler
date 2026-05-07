@@ -1,0 +1,39 @@
+import std
+
+# Self-capture: method-local lambdas reading `self` and `self.field`
+# directly, without the copy-to-local workaround. The lifter rewrites
+# NODE_SELF and NODE_SELF_FIELD inside the lambda body to ordinary
+# var_ref / field_access against a synthetic `__self` capture, and
+# the factory call passes the enclosing method's implicit self as the
+# captured value.
+
+struct Counter:
+    n: i32
+
+extend Counter:
+    fun bind_inc(self) -> @heap fun(i32) -> i32:
+        return |delta: i32| -> i32 self.n + delta
+
+# Multiple self-field reads in one lambda — captured once, used N times.
+struct Box:
+    a: i32
+    b: i32
+
+extend Box:
+    fun bind_combine(self) -> @heap fun(i32) -> i32:
+        return |x: i32| -> i32 self.a * x + self.b
+
+fun do_test_counter():
+    c: Counter = Counter(n=10)
+    f: @heap fun(i32) -> i32 = c.bind_inc()
+    print(f(5))     # 15
+    print(f(100))   # 110
+
+fun do_test_box():
+    b: Box = Box(a=3, b=7)
+    g: @heap fun(i32) -> i32 = b.bind_combine()
+    print(g(10))    # 3*10 + 7 = 37
+    print(g(0))     # 0 + 7 = 7
+
+do_test_counter()
+do_test_box()

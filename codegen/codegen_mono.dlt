@@ -659,14 +659,26 @@ fun collect_caps_node(node: i64, params: i64, out: i64):
             nl_add(out, name as i64)
         return
     if nt == NODE_SELF or nt == NODE_SELF_FIELD:
-        # `self` capture in a method-local lambda needs the enclosing
-        # struct's type plumbed through find_capture_type, the env
-        # layout to take a struct ptr, and the body to be rewritten so
-        # NODE_SELF / NODE_SELF_FIELD become regular var_ref / field
-        # access against a captured local. That's a multi-pass change.
-        # For now fail loud with the workaround pattern so the user
-        # gets a useful message instead of a segfault on a null env.
-        panic("`self` capture inside a closure isn't supported yet. Workaround: copy the field to a local first — e.g. `n: i32 = self.n` and capture `n`.")
+        # `self` reference inside a lambda body. We capture it under the
+        # synthetic name `__self` (the keyword `self` can't be a regular
+        # local name, so a synthetic key avoids any clash). The lifter's
+        # rewriter swaps NODE_SELF → var_ref(__self) and
+        # NODE_SELF_FIELD(f) → field_access(__self, f) so the lifted
+        # body has only ordinary var/field nodes — no implicit %self
+        # needed at the top-level fn.
+        if Memory.strlen(g_lift_method_struct) > 0:
+            # Dedup: don't add __self twice if the body has multiple
+            # self references.
+            already: i32 = 0
+            cc_self: i32 = nl_count(out)
+            ic: i32 = 0
+            while ic < cc_self:
+                if str_eq(nl_get(out, ic) as str, "__self") == 1:
+                    already = 1
+                    ic = cc_self
+                ic = ic + 1
+            if already == 0:
+                nl_add(out, "__self" as i64)
         return
     if nt == NODE_RETURN or nt == NODE_PAREN or nt == NODE_TRY_OP or nt == NODE_UNARY_OP:
         collect_caps_node(Memory.read_i64(node + 8), params, out)
@@ -737,6 +749,12 @@ fun collect_caps_list(lst: i64, params: i64, out: i64):
 # or by checking if it's a fn-param of the enclosing fn (which we don't
 # easily have — fall back to "i64" if the decl isn't found).
 fun find_capture_type(scope_body: i64, scope_params: i64, name: str) -> str:
+    # Synthetic `__self` capture: type comes from the enclosing
+    # extend/impl block, tracked by g_lift_method_struct.
+    if str_eq(name, "__self") == 1:
+        if Memory.strlen(g_lift_method_struct) > 0:
+            return g_lift_method_struct
+        return "i64"
     # Check enclosing fn's params first
     if scope_params != 0:
         pc: i32 = nl_count(scope_params)
@@ -897,6 +915,25 @@ fun rewrite_captures_in(node: i64, captures: i64, cap_types: i64) -> i64:
                 return build_env_load(idx, ct)
         return node
 
+    # `self` references → ordinary var_ref to the captured `__self`
+    # local. The lifted body is a top-level fn (no implicit %self), so
+    # leaving NODE_SELF as-is would emit `%self` against an undeclared
+    # value. The local has been registered via the var-decl prologue
+    # (struct types are non-rewriteable, so prologue applies).
+    if nt == NODE_SELF:
+        idx_self: i32 = capture_index("__self", captures)
+        if idx_self >= 0:
+            return mk_var_ref("__self")
+        return node
+
+    # `self.field` → ordinary field_access on the captured `__self`.
+    if nt == NODE_SELF_FIELD:
+        idx_sf: i32 = capture_index("__self", captures)
+        if idx_sf >= 0:
+            field_name: str = Memory.read_i64(node + 8) as str
+            return mk_field_access("__self", field_name)
+        return node
+
     if nt == NODE_ASSIGN:
         aname: str = assign_name(node)
         v: i64 = assign_value(node)
@@ -1011,6 +1048,12 @@ g_lift_parent_type: i32 = 0
 # Phase 3+: type of the var-decl whose value is the lambda being lifted.
 # Used to detect `@heap fun(...)` annotation.
 g_lift_target_type: str = ""
+# Phase 4+: name of the struct whose method we're inside, set when the
+# walker enters NODE_EXTEND_BLOCK / NODE_IMPL_BLOCK and restored on
+# exit. Used to resolve `self` captures to the right struct type and
+# to refuse self-capture outside any method (g_lift_method_struct
+# stays "" at top level).
+g_lift_method_struct: str = ""
 
 # Lift one lambda node into a top-level fun_def. If the body has free
 # variables (captures from enclosing scope), generate an env-allocating
@@ -1101,7 +1144,18 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
             rargs: i64 = mk_node_list(2)
             nl_add(rargs, addr_expr)
             rcall: i64 = mk_static_method("Memory", mem_read_for_type(ct2), rargs)
-            nl_add(new_body, mk_var_decl(ct2, cn2, rcall, 0, 0, 0))
+            # For struct-typed captures (e.g. `__self: Counter`), the
+            # read returns i64 but the var-decl needs a Counter pointer
+            # for downstream getelementptr — without an explicit cast
+            # the i64 leaks into ptr-typed contexts and MLIR rejects.
+            # Closure-typed captures (fun(...)) are pre-existing — the
+            # codegen already handles their i64 → ptr coercion at the
+            # call site, so leave those alone.
+            init_val: i64 = rcall
+            if Str.starts_with(ct2, "fun(") == false:
+                if Str.starts_with(ct2, "@heap fun(") == false:
+                    init_val = mk_cast(rcall, ct2)
+            nl_add(new_body, mk_var_decl(ct2, cn2, init_val, 0, 0, 0))
         cj = cj + 1
     if body != 0:
         rewrite_captures_in_list(body, captures, cap_types)
@@ -1139,7 +1193,14 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
         while cs2 < cap_count:
             cn_s2: str = nl_get(captures, cs2) as str
             ct_s2: str = nl_get(cap_types, cs2) as str
-            v_expr: i64 = mk_var_ref(cn_s2)
+            # __self is the synthetic name our lifter uses for self
+            # captures; the actual value at the call site is the
+            # enclosing method's implicit self, parsed as NODE_SELF.
+            v_expr: i64 = 0
+            if str_eq(cn_s2, "__self") == 1:
+                v_expr = mk_self()
+            else:
+                v_expr = mk_var_ref(cn_s2)
             if str_eq(ct_s2, "i64") == 0:
                 v_expr = mk_cast(v_expr, "i64")
             nl_add(sval_args, mk_field_val(cn_s2, v_expr))
@@ -1194,7 +1255,11 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
     co: i32 = 0
     while co < cap_count:
         cn5: str = nl_get(captures, co) as str
-        nl_add(call_args, mk_var_ref(cn5))
+        # __self captured → pass the enclosing method's implicit self.
+        if str_eq(cn5, "__self") == 1:
+            nl_add(call_args, mk_self())
+        else:
+            nl_add(call_args, mk_var_ref(cn5))
         co = co + 1
     return mk_fun_call(factory_name, call_args, 0)
 
@@ -1307,11 +1372,20 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
     # top-level fns, so a lambda inside a method body never gets
     # lifted — the method silently compiles to `return null` and the
     # caller segfaults dereferencing the null closure.
+    #
+    # Set g_lift_method_struct so any lambda nested inside the method
+    # bodies knows which struct's `self` it can capture.
     if nt == NODE_EXTEND_BLOCK:
+        old_ms: str = g_lift_method_struct
+        g_lift_method_struct = Memory.read_i64(node + 8) as str
         lift_lambdas_in_list(ast, Memory.read_i64(node + 16))
+        g_lift_method_struct = old_ms
         return node
     if nt == NODE_IMPL_BLOCK:
+        old_ms2: str = g_lift_method_struct
+        g_lift_method_struct = Memory.read_i64(node + 8) as str
         lift_lambdas_in_list(ast, Memory.read_i64(node + 16))
+        g_lift_method_struct = old_ms2
         return node
 
     if nt == NODE_BLOCK:

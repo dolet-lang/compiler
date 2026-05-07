@@ -150,6 +150,7 @@ for %%f in (
     closures_mut_capture
     closures_compose
     closures_self_workaround
+    closures_self_capture
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
@@ -181,7 +182,6 @@ for %%f in (
     validate_typo_method
     generic_bounds_fail
     closures_escape_fail
-    closures_self_fail
 ) do (
     echo [TEST-MUST-FAIL] %%f
     if exist "tests\%%f.dlt" (
