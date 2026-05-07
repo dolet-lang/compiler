@@ -1,0 +1,55 @@
+import std
+
+# Parallel-sum: split the range [0, N) across 4 OS threads and add
+# their partial sums. Each worker writes its result to its own pre-
+# allocated heap slot — no shared mutation, no mutex needed for this
+# pattern. Output is deterministic (sum doesn't depend on scheduling).
+#
+# Without threading: this whole sum runs on one core in O(N) time.
+# With 4 threads on a 4-core CPU: ~4x faster (modulo OS overhead).
+
+g_part0: i64 = 0
+g_part1: i64 = 0
+g_part2: i64 = 0
+g_part3: i64 = 0
+
+fun sum_range(start: i32, end: i32) -> i64:
+    total: i64 = 0
+    i: i32 = start
+    while i < end:
+        total = total + (i as i64)
+        i = i + 1
+    return total
+
+fun worker_0():
+    g_part0 = sum_range(0, 250)
+
+fun worker_1():
+    g_part1 = sum_range(250, 500)
+
+fun worker_2():
+    g_part2 = sum_range(500, 750)
+
+fun worker_3():
+    g_part3 = sum_range(750, 1000)
+
+fun do_test():
+    f0: @heap fun() = || worker_0()
+    f1: @heap fun() = || worker_1()
+    f2: @heap fun() = || worker_2()
+    f3: @heap fun() = || worker_3()
+
+    t0: Thread = Thread.spawn(f0)
+    t1: Thread = Thread.spawn(f1)
+    t2: Thread = Thread.spawn(f2)
+    t3: Thread = Thread.spawn(f3)
+
+    t0.join()
+    t1.join()
+    t2.join()
+    t3.join()
+
+    total: i64 = g_part0 + g_part1 + g_part2 + g_part3
+    print(total)        # expected: 499500 (sum 0..999)
+
+do_test()

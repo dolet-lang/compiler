@@ -151,6 +151,8 @@ for %%f in (
     closures_compose
     closures_self_workaround
     closures_self_capture
+    thread_basic
+    thread_parallel_sum
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

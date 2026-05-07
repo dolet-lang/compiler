@@ -1,0 +1,17 @@
+import std
+
+# Thread basics: spawn + join with a void closure. This is the smallest
+# end-to-end exercise of the closure -> Win32 CreateThread bridge in
+# library/std/thread.dlt — it verifies the closure value carries its
+# captures across the OS boundary and the shim invokes it correctly.
+
+fun do_test():
+    print("main: before spawn")
+
+    f: @heap fun() = || print("worker: hello")
+    t: Thread = Thread.spawn(f)
+
+    t.join()
+    print("main: after join")
+
+do_test()
