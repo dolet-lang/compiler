@@ -34,10 +34,10 @@ fun worker_3():
     g_part3 = sum_range(750, 1000)
 
 fun do_test():
-    f0: @heap fun() = || worker_0()
-    f1: @heap fun() = || worker_1()
-    f2: @heap fun() = || worker_2()
-    f3: @heap fun() = || worker_3()
+    f0: @heap fun() = fun() worker_0()
+    f1: @heap fun() = fun() worker_1()
+    f2: @heap fun() = fun() worker_2()
+    f3: @heap fun() = fun() worker_3()
 
     t0: Thread = Thread.spawn(f0)
     t1: Thread = Thread.spawn(f1)

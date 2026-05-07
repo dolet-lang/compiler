@@ -11,7 +11,7 @@ extend Counter:
     fun bind_inc(self) -> @heap fun(i32) -> i32:
         # Workaround: copy field to local, then capture the local.
         n: i32 = self.n
-        return |delta: i32| -> i32 n + delta
+        return fun(delta: i32) -> i32 n + delta
 
 fun do_test():
     c: Counter = Counter(n=10)

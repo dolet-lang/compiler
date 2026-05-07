@@ -2,17 +2,17 @@ import std
 
 # C1 Phase 1: lambdas without captures.
 
-# Single-expression form: |args| expr
-add_one: fun(i32) -> i32 = |x: i32| -> i32 x + 1
+# Single-expression form: fun(args) expr
+add_one: fun(i32) -> i32 = fun(x: i32) -> i32 x + 1
 print("add_one(5)=" + Convert.i32_to_str(add_one(5)))
 
 # Multi-arg
-multiply: fun(i32, i32) -> i32 = |a: i32, b: i32| -> i32 a * b
+multiply: fun(i32, i32) -> i32 = fun(a: i32, b: i32) -> i32 a * b
 print("multiply(3,4)=" + Convert.i32_to_str(multiply(3, 4)))
 
-# Block body: |args|: <indented block>
+# Block body: fun(args):
 fun apply(f: fun(i32) -> i32, n: i32) -> i32:
     return f(n)
 
-result: i32 = apply(|x: i32| -> i32 x * x, 6)
+result: i32 = apply(fun(x: i32) -> i32 x * x, 6)
 print("apply(square,6)=" + Convert.i32_to_str(result))

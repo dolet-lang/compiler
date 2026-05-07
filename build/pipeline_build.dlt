@@ -3049,28 +3049,43 @@ fun parse_primary() -> i64:
     if k == TK_IDENT:
         return parse_ident_expr()
 
-    # C1: lambda expression `|args| body` or `|args|: <block>`.
-    # `|` only appears as a binary operator AFTER an operand, so seeing it
-    # at the start of a primary expression is unambiguously a lambda.
-    if k == TK_BIT_OR:
-        return parse_lambda()
+    # C1 Phase 5: `fun(...)` in expression position — anonymous function
+    # value (lambda). Same keyword as named declarations and closure
+    # types, so users learn one word for three uses:
+    #     fun add(...) -> T:                  named declaration
+    #     x: fun(i32) -> i32 = ...            closure type
+    #     fun(x: i32) -> i32 x + 1            anonymous value (here)
+    # Disambiguation: in expression position the next token after `fun`
+    # is always `(` (no name); a `fun name(...)` declaration would have
+    # been routed by the statement parser long before reaching here.
+    if k == TK_FUN:
+        return parse_lambda_fun()
 
-    # Zero-arg lambda `||` reaches the parser as a single TK_OR token
-    # (the lexer can't distinguish `a || b` from `|| -> i32 ...` without
-    # parser context). At a primary-expression position `||` can only
-    # be a zero-arg lambda — there's no left operand for logical-or.
+    # Migration helper: `|x|` and `||` lambda syntax was replaced by
+    # `fun(...) body` in v1.5.x. Old test/app code hitting this path
+    # should get a clear pointer to the new form, not a generic
+    # "unexpected token" with raw kind numbers.
+    if k == TK_BIT_OR:
+        panic("`|x| body` lambda syntax was replaced by `fun(x) body` — update to use `fun(...)` (same effect, same closure ABI).")
     if k == TK_OR:
-        return parse_lambda_zero()
+        panic("`|| body` zero-arg lambda was replaced by `fun() body` — update to use the `fun(...)` form.")
 
     panic(@"Unexpected token in expression: kind={k} val='{cur_val()}'")
     return 0
 
-# C1: parse `|args| expr` or `|args|: <indented-block>`.
-fun parse_lambda() -> i64:
+# `fun(args)` — anonymous function value at expression position.
+# Mirrors parse_fun_def's parameter-list parsing but with no name and
+# delegates the return-type + body parse to parse_lambda_tail (same
+# tail used by `||` / `|args|` so the three forms produce identical
+# NODE_LAMBDA nodes downstream — no codegen path divergence).
+fun parse_lambda_fun() -> i64:
     li: i32 = cur_indent()
-    eat(TK_BIT_OR)
+    eat(TK_FUN)
+    if cur_kind() != TK_LPAREN:
+        panic("expected '(' after 'fun' in expression — `fun name(...)` declarations belong at statement level, not inside an expression")
+    eat(TK_LPAREN)
     params: i64 = mk_node_list(8)
-    while cur_kind() != TK_BIT_OR and cur_kind() != TK_EOF:
+    while cur_kind() != TK_RPAREN and cur_kind() != TK_EOF:
         pname: str = cur_val()
         eat(TK_IDENT)
         ptype: str = ""
@@ -3080,15 +3095,8 @@ fun parse_lambda() -> i64:
         nl_add(params, mk_param(pname, ptype, 0))
         if cur_kind() == TK_COMMA:
             advance()
-    eat(TK_BIT_OR)
+    eat(TK_RPAREN)
     return parse_lambda_tail(params, li)
-
-# Zero-arg lambda `||`. The single `||` token already ate both pipes,
-# so we go straight to the return type / body parse.
-fun parse_lambda_zero() -> i64:
-    li: i32 = cur_indent()
-    eat(TK_OR)
-    return parse_lambda_tail(mk_node_list(2), li)
 
 # Shared tail: ret-type annotation + body. Caller has already consumed
 # the parameter list and the closing `|` (or the merged `||`).

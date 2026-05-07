@@ -8,14 +8,14 @@ import std
 # variable set.
 
 fun simple():
-    f: @heap fun() = || :
+    f: @heap fun() = fun():
         n: i32 = 42
         print(n)
     f()
 
 fun loop_with_capture():
     cap: i32 = 100
-    f: @heap fun() = || :
+    f: @heap fun() = fun():
         i: i32 = 0
         while i < 3:
             print(i + cap)
@@ -24,7 +24,7 @@ fun loop_with_capture():
 
 fun chain_locals():
     base: i32 = 1000
-    f: @heap fun() = || :
+    f: @heap fun() = fun():
         a: i32 = base
         b: i32 = a * 2
         c: i32 = b + 1

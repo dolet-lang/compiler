@@ -12,7 +12,7 @@ struct Counter:
 
 extend Counter:
     fun bind_inc(self) -> @heap fun(i32) -> i32:
-        return |delta: i32| -> i32 self.n + delta
+        return fun(delta: i32) -> i32 self.n + delta
 
 # Multiple self-field reads in one lambda — captured once, used N times.
 struct Box:
@@ -21,7 +21,7 @@ struct Box:
 
 extend Box:
     fun bind_combine(self) -> @heap fun(i32) -> i32:
-        return |x: i32| -> i32 self.a * x + self.b
+        return fun(x: i32) -> i32 self.a * x + self.b
 
 fun do_test_counter():
     c: Counter = Counter(n=10)

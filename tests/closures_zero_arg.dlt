@@ -1,16 +1,17 @@
 import std
 
-# Zero-arg lambda — `||` reaches the parser as a single TK_OR token but
-# at primary-expression position can only mean an empty parameter list.
+# Zero-arg lambda with the new fun(...) syntax — `fun()` is the
+# spelled-out version of the old `||`. At primary-expression position
+# `fun(...)` is unambiguously a lambda value.
 
 # Form 1: bare local
 fun test1():
-    f: fun() -> i32 = || -> i32 42
+    f: fun() -> i32 = fun() -> i32 42
     print(f())   # 42
 
 # Form 2: heap return
 fun make_thunk() -> @heap fun() -> i32:
-    return || -> i32 99
+    return fun() -> i32 99
 
 fun test2():
     g: @heap fun() -> i32 = make_thunk()
@@ -19,11 +20,13 @@ fun test2():
 # Form 3: zero-arg, void return, captures local
 fun test3():
     msg: str = "hi"
-    h: fun() = || print(msg)
+    h: fun() = fun() print(msg)
     h()
     h()
 
-# Form 4: still parse `a || b` as logical OR after operands
+# Form 4: still parse `a || b` as logical OR after operands — the
+# tokenizer emits TK_OR, but at infix position the parser handles it
+# as logical-or, not as a zero-arg lambda.
 fun test4():
     a: bool = true
     b: bool = false

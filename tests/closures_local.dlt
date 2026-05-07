@@ -4,7 +4,7 @@ import std
 
 fun do_test():
     scale: i32 = 10
-    f: fun(i32) -> i32 = |x: i32| -> i32 x * scale
+    f: fun(i32) -> i32 = fun(x: i32) -> i32 x * scale
     print("f(5)=" + Convert.i32_to_str(f(5)))    # expect 50
     print("f(7)=" + Convert.i32_to_str(f(7)))    # expect 70
 

@@ -6,7 +6,7 @@ import std
 # opt into heap. Without `@heap`, the compiler refuses to compile.
 
 fun make_adder(n: i32) -> @heap fun(i32) -> i32:
-    return |x: i32| -> i32 x + n
+    return fun(x: i32) -> i32 x + n
 
 add5: @heap fun(i32) -> i32 = make_adder(5)
 add100: @heap fun(i32) -> i32 = make_adder(100)

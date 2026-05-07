@@ -4,17 +4,17 @@ import std
 
 # 1) Stack default, local var
 fun test1():
-    f: fun(i32) -> i32 = |x: i32| -> i32 x + 1
+    f: fun(i32) -> i32 = fun(x: i32) -> i32 x + 1
     print("1) " + Convert.i32_to_str(f(5)))   # 6
 
 # 2) @heap explicit, local var
 fun test2():
-    g: @heap fun(i32) -> i32 = |x: i32| -> i32 x * 2
+    g: @heap fun(i32) -> i32 = fun(x: i32) -> i32 x * 2
     print("2) " + Convert.i32_to_str(g(5)))   # 10
 
 # 3) Return closure — must use @heap on return type
 fun make3() -> @heap fun(i32) -> i32:
-    return |x: i32| -> i32 x + 100
+    return fun(x: i32) -> i32 x + 100
 
 test1()
 test2()

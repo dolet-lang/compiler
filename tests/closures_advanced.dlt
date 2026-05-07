@@ -9,28 +9,28 @@ fun apply(f: fun(i32) -> i32, n: i32) -> i32:
 # 1) Capturing lambda passed as argument
 fun test_passed_capture():
     base: i32 = 100
-    r: i32 = apply(|x: i32| -> i32 x + base, 5)
+    r: i32 = apply(fun(x: i32) -> i32 x + base, 5)
     print("passed_capture=" + Convert.i32_to_str(r))   # expect 105
 
 # 2) Multiple captures
 fun test_multi_capture():
     a: i32 = 3
     b: i32 = 7
-    f: fun(i32) -> i32 = |x: i32| -> i32 x * a + b
+    f: fun(i32) -> i32 = fun(x: i32) -> i32 x * a + b
     print("multi=" + Convert.i32_to_str(f(10)))    # 10*3+7 = 37
 
 # 3) Capture a string
 fun test_str_capture():
     prefix: str = ">>> "
-    f: fun(str) -> str = |s: str| -> str prefix + s
+    f: fun(str) -> str = fun(s: str) -> str prefix + s
     print(f("hello"))    # ">>> hello"
 
 # 4) Two closures capturing different vars
 fun test_two_closures():
     n: i32 = 5
     m: i32 = 10
-    f: fun(i32) -> i32 = |x: i32| -> i32 x + n
-    g: fun(i32) -> i32 = |x: i32| -> i32 x * m
+    f: fun(i32) -> i32 = fun(x: i32) -> i32 x + n
+    g: fun(i32) -> i32 = fun(x: i32) -> i32 x * m
     print("f(7)=" + Convert.i32_to_str(f(7)))     # 12
     print("g(7)=" + Convert.i32_to_str(g(7)))     # 70
 

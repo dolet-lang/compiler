@@ -6,7 +6,7 @@ import std
 
 fun make_counter() -> @heap fun(i32) -> i32:
     n: i32 = 0
-    return |delta: i32| -> i32:
+    return fun(delta: i32) -> i32:
         n = n + delta
         return n
 

@@ -8,7 +8,7 @@ import std
 fun do_test():
     print("main: before spawn")
 
-    f: @heap fun() = || print("worker: hello")
+    f: @heap fun() = fun() print("worker: hello")
     t: Thread = Thread.spawn(f)
 
     t.join()
