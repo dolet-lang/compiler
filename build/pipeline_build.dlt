@@ -3498,6 +3498,26 @@ fun parse_cast() -> i64:
 # Type Name Parser (for cast, var decl, etc.)
 # ==========================================
 fun parse_type_name() -> str:
+    # C1 Phase 3+: optional `@heap` annotation before `fun(...)` types.
+    # Marks the closure as heap-allocated (escapes the enclosing fn).
+    # Default for closures is stack — `@heap` is only required when
+    # the closure is returned, stored in a global, or passed somewhere
+    # that outlives the enclosing fn.
+    if cur_kind() == TK_AT:
+        # Peek to see if it's `@heap`
+        if peek_kind(1) == TK_IDENT:
+            # Save position; if not @heap, we'd need to backtrack, but
+            # our current tokenizer always consumes @ as TK_AT so just
+            # check the next ident's value.
+            advance()
+            ann_name: str = cur_val()
+            eat(TK_IDENT)
+            if str_eq(ann_name, "heap") == 1:
+                inner_t: str = parse_type_name()
+                return Str.concat("@heap ", inner_t)
+            # Unknown @-annotation in type position — treat as error
+            panic(Str.concat("Unknown type annotation: @", ann_name))
+
     k: i32 = cur_kind()
     ts: str = token_to_type_str(k)
     if k == TK_TYPE:
@@ -7433,7 +7453,7 @@ fun infer_expr_type(node: i64) -> str:
             return rt_dir
         # Indirect call: variable of fun(args)->Ret type. Extract Ret from the var's type string.
         var_t: str = get_var_type(fname)
-        if Str.starts_with(var_t, "fun(") == 1:
+        if Str.starts_with(var_t, "fun(") == 1 or Str.starts_with(var_t, "@heap fun(") == 1:
             arrow_p: i64 = Str.index_of(var_t, "->")
             if arrow_p > 0 as i64:
                 rt_indirect: str = Str.substring(var_t, arrow_p + 2 as i64, Memory.strlen(var_t))
@@ -10814,7 +10834,7 @@ fun gen_fun_call_typed(node: i64, expected: str) -> str:
 
     # Check if fname is a local variable holding a function pointer
     fvar_type: str = get_var_type(fname)
-    if Str.starts_with(fvar_type, "fun(") == 1:
+    if Str.starts_with(fvar_type, "fun(") == 1 or Str.starts_with(fvar_type, "@heap fun(") == 1:
         return gen_indirect_call(node, fname, fvar_type, args_list)
 
     # Resolve overloaded function name
@@ -12670,9 +12690,14 @@ fun mem_write_for_type(t: str) -> str:
 # to look up types of captured local vars.
 g_lift_scope_body: i64 = 0
 g_lift_scope_params: i64 = 0
+# Enclosing fn's return type (used for `return |...|` escape check).
+g_lift_scope_ret_type: str = ""
 # Phase 3: parent-context tracking. Set by the walker before recursing
 # into a child. Used by lift_one_lambda to decide stack vs heap env.
 g_lift_parent_type: i32 = 0
+# Phase 3+: type of the var-decl whose value is the lambda being lifted.
+# Used to detect `@heap fun(...)` annotation.
+g_lift_target_type: str = ""
 
 # Lift one lambda node into a top-level fun_def. If the body has free
 # variables (captures from enclosing scope), generate an env-allocating
@@ -12692,16 +12717,24 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
     # NOTE: even non-capturing lambdas go through env convention so the
     # gen_indirect_call site has uniform handling. Tiny env = {fn_ptr}.
 
-    # Phase 3: decide stack vs heap allocation based on parent context.
-    # Stack-safe ONLY when:
-    #   - we're inside a function (not top-level)
-    #   - the lambda is the immediate value of a NODE_VAR_DECL
-    # Top-level lambdas need heap (env outlives the eval point).
-    # Returned/passed lambdas need heap (escape).
-    use_stack: i32 = 0
-    if g_lift_scope_body != 0:
-        if g_lift_parent_type == NODE_VAR_DECL:
-            use_stack = 1
+    # Phase 3+: closures default to STACK. User must opt-in to heap
+    # via `@heap` annotation on the target type.
+    #   - var-decl whose type starts with `@heap fun(...)` → heap
+    #   - return whose enclosing fn ret-type starts with `@heap fun(...)` → heap
+    #   - return without `@heap` on ret-type → COMPILE ERROR (escape unsafe)
+    #   - everything else → stack (safe within enclosing fn)
+    use_stack: i32 = 1
+    if g_lift_parent_type == NODE_VAR_DECL:
+        if Str.starts_with(g_lift_target_type, "@heap ") == 1:
+            use_stack = 0
+    elif g_lift_parent_type == NODE_RETURN:
+        if Str.starts_with(g_lift_scope_ret_type, "@heap ") == 1:
+            use_stack = 0
+        else:
+            # Closure escapes via return but the return type is plain
+            # `fun(...)` — would UAF. Refuse to compile.
+            msg: str = "closure escapes via return; mark return type with `@heap` (e.g. `fun foo() -> @heap fun(i32) -> i32`)"
+            panic(msg)
 
     # Phase 2 path — captures present. Build:
     #   1) cap_types[]    — types of each captured name (from enclosing scope)
@@ -12863,17 +12896,22 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
         return lift_one_lambda(ast, node)
 
     if nt == NODE_VAR_DECL:
-        # Phase 3: tell child it's a var-decl value (stack-safe)
+        # Phase 3+: tell child it's a var-decl value, plus the var's type
+        # (to detect `@heap` annotation).
         old_pt: i32 = g_lift_parent_type
+        old_tt: str = g_lift_target_type
         g_lift_parent_type = NODE_VAR_DECL
+        g_lift_target_type = Memory.read_i64(node + 8) as str
         v: i64 = Memory.read_i64(node + 24)
         nv: i64 = lift_lambdas_in(ast, v)
         g_lift_parent_type = old_pt
+        g_lift_target_type = old_tt
         if nv != v:
             Memory.write_i64(node + 24, nv)
         return node
     if nt == NODE_RETURN:
-        # Phase 3: lambda inside a return — escapes, must heap-alloc
+        # Phase 3+: lambda inside a return — needs `@heap` on enclosing
+        # fn's return type, else compile error.
         old_pt2: i32 = g_lift_parent_type
         g_lift_parent_type = NODE_RETURN
         v2: i64 = Memory.read_i64(node + 8)
@@ -12931,14 +12969,18 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
         # Lift any lambdas nested in the body, but DON'T cross into
         # generic-fn bodies (their T refs need substitution first).
         if Memory.read_i64(node + 40) == 0:
-            # Push scope (enclosing fn body+params) for capture analysis
+            # Push scope (enclosing fn body+params+ret_type) for the
+            # capture analysis and `@heap` escape check.
             old_body: i64 = g_lift_scope_body
             old_params: i64 = g_lift_scope_params
+            old_ret: str = g_lift_scope_ret_type
             g_lift_scope_body = Memory.read_i64(node + 32)
             g_lift_scope_params = Memory.read_i64(node + 16)
+            g_lift_scope_ret_type = Memory.read_i64(node + 24) as str
             lift_lambdas_in_list(ast, Memory.read_i64(node + 32))
             g_lift_scope_body = old_body
             g_lift_scope_params = old_params
+            g_lift_scope_ret_type = old_ret
         return node
 
     if nt == NODE_BLOCK:

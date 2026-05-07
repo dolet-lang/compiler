@@ -359,7 +359,7 @@ fun gen_fun_call_typed(node: i64, expected: str) -> str:
 
     # Check if fname is a local variable holding a function pointer
     fvar_type: str = get_var_type(fname)
-    if Str.starts_with(fvar_type, "fun(") == 1:
+    if Str.starts_with(fvar_type, "fun(") == 1 or Str.starts_with(fvar_type, "@heap fun(") == 1:
         return gen_indirect_call(node, fname, fvar_type, args_list)
 
     # Resolve overloaded function name

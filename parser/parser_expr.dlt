@@ -692,6 +692,26 @@ fun parse_cast() -> i64:
 # Type Name Parser (for cast, var decl, etc.)
 # ==========================================
 fun parse_type_name() -> str:
+    # C1 Phase 3+: optional `@heap` annotation before `fun(...)` types.
+    # Marks the closure as heap-allocated (escapes the enclosing fn).
+    # Default for closures is stack — `@heap` is only required when
+    # the closure is returned, stored in a global, or passed somewhere
+    # that outlives the enclosing fn.
+    if cur_kind() == TK_AT:
+        # Peek to see if it's `@heap`
+        if peek_kind(1) == TK_IDENT:
+            # Save position; if not @heap, we'd need to backtrack, but
+            # our current tokenizer always consumes @ as TK_AT so just
+            # check the next ident's value.
+            advance()
+            ann_name: str = cur_val()
+            eat(TK_IDENT)
+            if str_eq(ann_name, "heap") == 1:
+                inner_t: str = parse_type_name()
+                return Str.concat("@heap ", inner_t)
+            # Unknown @-annotation in type position — treat as error
+            panic(Str.concat("Unknown type annotation: @", ann_name))
+
     k: i32 = cur_kind()
     ts: str = token_to_type_str(k)
     if k == TK_TYPE:

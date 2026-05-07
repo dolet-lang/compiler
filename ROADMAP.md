@@ -6,7 +6,7 @@
 
 ## Current Status (snapshot)
 
-**Tests:** 80 / 80 PASS · **Bootstrap:** byte-stable stage 1→2→3 ·
+**Tests:** 81 / 81 PASS · **Bootstrap:** byte-stable stage 1→2→3 ·
 **Apps:** simple-app-eqoi, FileManager, DisplayManager, DesktopShell
 all rebuild with `--target windows --release`.
 
@@ -27,7 +27,7 @@ all rebuild with `--target windows --release`.
 - **Bug fix** `init_ast_constants` was missing `NODE_LAMBDA = 180` — lambda nodes were silently created with type=0 and ignored by walkers. Now properly registered.
 - **C1 Phase 1** Lambdas without captures — `|x: i32| -> i32 x + 1` parses and lifts to a top-level `__lambda_N` fn.
 - **C1 Phase 2** Lambdas with local captures — capture analysis finds free vars, generates env (fn_ptr at offset 0, captures after), prepends capture-init var-decls in the lifted fn, replaces the lambda expression with a factory call (heap) or struct instantiation (stack). Calling convention: closure value is env_ptr; `f(args)` loads fn from `*env_ptr` and calls `fn(env_ptr, args)`.
-- **C1 Phase 3** Stack vs heap allocation — heuristic-based escape analysis. Parent context is tracked during the lift walk: if the lambda is the immediate value of a `NODE_VAR_DECL` inside a function, env is stack-allocated via a generated `__lambda_N_env` struct (no malloc). If the lambda is in a `NODE_RETURN` or at top-level, env is heap-allocated via a factory function (escape-safe). Verified: `do_test() { f = |x| x*scale }` uses alloca; `make_adder()` returns a heap-allocated closure that survives the function return.
+- **C1 Phase 3** Stack vs heap allocation via explicit `@heap` annotation — closures default to **stack** (fast, no malloc); user opts into heap with `@heap` on the type position: `fun foo() -> @heap fun(i32) -> i32:` or `f: @heap fun(i32) -> i32 = ...`. **Compile error** if a closure escapes via `return` without `@heap` on the return type — points to the fix. Consistent with Dolet's existing `@heap struct` pattern. Stack-allocated env is emitted via a generated `__lambda_N_env` struct (alloca + field stores); heap-allocated env uses a factory fn (`__lambda_N_make`) that mallocs.
 - **B2** `?` postfix operator (Err/None propagation)
 - **B-01** Bug fix: extend-str load missing in std/mod.dlt
 - **B-02** Bug fix: overload-blind find_impl_method
