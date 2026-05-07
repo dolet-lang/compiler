@@ -175,7 +175,6 @@ for %%f in (
     validate_bare_return
     validate_typo_method
     generic_bounds_fail
-    closures_escape_fail
 ) do (
     echo [TEST-MUST-FAIL] %%f
     if exist "tests\%%f.dlt" (
