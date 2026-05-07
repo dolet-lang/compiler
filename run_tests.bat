@@ -151,6 +151,7 @@ for %%f in (
     closures_compose
     closures_self_workaround
     closures_self_capture
+    closures_locals_in_body
     thread_basic
     thread_parallel_sum
 ) do (

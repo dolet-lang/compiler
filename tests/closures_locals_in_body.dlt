@@ -1,0 +1,36 @@
+import std
+
+# Locals declared INSIDE a multi-statement lambda body. Pre-fix, the
+# capture analyzer missed local NODE_VAR_DECLs and tried to capture
+# them from the enclosing scope — codegen failed with "Variable not
+# declared" at the factory call site. The lifter now pre-collects
+# every name declared in the body and excludes those from the free-
+# variable set.
+
+fun simple():
+    f: @heap fun() = || :
+        n: i32 = 42
+        print(n)
+    f()
+
+fun loop_with_capture():
+    cap: i32 = 100
+    f: @heap fun() = || :
+        i: i32 = 0
+        while i < 3:
+            print(i + cap)
+            i = i + 1
+    f()
+
+fun chain_locals():
+    base: i32 = 1000
+    f: @heap fun() = || :
+        a: i32 = base
+        b: i32 = a * 2
+        c: i32 = b + 1
+        print(c)
+    f()
+
+simple()
+loop_with_capture()
+chain_locals()
