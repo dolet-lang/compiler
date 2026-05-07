@@ -182,6 +182,14 @@ fun gen_nested_method_call(node: i64) -> str:
     # registered `str_trim`.
     base_type: str = normalize_type(infer_expr_type(base_node))
 
+    # B3-fix: gen_nested_field_ptr returns the address of the FIELD SLOT.
+    # For struct- or str-typed fields, the slot holds a pointer; the
+    # method needs the pointer value, not the slot address. Load once.
+    if is_struct_type(base_type) == 1 or is_string_type(base_type) == 1:
+        loaded_p: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(loaded_p, " = llvm.load "), Str.concat(base_ptr, " : !llvm.ptr -> !llvm.ptr")))
+        base_ptr = loaded_p
+
     # Build proxy NODE_INST_METHOD for the method call on the nested struct
     # We use base_ptr as the self pointer and delegate to instance method logic
     # Mangled name: base_type_method_name
@@ -285,9 +293,17 @@ fun parse_fun_ptr_ret_type(ftype: str) -> str:
     return "void"
 
 fun gen_indirect_call(node: i64, fname: str, fvar_type: str, args_list: i64) -> str:
-    # Load the function pointer from the local variable
+    # Load the function pointer from the variable (param / local / global)
     mlir_nm: str = get_mlir_name(fname)
-    fp_val: str = emit_load(Str.concat("%", mlir_nm), "!llvm.ptr")
+    fp_val: str = ""
+    if is_param_var(fname) == 1:
+        # Function parameter — already an SSA value, no load needed
+        fp_val = Str.concat("%", mlir_nm)
+    elif is_global_var(fname) == 1:
+        fp_src: str = emit_addr_of(mlir_nm)
+        fp_val = emit_load(fp_src, "!llvm.ptr")
+    else:
+        fp_val = emit_load(Str.concat("%", mlir_nm), "!llvm.ptr")
 
     # Build argument list
     arg_str: str = ""
@@ -329,6 +345,11 @@ fun gen_indirect_call(node: i64, fname: str, fvar_type: str, args_list: i64) -> 
 # Function Call
 # ==========================================
 fun gen_fun_call(node: i64) -> str:
+    return gen_fun_call_typed(node, "")
+
+# Variant that knows the expected return type — drives ctor sugar
+# (`Some(42)` picks the i64 overload when assigned to `option<i64>`).
+fun gen_fun_call_typed(node: i64, expected: str) -> str:
     fname: str = Memory.read_i64(node + 8) as str
     args_list: i64 = Memory.read_i64(node + 16)
 
@@ -346,6 +367,27 @@ fun gen_fun_call(node: i64) -> str:
     if args_list != 0:
         ac = nl_count(args_list)
 
+    # B1.5: Polymorphic ctor sugar for Some/Ok/Err — when the call's
+    # expected type is option[T]/result[T,E], force the first arg's
+    # type to T (or E for Err) so the right per-type overload is
+    # picked AND implicit cast bridges the literal type. This lets
+    # `x: option<i64> = Some(42)` work without `42 as i64`.
+    inner_force: str = ""
+    if ac > 0 and Memory.strlen(expected) > 0 as i64:
+        if str_eq(fname, "Some") == 1 or str_eq(fname, "Ok") == 1:
+            op_p: i64 = Str.index_of(expected, "[")
+            if op_p > 0 as i64:
+                end_p: i64 = Memory.strlen(expected) - (1 as i64)
+                cm_p: i64 = Str.index_of(expected, ",")
+                if cm_p > 0 as i64:
+                    end_p = cm_p
+                inner_force = Str.substring(expected, op_p + (1 as i64), end_p)
+        elif str_eq(fname, "Err") == 1:
+            cm_pE: i64 = Str.index_of(expected, ",")
+            if cm_pE > 0 as i64:
+                end_pE: i64 = Memory.strlen(expected) - (1 as i64)
+                inner_force = Str.substring(expected, cm_pE + (1 as i64), end_pE)
+
     # Build arg types string for overload resolution
     arg_types_str: str = ""
     ati: i32 = 0
@@ -353,6 +395,9 @@ fun gen_fun_call(node: i64) -> str:
         anode_t: i64 = nl_get(args_list, ati)
         at_raw: str = infer_expr_type(anode_t)
         at_norm: str = normalize_type(at_raw)
+        # Override first arg type for ctor sugar
+        if ati == 0 and Memory.strlen(inner_force) > 0 as i64:
+            at_norm = inner_force
         if ati > 0:
             arg_types_str = Str.concat(arg_types_str, ",")
         arg_types_str = Str.concat(arg_types_str, at_norm)
@@ -510,6 +555,11 @@ fun gen_static_method_call(node: i64) -> str:
     method_params: i64 = 0
     if method_node != 0:
         method_params = Memory.read_i64(method_node + 16)
+
+    # B1.5-style: resolve overload on the mangled name so the call
+    # site uses the right overload-suffixed function (e.g.
+    # Option_Some__i32 not the base Option_Some which has no body).
+    mangled = resolve_overload(mangled, pre_arg_types_s)
 
     i: i32 = 0
     while i < ac:

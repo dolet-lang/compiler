@@ -274,9 +274,27 @@ fun infer_expr_type(node: i64) -> str:
     if ntype == NODE_TERNARY:
         return infer_expr_type(Memory.read_i64(node + 16))
 
+    if ntype == NODE_FUN_REF:
+        # C1: fn-ref is opaque pointer at MLIR level. Return "ptr" so
+        # callers use !llvm.ptr without an inttoptr cast.
+        return "ptr"
+
     if ntype == NODE_FUN_CALL:
         fname: str = Memory.read_i64(node + 8) as str
-        return get_fun_ret_type(fname)
+        rt_dir: str = get_fun_ret_type(fname)
+        if str_eq(rt_dir, "unknown") == 0 and str_eq(rt_dir, "") == 0:
+            return rt_dir
+        # Indirect call: variable of fun(args)->Ret type. Extract Ret from the var's type string.
+        var_t: str = get_var_type(fname)
+        if Str.starts_with(var_t, "fun(") == 1:
+            arrow_p: i64 = Str.index_of(var_t, "->")
+            if arrow_p > 0 as i64:
+                rt_indirect: str = Str.substring(var_t, arrow_p + 2 as i64, Memory.strlen(var_t))
+                # Strip leading spaces
+                while Memory.strlen(rt_indirect) > 0 and char_at(rt_indirect, 0 as i64) == 32 as i8:
+                    rt_indirect = Str.substring(rt_indirect, 1 as i64, Memory.strlen(rt_indirect))
+                return rt_indirect
+        return "unknown"
 
     if ntype == NODE_STATIC_METHOD:
         sname: str = Memory.read_i64(node + 8) as str

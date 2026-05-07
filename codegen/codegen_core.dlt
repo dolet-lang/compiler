@@ -132,6 +132,7 @@ fun init_ast_constants():
     NODE_ANNOT_DEF = 170
     NODE_ANNOT_PARAM = 171
     NODE_ANNOT_USE = 172
+    NODE_LAMBDA = 180
     NODE_SIZE = 96
     IMPORT_FULL = 1
     IMPORT_FROM = 2
@@ -1709,6 +1710,7 @@ fun init_all_registries():
     init_impl_registry()
     init_overload_registry()
     init_generic_registry()
+    init_gen_fn_registry()
     init_module_registry()
     init_tree_shaking()
     init_emitted_fns()

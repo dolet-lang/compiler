@@ -288,6 +288,10 @@ fun collect_declarations(ast: i64):
             fpt_str = build_param_types_str(fparams)
             mangled_fn = register_overload(fname, fpt_str)
             register_fun_sig_with_params(mangled_fn, ret_type, fpt_str)
+            # Phase 4.5: track generic functions for monomorphization
+            f_type_params: i64 = Memory.read_i64(node + 40)
+            if f_type_params != 0:
+                register_gen_fn(fname, node)
 
         # Impl blocks
         if nt == NODE_IMPL_BLOCK:
@@ -592,11 +596,9 @@ fun gen_functions(ast: i64):
         node: i64 = nl_get(ast, i)
         nt: i32 = nd_type(node)
 
-        IOOps.io_println(Str.concat(Str.concat("[gen_fn] node ", Convert.i64_to_str(i as i64)), Str.concat(" type=", Convert.i64_to_str(nt as i64))))
         if nt == NODE_EXTERN_BLOCK:
             if ts_extern_block_has_reachable(node) == 1:
                 gen_extern_block(node)
-                IOOps.io_println("[gen_fn] extern done")
         elif nt == NODE_STRUCT_DECL:
             sdbg: str = Memory.read_i64(node + 8) as str
             # Skip @transparent structs — they have no MLIR representation
@@ -682,6 +684,9 @@ fun generate(ast: i64) -> str:
     # Phase 1: Collect declarations
     collect_declarations(ast)
     IOOps.io_println("[gen] collect_declarations done")
+
+    # Phase 1.25: Monomorphize user generics (B3 Phase 2)
+    monomorphize_pass(ast)
 
     # Phase 1.5: Tree shaking (opt-in)
     run_tree_shaking(ast)

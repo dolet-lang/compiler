@@ -1,0 +1,27 @@
+import std
+
+# Phase 5 feasibility check: simulate Option<T> using B3 generics
+# (without touching the real Option<T> in std).
+
+struct MyOption<T>:
+    tag: i32
+    value: T
+
+extend MyOption:
+    fun is_some(self) -> bool:
+        return self.tag == 0
+    fun is_none(self) -> bool:
+        return self.tag == 1
+
+a: MyOption<i32> = MyOption<i32>(tag=0, value=42)
+print("a.is_some=" + Convert.bool_to_str(a.is_some()))
+
+b: MyOption<i32> = MyOption<i32>(tag=1, value=0)
+print("b.is_none=" + Convert.bool_to_str(b.is_none()))
+
+c: MyOption<str> = MyOption<str>(tag=0, value="hello")
+print("c.is_some=" + Convert.bool_to_str(c.is_some()))
+
+# Different instantiations should be totally separate types
+d: MyOption<i64> = MyOption<i64>(tag=0, value=999 as i64)
+print("d.is_some=" + Convert.bool_to_str(d.is_some()))

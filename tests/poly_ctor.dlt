@@ -1,0 +1,47 @@
+import std
+
+# B1.5: polymorphic Some/None/Ok/Err — picks right overload from
+# declared target type, no `as i64` / `as f64` needed.
+
+# Without sugar this would need `Some(42 as i64)`
+a: option<i64> = Some(42)
+print("a=" + Convert.i64_to_str(a.unwrap_i64()))
+
+b: option<i32> = Some(7)
+print("b=" + Convert.i32_to_str(b.unwrap_i32()))
+
+c: option<str> = Some("hello")
+print("c=" + c.unwrap_str())
+
+d: option<bool> = Some(true)
+print("d=" + Convert.bool_to_str(d.unwrap_bool()))
+
+e: option<f64> = Some(3.14)
+print("e=" + Convert.f64_to_str(e.unwrap_f64()))
+
+# Result with sugar
+ok1: result<i64, str> = Ok(99)
+print("ok1=" + Convert.i64_to_str(ok1.unwrap_i64()))
+
+ok2: result<str, str> = Ok("done")
+print("ok2=" + ok2.unwrap_str())
+
+err1: result<i64, str> = Err("boom")
+match err1:
+    case Ok(v):
+        print("unexpected ok=" + Convert.i64_to_str(v))
+    case Err(m):
+        print("err1=" + m)
+
+# Sugar inside if/match still works
+fun pick(x: i32) -> option<i64>:
+    if x > 0:
+        return Some(x as i64)
+    return None()
+
+r: option<i64> = pick(5)
+match r:
+    case Some(v):
+        print("picked=" + Convert.i64_to_str(v))
+    case None:
+        print("nothing picked")

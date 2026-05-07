@@ -1,0 +1,31 @@
+import std
+
+# Test qualified constructor syntax: Option.Some, Option.None,
+# Result.Ok, Result.Err. Bare forms still work via overloads.
+
+# === Option.Some / Option.None ===
+a: option<i32> = Option.Some(42)
+print("a=" + Convert.i32_to_str(a.unwrap_i32()))
+
+b: option<i64> = Option.Some(1000 as i64)
+print("b=" + Convert.i64_to_str(b.unwrap_i64()))
+
+c: option<str> = Option.Some("hello")
+print("c=" + c.unwrap_str())
+
+n: option<i32> = Option.None()
+print("n.is_none=" + Convert.bool_to_str(n.is_none()))
+
+# === Result.Ok / Result.Err ===
+r: result<i64, str> = Result.Ok(99 as i64)
+print("r=" + Convert.i64_to_str(r.unwrap_i64()))
+
+e: result<i64, str> = Result.Err("boom")
+print("e.msg=" + e.unwrap_err_str())
+
+# === Bare syntax still works ===
+x: option<i32> = Some(7)
+print("x=" + Convert.i32_to_str(x.unwrap_i32()))
+
+m: result<str, str> = Ok("done")
+print("m=" + m.unwrap_str())

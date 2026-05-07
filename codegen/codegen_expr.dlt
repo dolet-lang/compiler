@@ -81,9 +81,15 @@ fun gen_expr(node: i64, expected: str) -> str:
     if nt == NODE_TERNARY:
         return gen_ternary(node, expected)
 
-    # Function call
+    # Function call — pass expected so Some/Ok/Err can pick the right overload
     if nt == NODE_FUN_CALL:
-        return gen_fun_call(node)
+        return gen_fun_call_typed(node, expected)
+
+    # C1: Function reference — `f` (no parens) where f is a top-level fn,
+    # or a lifted lambda. Lowers to `llvm.mlir.addressof @fn : !llvm.ptr`.
+    if nt == NODE_FUN_REF:
+        fr_name: str = Memory.read_i64(node + 8) as str
+        return emit_addr_of(fr_name)
 
     # Static method call
     if nt == NODE_STATIC_METHOD:

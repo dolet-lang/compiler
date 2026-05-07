@@ -580,13 +580,56 @@ fun gen_match_stmt(node: i64):
         # Generate pattern comparison (first pattern for now)
         pc: i32 = nl_count(patterns)
         skip_cmp: i32 = 0
+        # Constructor-pattern binding info (for `case Some(x):` etc.)
+        # — emitted in the then-block AFTER then_lbl is declared.
+        ctor_bind_name: str = ""
+        ctor_bind_type: str = ""
+        ctor_bind_offset: i32 = 8
         pat_val: str = ""
         if pc > 0:
             pat: i64 = nl_get(patterns, 0)
             pat_nt: i32 = nd_type(pat)
             if pat_nt == NODE_PATTERN:
                 pptype: str = Memory.read_i64(pat + 8) as str
-                if str_eq(pptype, "enum") == 1:
+                if str_eq(pptype, "ctor") == 1:
+                    # Sum-type constructor pattern: Some(x) / None / Ok(x) / Err(e)
+                    ctor_name: str = Memory.read_i64(pat + 64) as str
+                    bind_name: str = Memory.read_i64(pat + 48) as str
+                    expected_tag: i32 = 0
+                    if str_eq(ctor_name, "None") == 1:
+                        expected_tag = 1
+                    elif str_eq(ctor_name, "Err") == 1:
+                        expected_tag = 1
+                    # Bind type: T from option[T]/result[T,E] for Some/Ok,
+                    # E from result[T,E] for Err. Empty for None.
+                    bind_type_tmp: str = ""
+                    if str_eq(ctor_name, "Some") == 1 or str_eq(ctor_name, "Ok") == 1:
+                        c_op: i64 = Str.index_of(et, "[")
+                        c_end: i64 = Memory.strlen(et) - (1 as i64)
+                        c_cm: i64 = Str.index_of(et, ",")
+                        if c_cm > 0 as i64:
+                            c_end = c_cm
+                        bind_type_tmp = Str.substring(et, c_op + (1 as i64), c_end)
+                    elif str_eq(ctor_name, "Err") == 1:
+                        c_cm2: i64 = Str.index_of(et, ",")
+                        c_end2: i64 = Memory.strlen(et) - (1 as i64)
+                        if c_cm2 > 0 as i64:
+                            bind_type_tmp = Str.substring(et, c_cm2 + (1 as i64), c_end2)
+                    # Read tag from match_val (offset 0, i32)
+                    tag_tmp: str = new_tmp()
+                    emit_ind(Str.concat(Str.concat(tag_tmp, " = llvm.load "), Str.concat(match_val, " : !llvm.ptr -> i32")))
+                    expect_const: str = emit_const_i32(expected_tag)
+                    cmp_ctor: str = new_tmp()
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(cmp_ctor, " = llvm.icmp \"eq\" "), tag_tmp), Str.concat(", ", expect_const)), " : i32"))
+                    emit_ind(Str.concat(Str.concat(Str.concat(Str.concat("llvm.cond_br ", cmp_ctor), ", "), then_lbl), Str.concat(", ", next_lbl)))
+                    skip_cmp = 1
+                    # Defer the bind-emit to AFTER then_lbl is declared.
+                    ctor_bind_name = bind_name
+                    ctor_bind_type = bind_type_tmp
+                    ctor_bind_offset = 8
+                    if str_eq(ctor_name, "Err") == 1:
+                        ctor_bind_offset = 16
+                elif str_eq(pptype, "enum") == 1:
                     pp_ename: str = Memory.read_i64(pat + 56) as str
                     pp_vname: str = Memory.read_i64(pat + 64) as str
                     pp_idx: i32 = get_enum_value_index(pp_ename, pp_vname)
@@ -628,6 +671,21 @@ fun gen_match_stmt(node: i64):
                 emit_ind(Str.concat("llvm.br ", then_lbl))
 
         emit(Str.concat("  ", Str.concat(then_lbl, ":")))
+
+        # Emit constructor-pattern binding here, AFTER then_lbl is live.
+        # `case Some(x):` / `case Err(e):` need `x` / `e` available in body.
+        if Memory.strlen(ctor_bind_name) > 0 as i64 and Memory.strlen(ctor_bind_type) > 0 as i64:
+            bind_mt: str = mlir_type(ctor_bind_type)
+            off_const: str = emit_const_i64(ctor_bind_offset as i64)
+            gep_tmp: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(gep_tmp, " = llvm.getelementptr "), match_val), Str.concat("[", Str.concat(off_const, "]"))), " : (!llvm.ptr, i64) -> !llvm.ptr, i8"))
+            val_tmp: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(val_tmp, " = llvm.load "), gep_tmp), Str.concat(" : !llvm.ptr -> ", bind_mt)))
+            bind_alloc: str = emit_alloca(bind_mt)
+            emit_store(val_tmp, bind_alloc, bind_mt)
+            bind_alloc_name: str = str_from_range(bind_alloc, 1, Memory.strlen(bind_alloc))
+            add_variable(ctor_bind_name, bind_alloc_name, ctor_bind_type, 0, 0)
+
         gen_block(body)
         if block_always_returns(body) == 0:
             emit_ind(Str.concat("llvm.br ", end_label))

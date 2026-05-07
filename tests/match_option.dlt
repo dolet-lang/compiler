@@ -1,0 +1,39 @@
+import std
+
+# Pattern matching for Option<T> and Result<T,E> (B1.6)
+
+fun describe(o: option<i64>):
+    match o:
+        case Some(x):
+            print("got " + Convert.i64_to_str(x))
+        case None:
+            print("nothing")
+
+a: option<i64> = Some(42 as i64)
+describe(a)
+b: option<i64> = None()
+describe(b)
+
+# Matching Result
+fun classify(r: result<i64, str>):
+    match r:
+        case Ok(v):
+            print("ok=" + Convert.i64_to_str(v))
+        case Err(e):
+            print("err=" + e)
+
+ok_r: result<i64, str> = Ok(7 as i64)
+classify(ok_r)
+bad_r: result<i64, str> = Err("boom")
+classify(bad_r)
+
+# Matching Option<str>
+fun greet(name: option<str>):
+    match name:
+        case Some(n):
+            print("hi " + n)
+        case None:
+            print("hi stranger")
+
+greet(Some("Hamza"))
+greet(None())

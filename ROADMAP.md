@@ -6,7 +6,7 @@
 
 ## Current Status (snapshot)
 
-**Tests:** 66 / 66 PASS · **Bootstrap:** byte-stable stage 1→2→3 ·
+**Tests:** 77 / 77 PASS · **Bootstrap:** byte-stable stage 1→2→3 ·
 **Apps:** simple-app-eqoi, FileManager, DisplayManager, DesktopShell
 all rebuild with `--target windows --release`.
 
@@ -15,6 +15,17 @@ all rebuild with `--target windows --release`.
 - **A1-A4** Foundation (panic, visibility, validation layer, error tests)
 - **B1.1** Option<T> as @transparent built-in generic
 - **B1.4** Result<T, E> as @transparent built-in generic
+- **B1.5** Polymorphic `Some/Ok/Err` sugar — `option<i64> = Some(42)` picks the i64 overload
+- **B1.6** Pattern matching for Option/Result (`case Some(x):`, `case Err(e):`, `case None:`)
+- **B1.7** Qualified constructor syntax — `Option.Some(42)`, `Option.None()`, `Result.Ok(99)`, `Result.Err("oops")` aligned with Dolet's `Module.method` idiom. Bare `Some(...)` / `Ok(...)` still work.
+- **B3 Phase 1-4** User-defined generic structs with methods AND trait bounds — `struct Box<T: Display>: item: T` validates X implements Display at instantiation.
+- **B3 Phase 3.5** T-substitution inside method bodies — `fun copy_value(self) -> T: x: T = self.value; return x` now correctly uses the concrete type per instantiation.
+- **B3 Phase 4.5** Generic functions — `fun pack<T>(x: T) -> Box<T>: return Box<T>(value=x)` works; the body is cloned with T → concrete per instantiation.
+- **Bug fix** Nested method on struct/str-typed field (`b.item.show()`) was passing the field-slot address instead of the loaded pointer.
+- **Bug fix** Static method calls were not resolving overloads — fixed in `gen_static_method_call`.
+- **Bug fix** `init_gen_fn_registry` was being called twice and zeroing the populated registry — now called once via `init_all_registries`.
+- **Bug fix** `init_ast_constants` was missing `NODE_LAMBDA = 180` — lambda nodes were silently created with type=0 and ignored by walkers. Now properly registered.
+- **C1 Phase 1** Lambdas without captures — `|x: i32| -> i32 x + 1` parses and is lifted to a top-level `__lambda_N` fn + `NODE_FUN_REF`. Indirect-call codegen generalized for param/global/local fn-pointer sources. Captures (Phase 2) and escape analysis (Phase 3) not yet implemented.
 - **B2** `?` postfix operator (Err/None propagation)
 - **B-01** Bug fix: extend-str load missing in std/mod.dlt
 - **B-02** Bug fix: overload-blind find_impl_method
@@ -29,9 +40,7 @@ all rebuild with `--target windows --release`.
 
 | Item | Why it's big |
 |---|---|
-| B1.5 polymorphic Some/None sugar | Needs context-type inference at call site |
-| B1.6 pattern matching for Option/Result | Needs `case Some(x):` parser + tag-dispatch codegen |
-| B3 user-defined generics + monomorphization | Needs T-substitution in fields, methods; per-instantiation struct emission. 3-5 sessions |
+| B3 Phase 5 generics: std migration | Phases 1-4.5 shipped (parser, struct mono, methods on generic structs, trait bounds + validation, T-in-body, generic functions). Phase 5 (Option/Result migration) deliberately deferred — would degrade `None()` polymorphism for marginal gain. |
 | C1 closures with captures | Anonymous fn syntax, free-var analysis, lambda lifting, env struct, fn-ptr type. 5-7 sessions |
 | C2 DWARF/CodeView debug info | Source-position tracking through pipeline, MLIR DI ops, llvm DI passes. 5+ sessions |
 | C3 real threading + atomics + mutexes | CreateThread/clone wrappers, atomic intrinsics, memory model. 5+ sessions |
@@ -70,19 +79,18 @@ multiple in parallel.
 | Tier | Items | Total Estimate | Status |
 |---|---|---|---|
 | **1. Foundation** | A1 panic · A2 visibility · A3 validation · A4 error-tests | 1 session | ✅ Shipped |
-| **2. Type System** | B1.1 Option · B1.4 Result · B2 `?` (DONE) · B1.5 polymorphic ctor · B1.6 pattern match · B3 user-generics | 4-7 sessions remaining | 🟡 Half done — Option/Result/`?` shipped; pattern match + sugar + user-generics remain |
+| **2. Type System** | B1.1 Option · B1.4 Result · B1.5 ctor sugar · B1.6 pattern match · B2 `?` · B3 user-generics | 3-5 sessions remaining | 🟡 Mostly done — only B3 user-generics remains |
 | **3. Major Features** | C1 closures · C2 DWARF · C3 threading · C4 incremental | 20+ sessions | ⬜ All pending |
 | **4. Platform Parity** | D1 Linux pipes | 1-2 sessions | ⬜ Needs Linux box |
 
 ### Pick-one-per-session priority (highest user impact first)
 
-1. **B1.6 pattern matching** — small-medium, immediately makes Result/Option ergonomic. Mirror `case Direction.UP:` enum support to handle `case Some(x):` / `case Ok(x):`.
-2. **C1 closures** — biggest leap; unblocks event-driven UI, async, iterators. ~5 sessions.
-3. **C2 DWARF** — turns the language from "guess what crashed" to "read the stack trace". ~5 sessions.
-4. **B3 user-generics** — concrete pull (replace per-type method overloads with single generic body). ~3-5 sessions.
-5. **C3 threading** — needed for any CPU-bound real work. ~5 sessions.
-6. **C4 incremental** — only matters once codebases hit 10k+ LOC. ~7-10 sessions.
-7. **D1 Linux** — only matters when Linux machine available. ~1-2 sessions.
+1. **C1 closures** — biggest leap; unblocks event-driven UI, async, iterators. ~5 sessions.
+2. **C2 DWARF** — turns the language from "guess what crashed" to "read the stack trace". ~5 sessions.
+3. **B3 user-generics** — concrete pull (replace per-type method overloads with single generic body). ~3-5 sessions.
+4. **C3 threading** — needed for any CPU-bound real work. ~5 sessions.
+5. **C4 incremental** — only matters once codebases hit 10k+ LOC. ~7-10 sessions.
+6. **D1 Linux** — only matters when Linux machine available. ~1-2 sessions.
 
 ---
 

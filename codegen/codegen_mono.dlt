@@ -1,0 +1,811 @@
+# Monomorphization for user-defined generics (B3 Phase 2 — minimal MVP)
+
+g_mono_names: i64 = 0
+g_mono_count: i32 = 0
+
+# Phase 4.5: Generic-function registry. Filled by collect_declarations
+# when it encounters NODE_FUN_DEF with type_params != 0.
+g_gen_fn_names: i64 = 0
+g_gen_fn_nodes: i64 = 0
+g_gen_fn_count: i32 = 0
+
+fun init_gen_fn_registry():
+    g_gen_fn_names = Memory.malloc_zeroed(8192)
+    g_gen_fn_nodes = Memory.malloc_zeroed(8192)
+    g_gen_fn_count = 0
+
+fun register_gen_fn(name: str, node: i64):
+    Memory.write_i64(g_gen_fn_names + ((g_gen_fn_count as i64) * 8), name as i64)
+    Memory.write_i64(g_gen_fn_nodes + ((g_gen_fn_count as i64) * 8), node)
+    g_gen_fn_count = g_gen_fn_count + 1
+
+fun is_generic_fn(name: str) -> i32:
+    i: i32 = 0
+    while i < g_gen_fn_count:
+        if str_eq(Memory.read_i64(g_gen_fn_names + ((i as i64) * 8)) as str, name) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+fun find_gen_fn_node(name: str) -> i64:
+    i: i32 = 0
+    while i < g_gen_fn_count:
+        if str_eq(Memory.read_i64(g_gen_fn_names + ((i as i64) * 8)) as str, name) == 1:
+            return Memory.read_i64(g_gen_fn_nodes + ((i as i64) * 8))
+        i = i + 1
+    return 0
+
+fun init_mono_registry():
+    g_mono_names = Memory.malloc_zeroed(8192)
+    g_mono_count = 0
+    # Note: init_gen_fn_registry is called from init_all_registries
+    # before collect_declarations populates it — DON'T re-init here.
+
+fun mono_done(c: str) -> i32:
+    i: i32 = 0
+    while i < g_mono_count:
+        if str_eq(Memory.read_i64(g_mono_names + ((i as i64) * 8)) as str, c) == 1:
+            return 1
+        i = i + 1
+    return 0
+
+fun mono_record(c: str):
+    Memory.write_i64(g_mono_names + ((g_mono_count as i64) * 8), c as i64)
+    g_mono_count = g_mono_count + 1
+
+fun mono_id(c: i8) -> i32:
+    if c >= 65 as i8 and c <= 90 as i8:
+        return 1
+    if c >= 97 as i8 and c <= 122 as i8:
+        return 1
+    if c >= 48 as i8 and c <= 57 as i8:
+        return 1
+    if c == 95 as i8:
+        return 1
+    return 0
+
+fun substitute_type(t: str, tn: str, conc: str) -> str:
+    n: i64 = Memory.strlen(t)
+    tnl: i64 = Memory.strlen(tn)
+    if tnl == 0 as i64:
+        return t
+    out: str = ""
+    i: i64 = 0
+    while i < n:
+        m: i32 = 0
+        if i + tnl <= n:
+            j: i64 = 0
+            ok: i32 = 1
+            while j < tnl:
+                if char_at(t, i + j) != char_at(tn, j):
+                    ok = 0
+                    j = tnl
+                j = j + 1 as i64
+            if ok == 1:
+                lok: i32 = 1
+                rok: i32 = 1
+                if i > 0 as i64:
+                    if mono_id(char_at(t, i - 1 as i64)) == 1:
+                        lok = 0
+                if i + tnl < n:
+                    if mono_id(char_at(t, i + tnl)) == 1:
+                        rok = 0
+                if lok == 1 and rok == 1:
+                    m = 1
+        if m == 1:
+            out = Str.concat(out, conc)
+            i = i + tnl
+        else:
+            cb: i64 = Memory.malloc(2 as i64)
+            Memory.write_i8(cb, char_at(t, i))
+            Memory.write_i8(cb + 1 as i64, 0 as i8)
+            out = Str.concat(out, cb as str)
+            i = i + 1 as i64
+    return out
+
+fun canon_if_gen(t: str) -> str:
+    if (t as i64) == 0:
+        return t
+    op: i64 = Str.index_of(t, "[")
+    if op <= 0 as i64:
+        return t
+    outer: str = Str.substring(t, 0 as i64, op)
+    if is_generic_type(outer) == 0:
+        return t
+    ep: i64 = Memory.strlen(t) - 1 as i64
+    inner: str = Str.substring(t, op + 1 as i64, ep)
+    flat: str = Str.replace(Str.replace(Str.replace(inner, "[", "_"), "]", ""), ",", "_")
+    return Str.concat(Str.concat(outer, "__"), flat)
+
+fun find_gen_struct(ast: i64, name: str) -> i64:
+    c: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < c:
+        nd: i64 = nl_get(ast, i)
+        if nd_type(nd) == NODE_STRUCT_DECL:
+            if str_eq(Memory.read_i64(nd + 8) as str, name) == 1:
+                return nd
+        i = i + 1
+    return 0
+
+fun clone_gen_struct(orig: i64, types: i64, canon: str) -> i64:
+    of: i64 = Memory.read_i64(orig + 16)
+    tp: i64 = Memory.read_i64(orig + 24)
+    pc: i32 = 0
+    if tp != 0:
+        pc = nl_count(tp)
+    nf: i64 = mk_node_list(16)
+    if of != 0:
+        fc: i32 = nl_count(of)
+        fi: i32 = 0
+        while fi < fc:
+            fn: i64 = nl_get(of, fi)
+            ft: str = Memory.read_i64(fn + 16) as str
+            nt: str = ft
+            pi: i32 = 0
+            while pi < pc:
+                tp_item: i64 = nl_get(tp, pi)
+                tnam: str = Memory.read_i64(tp_item + 0) as str
+                if pi < nl_count(types):
+                    ct: str = nl_get(types, pi) as str
+                    nt = substitute_type(nt, tnam, ct)
+                pi = pi + 1
+            nfd: i64 = mk_struct_field(Memory.read_i64(fn + 8) as str, nt, Memory.read_i64(fn + 24), Memory.read_i64(fn + 32), Memory.read_i64(fn + 40) as str, Memory.read_i64(fn + 48))
+            nl_add(nf, nfd)
+            fi = fi + 1
+    ns: i64 = mk_struct_decl(canon, nf, 0, "", 0, 0, 0, 0)
+    register_struct(canon, nf)
+    return ns
+
+# Phase 3.5: Substitute T-references in a single statement node.
+# Returns a new node when type substitution is needed (so the
+# original body shared across instantiations stays untouched), or
+# the same node otherwise. Recurses into containers.
+fun subst_stmt(node: i64, tp: i64, types: i64) -> i64:
+    if node == 0:
+        return 0
+    nt: i32 = nd_type(node)
+    pc: i32 = 0
+    if tp != 0:
+        pc = nl_count(tp)
+
+    if nt == NODE_VAR_DECL:
+        vt: str = Memory.read_i64(node + 8) as str
+        new_vt: str = vt
+        si: i32 = 0
+        while si < pc:
+            tp_it: i64 = nl_get(tp, si)
+            tn: str = Memory.read_i64(tp_it + 0) as str
+            if si < nl_count(types):
+                ct: str = nl_get(types, si) as str
+                new_vt = substitute_type(new_vt, tn, ct)
+            si = si + 1
+        if str_eq(new_vt, vt) == 0:
+            # Allocate a fresh NODE_VAR_DECL with substituted type
+            nn: i64 = mk_var_decl(new_vt, Memory.read_i64(node + 16) as str, Memory.read_i64(node + 24), Memory.read_i64(node + 32), Memory.read_i64(node + 48), Memory.read_i64(node + 56))
+            return nn
+        return node
+
+    if nt == NODE_CAST:
+        ct_str: str = Memory.read_i64(node + 16) as str
+        new_ct: str = ct_str
+        si2: i32 = 0
+        while si2 < pc:
+            tp_it2: i64 = nl_get(tp, si2)
+            tn2: str = Memory.read_i64(tp_it2 + 0) as str
+            if si2 < nl_count(types):
+                ct2: str = nl_get(types, si2) as str
+                new_ct = substitute_type(new_ct, tn2, ct2)
+            si2 = si2 + 1
+        if str_eq(new_ct, ct_str) == 0:
+            return mk_cast(Memory.read_i64(node + 8), new_ct)
+        return node
+
+    # Phase 4.5: fun_call may contain T in type_args list.
+    # Substitute each type_arg string in place (the list itself is
+    # cloned-on-write because the same node may also be reachable
+    # via the original generic body).
+    if nt == NODE_FUN_CALL:
+        old_ta: i64 = Memory.read_i64(node + 24)
+        if old_ta != 0:
+            tac: i32 = nl_count(old_ta)
+            new_ta: i64 = mk_node_list(8)
+            ta_changed: i32 = 0
+            ai: i32 = 0
+            while ai < tac:
+                old_t: str = nl_get(old_ta, ai) as str
+                new_t: str = old_t
+                psi: i32 = 0
+                while psi < pc:
+                    tp_itX: i64 = nl_get(tp, psi)
+                    tnX: str = Memory.read_i64(tp_itX + 0) as str
+                    if psi < nl_count(types):
+                        ctX: str = nl_get(types, psi) as str
+                        new_t = substitute_type(new_t, tnX, ctX)
+                    psi = psi + 1
+                if str_eq(new_t, old_t) == 0:
+                    ta_changed = 1
+                nl_add(new_ta, new_t as i64)
+                ai = ai + 1
+            if ta_changed == 1:
+                # Build a new fun_call sharing same args list
+                new_call: i64 = mk_fun_call(Memory.read_i64(node + 8) as str, Memory.read_i64(node + 16), new_ta)
+                return new_call
+        return node
+
+    if nt == NODE_RETURN:
+        v: i64 = Memory.read_i64(node + 8)
+        nv: i64 = subst_stmt(v, tp, types)
+        if nv != v:
+            return mk_return(nv)
+        return node
+    if nt == NODE_IF:
+        return node
+    if nt == NODE_WHILE:
+        return node
+    if nt == NODE_BLOCK:
+        return node
+    return node
+
+# Walk a body statement list and substitute T in each statement.
+# Returns either the original list (if no substitutions needed) or
+# a new list with substituted statements.
+fun subst_body(body: i64, tp: i64, types: i64) -> i64:
+    if body == 0:
+        return 0
+    c: i32 = nl_count(body)
+    new_body: i64 = mk_node_list(16)
+    changed: i32 = 0
+    i: i32 = 0
+    while i < c:
+        old: i64 = nl_get(body, i)
+        new: i64 = subst_stmt(old, tp, types)
+        if new != old:
+            changed = 1
+        nl_add(new_body, new)
+        i = i + 1
+    if changed == 1:
+        return new_body
+    return body
+
+# Phase 3: Clone an extend-block method for the monomorphized struct.
+# Substitutes type-param names in param types, return type, and (B3.5)
+# in any var-decl/cast types inside the body.
+fun clone_method_subst(orig: i64, tp: i64, types: i64) -> i64:
+    pc: i32 = 0
+    if tp != 0:
+        pc = nl_count(tp)
+    op: i64 = Memory.read_i64(orig + 16)
+    np: i64 = mk_node_list(8)
+    if op != 0:
+        ppc: i32 = nl_count(op)
+        ppi: i32 = 0
+        while ppi < ppc:
+            opn: i64 = nl_get(op, ppi)
+            opt: str = Memory.read_i64(opn + 16) as str
+            nt: str = opt
+            si: i32 = 0
+            while si < pc:
+                tp_it: i64 = nl_get(tp, si)
+                tn: str = Memory.read_i64(tp_it + 0) as str
+                if si < nl_count(types):
+                    ct: str = nl_get(types, si) as str
+                    nt = substitute_type(nt, tn, ct)
+                si = si + 1
+            nl_add(np, mk_param(Memory.read_i64(opn + 8) as str, nt, Memory.read_i64(opn + 24)))
+            ppi = ppi + 1
+    orig_ret: str = Memory.read_i64(orig + 24) as str
+    nret: str = orig_ret
+    si2: i32 = 0
+    while si2 < pc:
+        tp_it2: i64 = nl_get(tp, si2)
+        tn2: str = Memory.read_i64(tp_it2 + 0) as str
+        if si2 < nl_count(types):
+            ct2: str = nl_get(types, si2) as str
+            nret = substitute_type(nret, tn2, ct2)
+        si2 = si2 + 1
+    # Phase 3.5: clone body with T substituted in var-decl/cast types
+    new_body: i64 = subst_body(Memory.read_i64(orig + 32), tp, types)
+    return mk_method_def(Memory.read_i64(orig + 8) as str, np, nret, new_body, Memory.read_i64(orig + 40), Memory.read_i64(orig + 48) as str, Memory.read_i64(orig + 56), Memory.read_i64(orig + 64))
+
+# Build param-types str from method params (skipping self) — for overload registry.
+fun method_pt_str(params: i64) -> str:
+    if params == 0:
+        return ""
+    out: str = ""
+    pc: i32 = nl_count(params)
+    i: i32 = 0
+    while i < pc:
+        pn: i64 = nl_get(params, i)
+        nm: str = Memory.read_i64(pn + 8) as str
+        if str_eq(nm, "self") == 0:
+            tp: str = Memory.read_i64(pn + 16) as str
+            if Memory.strlen(out) > 0:
+                out = Str.concat(out, Str.concat(",", tp))
+            else:
+                out = tp
+        i = i + 1
+    return out
+
+# Clone all extend blocks for `base` struct, retargeting to `canonical`.
+# Substitutes T with concrete types; registers methods with codegen.
+fun clone_extends_for_mono(ast: i64, base: str, canonical: str, struct_tp: i64, types: i64):
+    c: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < c:
+        node: i64 = nl_get(ast, i)
+        nt: i32 = nd_type(node)
+        if nt == NODE_EXTEND_BLOCK:
+            tname: str = Memory.read_i64(node + 8) as str
+            if str_eq(tname, base) == 1:
+                methods: i64 = Memory.read_i64(node + 16)
+                nm: i64 = mk_node_list(8)
+                if methods != 0:
+                    mc: i32 = nl_count(methods)
+                    mi: i32 = 0
+                    while mi < mc:
+                        old_m: i64 = nl_get(methods, mi)
+                        new_m: i64 = clone_method_subst(old_m, struct_tp, types)
+                        nl_add(nm, new_m)
+                        mname: str = Memory.read_i64(new_m + 8) as str
+                        mret: str = Memory.read_i64(new_m + 24) as str
+                        mb: str = Str.concat(Str.concat(canonical, "_"), mname)
+                        pts: str = method_pt_str(Memory.read_i64(new_m + 16))
+                        mangled: str = register_overload(mb, pts)
+                        register_fun_sig_with_params(mangled, mret, pts)
+                        register_impl_method(canonical, mname, new_m)
+                        mi = mi + 1
+                ne: i64 = mk_extend_block(canonical, nm, 0)
+                nl_add(ast, ne)
+        i = i + 1
+
+# Phase 4: Look up a trait declaration in the AST by name.
+fun find_trait_decl(ast: i64, name: str) -> i64:
+    c: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < c:
+        node: i64 = nl_get(ast, i)
+        if nd_type(node) == NODE_TRAIT_DECL:
+            if str_eq(Memory.read_i64(node + 8) as str, name) == 1:
+                return node
+        i = i + 1
+    return 0
+
+# Phase 4: Verify that for each `<T: Bound>` type-param, the matching
+# concrete type implements every method declared on the bound trait.
+# Panics with a clear file:line-style message on violation.
+fun check_bounds(ast: i64, base: str, tp: i64, types: i64):
+    if tp == 0:
+        return
+    pc: i32 = nl_count(tp)
+    pi: i32 = 0
+    while pi < pc:
+        item: i64 = nl_get(tp, pi)
+        bound: str = Memory.read_i64(item + 8) as str
+        if (bound as i64) != 0 and Memory.strlen(bound) > 0:
+            if pi < nl_count(types):
+                ct: str = nl_get(types, pi) as str
+                trait_node: i64 = find_trait_decl(ast, bound)
+                if trait_node == 0:
+                    panic(Str.concat(Str.concat(Str.concat("trait '", bound), "' not found (referenced as bound on '"), Str.concat(base, "')")))
+                # Check each trait method exists as impl on ct
+                methods: i64 = Memory.read_i64(trait_node + 16)
+                if methods != 0:
+                    mc: i32 = nl_count(methods)
+                    mi: i32 = 0
+                    while mi < mc:
+                        mnode: i64 = nl_get(methods, mi)
+                        mname: str = Memory.read_i64(mnode + 8) as str
+                        if find_impl_method(ct, mname) == 0:
+                            msg: str = Str.concat("type '", ct)
+                            msg = Str.concat(msg, "' does not implement trait '")
+                            msg = Str.concat(msg, bound)
+                            msg = Str.concat(msg, "': missing method '")
+                            msg = Str.concat(msg, mname)
+                            msg = Str.concat(msg, "'")
+                            panic(msg)
+                        mi = mi + 1
+        pi = pi + 1
+
+fun mono_ensure(ast: i64, base: str, ta: i64) -> str:
+    cnt: i32 = nl_count(ta)
+    c: str = base
+    i: i32 = 0
+    while i < cnt:
+        s: str = nl_get(ta, i) as str
+        f: str = Str.replace(Str.replace(Str.replace(s, "[", "_"), "]", ""), ",", "_")
+        if i == 0:
+            c = Str.concat(Str.concat(c, "__"), f)
+        else:
+            c = Str.concat(Str.concat(c, "_"), f)
+        i = i + 1
+    if mono_done(c) == 0:
+        o: i64 = find_gen_struct(ast, base)
+        if o != 0:
+            struct_tp: i64 = Memory.read_i64(o + 24)
+            check_bounds(ast, base, struct_tp, ta)
+            ns: i64 = clone_gen_struct(o, ta, c)
+            nl_add(ast, ns)
+            mono_record(c)
+            clone_extends_for_mono(ast, base, c, struct_tp, ta)
+    return c
+
+# Minimal walker — covers the cases that matter for Box<i32>(...) usage:
+# top-level statements (var_decl, return, expression), function bodies,
+# and basic recursive forms (if/while/for_each/block/match).
+fun mono_walk_list(ast: i64, nl: i64):
+    if nl == 0:
+        return
+    c: i32 = nl_count(nl)
+    i: i32 = 0
+    while i < c:
+        mono_walk_node(ast, nl_get(nl, i))
+        i = i + 1
+
+fun mono_walk_node(ast: i64, node: i64):
+    if node == 0:
+        return
+    nt: i32 = nd_type(node)
+    if nt == NODE_FUN_CALL:
+        fname: str = Memory.read_i64(node + 8) as str
+        ta: i64 = Memory.read_i64(node + 24)
+        if ta != 0 and is_generic_type(fname) == 1:
+            cn: str = mono_ensure(ast, fname, ta)
+            Memory.write_i64(node + 8, cn as i64)
+            Memory.write_i64(node + 24, 0)
+        elif ta != 0 and is_generic_fn(fname) == 1:
+            # Phase 4.5: Generic function call — clone the fn body
+            # with T → concrete substituted in params, return type, and body.
+            cn2: str = mono_ensure_fn(ast, fname, ta)
+            Memory.write_i64(node + 8, cn2 as i64)
+            Memory.write_i64(node + 24, 0)
+        mono_walk_list(ast, Memory.read_i64(node + 16))
+        return
+    if nt == NODE_VAR_DECL:
+        vt: str = Memory.read_i64(node + 8) as str
+        if (vt as i64) != 0:
+            nv: str = canon_if_gen(vt)
+            if str_eq(nv, vt) == 0:
+                Memory.write_i64(node + 8, nv as i64)
+        mono_walk_node(ast, Memory.read_i64(node + 24))
+        return
+    if nt == NODE_FUN_DEF:
+        # Skip generic functions — their body has unresolved T refs
+        # which shouldn't be monomorphized until the function is
+        # instantiated (which clones the body with T → concrete).
+        ftp: i64 = Memory.read_i64(node + 40)
+        if ftp != 0:
+            return
+        ps: i64 = Memory.read_i64(node + 16)
+        if ps != 0:
+            pc: i32 = nl_count(ps)
+            pi: i32 = 0
+            while pi < pc:
+                pn: i64 = nl_get(ps, pi)
+                pt: str = Memory.read_i64(pn + 16) as str
+                if (pt as i64) != 0:
+                    npt: str = canon_if_gen(pt)
+                    if str_eq(npt, pt) == 0:
+                        Memory.write_i64(pn + 16, npt as i64)
+                pi = pi + 1
+        rt: str = Memory.read_i64(node + 24) as str
+        if (rt as i64) != 0:
+            nrt: str = canon_if_gen(rt)
+            if str_eq(nrt, rt) == 0:
+                Memory.write_i64(node + 24, nrt as i64)
+        mono_walk_list(ast, Memory.read_i64(node + 32))
+        return
+    if nt == NODE_RETURN:
+        mono_walk_node(ast, Memory.read_i64(node + 8))
+        return
+    if nt == NODE_ASSIGN or nt == NODE_FIELD_ASSIGN or nt == NODE_FIELD_VAL:
+        mono_walk_node(ast, Memory.read_i64(node + 16))
+        return
+    if nt == NODE_BLOCK:
+        mono_walk_list(ast, Memory.read_i64(node + 8))
+        return
+    if nt == NODE_IF:
+        mono_walk_list(ast, Memory.read_i64(node + 16))
+        mono_walk_list(ast, Memory.read_i64(node + 24))
+        return
+    if nt == NODE_WHILE:
+        mono_walk_list(ast, Memory.read_i64(node + 16))
+        return
+    if nt == NODE_MATCH:
+        mono_walk_list(ast, Memory.read_i64(node + 16))
+        return
+
+# Phase 4.5: clone a generic fun_def with T → concrete substituted
+# in params, return type, and body (var-decls, casts).
+fun clone_gen_fn(orig: i64, types: i64, canon: str) -> i64:
+    tp: i64 = Memory.read_i64(orig + 40)
+    pc: i32 = 0
+    if tp != 0:
+        pc = nl_count(tp)
+    # Clone params
+    op: i64 = Memory.read_i64(orig + 16)
+    np: i64 = mk_node_list(8)
+    if op != 0:
+        ppc: i32 = nl_count(op)
+        ppi: i32 = 0
+        while ppi < ppc:
+            opn: i64 = nl_get(op, ppi)
+            opt: str = Memory.read_i64(opn + 16) as str
+            nt2: str = opt
+            si: i32 = 0
+            while si < pc:
+                tp_it: i64 = nl_get(tp, si)
+                tn: str = Memory.read_i64(tp_it + 0) as str
+                if si < nl_count(types):
+                    ct: str = nl_get(types, si) as str
+                    nt2 = substitute_type(nt2, tn, ct)
+                si = si + 1
+            nl_add(np, mk_param(Memory.read_i64(opn + 8) as str, nt2, Memory.read_i64(opn + 24)))
+            ppi = ppi + 1
+    # Substitute return type
+    orig_ret: str = Memory.read_i64(orig + 24) as str
+    nret: str = orig_ret
+    si2: i32 = 0
+    while si2 < pc:
+        tp_it2: i64 = nl_get(tp, si2)
+        tn2: str = Memory.read_i64(tp_it2 + 0) as str
+        if si2 < nl_count(types):
+            ct2: str = nl_get(types, si2) as str
+            nret = substitute_type(nret, tn2, ct2)
+        si2 = si2 + 1
+    # Clone body with T substituted in var-decls/casts
+    new_body: i64 = subst_body(Memory.read_i64(orig + 32), tp, types)
+    # Build the fun_def with empty type_params (already monomorphized)
+    new_fn: i64 = mk_fun_def(canon, np, nret, new_body, 0, Memory.read_i64(orig + 48), Memory.read_i64(orig + 56) as str, Memory.read_i64(orig + 64))
+    # Register so codegen finds it
+    pt_str: str = build_param_types_str(np)
+    mangled: str = register_overload(canon, pt_str)
+    register_fun_sig_with_params(mangled, nret, pt_str)
+    return new_fn
+
+# Phase 4.5: ensure generic-function instantiation exists.
+fun mono_ensure_fn(ast: i64, base: str, ta: i64) -> str:
+    cnt: i32 = nl_count(ta)
+    c: str = base
+    i: i32 = 0
+    while i < cnt:
+        s: str = nl_get(ta, i) as str
+        f: str = Str.replace(Str.replace(Str.replace(s, "[", "_"), "]", ""), ",", "_")
+        if i == 0:
+            c = Str.concat(Str.concat(c, "__"), f)
+        else:
+            c = Str.concat(Str.concat(c, "_"), f)
+        i = i + 1
+    if mono_done(c) == 0:
+        o: i64 = find_gen_fn_node(base)
+        if o != 0:
+            new_fn: i64 = clone_gen_fn(o, ta, c)
+            nl_add(ast, new_fn)
+            mono_record(c)
+            mono_walk_list(ast, Memory.read_i64(new_fn + 32))
+    return c
+
+# ==========================================
+# C1 Phase 1: Lambda Lifting
+# Turns `|x| x + 1` into a top-level `fun __lambda_N(x) -> i32`
+# plus a `NODE_FUN_REF("__lambda_N")` at the use site.
+# Captures are NOT supported in Phase 1 — the lambda body can only
+# reference its own params, struct/global names, and other top-level
+# functions.
+# ==========================================
+
+g_lambda_counter: i32 = 0
+
+# Build a unique top-level name for a lifted lambda.
+fun next_lambda_name() -> str:
+    n: str = Str.concat("__lambda_", Convert.i32_to_str(g_lambda_counter))
+    g_lambda_counter = g_lambda_counter + 1
+    return n
+
+# Lift one lambda node into a top-level fun_def. Returns a fun_ref
+# that replaces the lambda at its use site.
+fun lift_one_lambda(ast: i64, node: i64) -> i64:
+    params: i64 = Memory.read_i64(node + 8)
+    body: i64 = Memory.read_i64(node + 16)
+    ret_type: str = Memory.read_i64(node + 24) as str
+    if (ret_type as i64) == 0:
+        ret_type = ""
+    # If ret_type was not specified, leave it empty — codegen infers
+    # from the return statement. (Phase 2 may add proper inference.)
+
+    name: str = next_lambda_name()
+    fn_def: i64 = mk_fun_def(name, params, ret_type, body, 0, 0, "", 0)
+    nl_add(ast, fn_def)
+
+    # Register signature for callers
+    pt_str: str = build_param_types_str(params)
+    mangled: str = register_overload(name, pt_str)
+    register_fun_sig_with_params(mangled, ret_type, pt_str)
+
+    return mk_fun_ref(name)
+
+# Recursively walk a node, lifting any nested lambdas. Returns the
+# (possibly replaced) node so callers can write the new pointer back
+# into the parent's child slot.
+fun lift_lambdas_in(ast: i64, node: i64) -> i64:
+    # Defensive guard: nodes are heap-malloc'd, so a valid pointer is
+    # always > 4KB. Catches walker bugs where a slot holds a small int
+    # (flag, index) or a string pointer that happens to read as a
+    # nonsense node-type. Any nt outside the known AST range bails out.
+    if node < 4096 as i64:
+        return node
+    nt: i32 = nd_type(node)
+    if nt <= 0 or nt > 200:
+        return node
+    if nt == NODE_LAMBDA:
+        return lift_one_lambda(ast, node)
+
+    if nt == NODE_VAR_DECL:
+        v: i64 = Memory.read_i64(node + 24)
+        nv: i64 = lift_lambdas_in(ast, v)
+        if nv != v:
+            Memory.write_i64(node + 24, nv)
+        return node
+    if nt == NODE_RETURN:
+        v2: i64 = Memory.read_i64(node + 8)
+        nv2: i64 = lift_lambdas_in(ast, v2)
+        if nv2 != v2:
+            Memory.write_i64(node + 8, nv2)
+        return node
+    if nt == NODE_ASSIGN:
+        # NODE_ASSIGN: name@+8 (str), value@+16
+        v3: i64 = Memory.read_i64(node + 16)
+        nv3: i64 = lift_lambdas_in(ast, v3)
+        if nv3 != v3:
+            Memory.write_i64(node + 16, nv3)
+        return node
+    if nt == NODE_FIELD_ASSIGN:
+        # NODE_FIELD_ASSIGN: obj@+8 (str), field@+16 (str), value@+24
+        v3b: i64 = Memory.read_i64(node + 24)
+        nv3b: i64 = lift_lambdas_in(ast, v3b)
+        if nv3b != v3b:
+            Memory.write_i64(node + 24, nv3b)
+        return node
+    if nt == NODE_FIELD_VAL:
+        v4: i64 = Memory.read_i64(node + 16)
+        nv4: i64 = lift_lambdas_in(ast, v4)
+        if nv4 != v4:
+            Memory.write_i64(node + 16, nv4)
+        return node
+    if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
+        l: i64 = Memory.read_i64(node + 16)
+        r: i64 = Memory.read_i64(node + 24)
+        nl: i64 = lift_lambdas_in(ast, l)
+        nr: i64 = lift_lambdas_in(ast, r)
+        if nl != l:
+            Memory.write_i64(node + 16, nl)
+        if nr != r:
+            Memory.write_i64(node + 24, nr)
+        return node
+
+    # For arg lists on function/method calls — walk each entry and
+    # write the replacement back into the list's data area.
+    if nt == NODE_FUN_CALL or nt == NODE_BUILTIN_CALL:
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 16))
+        return node
+    if nt == NODE_STATIC_METHOD or nt == NODE_INST_METHOD:
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 24))
+        return node
+    if nt == NODE_NESTED_METHOD:
+        in2: i64 = Memory.read_i64(node + 8)
+        nin: i64 = lift_lambdas_in(ast, in2)
+        if nin != in2:
+            Memory.write_i64(node + 8, nin)
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 24))
+        return node
+
+    if nt == NODE_FUN_DEF:
+        # Lift any lambdas nested in the body, but DON'T cross into
+        # generic-fn bodies (their T refs need substitution first).
+        if Memory.read_i64(node + 40) == 0:
+            lift_lambdas_in_list(ast, Memory.read_i64(node + 32))
+        return node
+
+    if nt == NODE_BLOCK:
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 8))
+        return node
+    if nt == NODE_IF:
+        cnd: i64 = Memory.read_i64(node + 8)
+        ncnd: i64 = lift_lambdas_in(ast, cnd)
+        if ncnd != cnd:
+            Memory.write_i64(node + 8, ncnd)
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 16))
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 24))
+        return node
+    if nt == NODE_WHILE:
+        wc: i64 = Memory.read_i64(node + 8)
+        nwc: i64 = lift_lambdas_in(ast, wc)
+        if nwc != wc:
+            Memory.write_i64(node + 8, nwc)
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 16))
+        return node
+
+    return node
+
+fun lift_lambdas_in_list(ast: i64, lst: i64):
+    if lst == 0:
+        return
+    c: i32 = nl_count(lst)
+    cap: i32 = Memory.read_i32(lst + 4)
+    if c > cap:
+        c = cap
+    i: i32 = 0
+    while i < c:
+        old: i64 = nl_get(lst, i)
+        if old != 0:
+            new: i64 = lift_lambdas_in(ast, old)
+            if new != old:
+                Memory.write_i64(lst + 8 + ((i as i64) * 8), new)
+        i = i + 1
+
+# Quick scan: does the AST contain ANY NODE_LAMBDA anywhere?
+# If not, we skip the (possibly-buggy) walker entirely.
+g_has_lambda: i32 = 0
+
+fun scan_for_lambda_node(node: i64):
+    if node < 4096 as i64:
+        return
+    if g_has_lambda == 1:
+        return
+    nt: i32 = nd_type(node)
+    if nt <= 0 or nt > 200:
+        return
+    if nt == NODE_LAMBDA:
+        g_has_lambda = 1
+        return
+    # Recurse into common containers
+    if nt == NODE_VAR_DECL:
+        scan_for_lambda_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_RETURN:
+        scan_for_lambda_node(Memory.read_i64(node + 8))
+        return
+    if nt == NODE_ASSIGN:
+        scan_for_lambda_node(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_FIELD_ASSIGN:
+        scan_for_lambda_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
+        scan_for_lambda_node(Memory.read_i64(node + 16))
+        scan_for_lambda_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_FUN_CALL or nt == NODE_BUILTIN_CALL:
+        scan_for_lambda_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_STATIC_METHOD or nt == NODE_INST_METHOD:
+        scan_for_lambda_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_FUN_DEF:
+        if Memory.read_i64(node + 40) == 0:
+            scan_for_lambda_list(Memory.read_i64(node + 32))
+        return
+
+fun scan_for_lambda_list(lst: i64):
+    if lst == 0:
+        return
+    if g_has_lambda == 1:
+        return
+    c: i32 = nl_count(lst)
+    i: i32 = 0
+    while i < c and g_has_lambda == 0:
+        scan_for_lambda_node(nl_get(lst, i))
+        i = i + 1
+
+fun lambda_lift_pass(ast: i64):
+    g_lambda_counter = 0
+    g_has_lambda = 0
+    scan_for_lambda_list(ast)
+    if g_has_lambda == 0:
+        return
+    lift_lambdas_in_list(ast, ast)
+
+fun monomorphize_pass(ast: i64):
+    init_mono_registry()
+    lambda_lift_pass(ast)
+    mono_walk_list(ast, ast)

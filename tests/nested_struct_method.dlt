@@ -1,0 +1,19 @@
+import std
+
+trait Display:
+    fun show(self) -> str
+
+struct Cat:
+    name: str
+
+extend Cat:
+    fun show(self) -> str:
+        return "cat:" + self.name
+
+# Non-generic outer
+struct Box:
+    item: Cat
+
+c: Cat = Cat(name="luna")
+b: Box = Box(item=c)
+print("box content: " + b.item.show())

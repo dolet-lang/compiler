@@ -1,0 +1,29 @@
+import std
+
+# Audit what T-in-body cases work today.
+
+struct Box<T>:
+    value: T
+
+extend Box:
+    fun get(self) -> T:
+        return self.value
+
+    # Case 1: param type is T → body assigns to self.value
+    fun set(self, v: T):
+        self.value = v
+
+    # Case 2: local var-decl with type T (the one we suspect breaks)
+    fun copy_value(self) -> T:
+        x: T = self.value
+        return x
+
+# Test get/set
+b: Box<i32> = Box<i32>(value=10)
+print("init=" + Convert.i32_to_str(b.get()))
+b.set(42)
+print("after set=" + Convert.i32_to_str(b.get()))
+
+# Test copy_value (uses x: T local)
+c: Box<i64> = Box<i64>(value=99 as i64)
+print("copy=" + Convert.i64_to_str(c.copy_value()))

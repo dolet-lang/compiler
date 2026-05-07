@@ -1,0 +1,22 @@
+import std
+
+# B3 Phase 3: methods on generic structs via extend blocks
+
+struct Box<T>:
+    value: T
+
+extend Box:
+    fun get(self) -> T:
+        return self.value
+    fun describe(self):
+        print("box content stored")
+
+b1: Box<i32> = Box<i32>(value=42)
+print("b1.get=" + Convert.i32_to_str(b1.get()))
+b1.describe()
+
+b2: Box<i64> = Box<i64>(value=1000 as i64)
+print("b2.get=" + Convert.i64_to_str(b2.get()))
+
+b3: Box<str> = Box<str>(value="hello")
+print("b3.get=" + b3.get())

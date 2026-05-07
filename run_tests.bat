@@ -132,6 +132,16 @@ for %%f in (
     result_basic
     try_op
     if_else_nested
+    match_option
+    poly_ctor
+    generic_box
+    generic_methods
+    generic_bounds_ok
+    nested_struct_method
+    qualified_ctors
+    generic_t_body
+    generic_function
+    closures_basic
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
@@ -161,6 +171,7 @@ for %%f in (
     visibility_fail_method
     validate_bare_return
     validate_typo_method
+    generic_bounds_fail
 ) do (
     echo [TEST-MUST-FAIL] %%f
     if exist "tests\%%f.dlt" (

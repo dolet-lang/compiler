@@ -1,0 +1,24 @@
+import std
+
+# B3 Phase 4: trait bounds — happy path.
+# Trait declared, struct that implements it, generic that requires it.
+
+trait Display:
+    fun show(self) -> str
+
+struct Cat:
+    name: str
+
+extend Cat:
+    fun show(self) -> str:
+        return "cat:" + self.name
+
+struct Box<T: Display>:
+    item: T
+
+c: Cat = Cat(name="luna")
+print("direct: " + c.show())
+
+# Box<Cat> — Cat implements Display, so this should validate OK
+b: Box<Cat> = Box<Cat>(item=c)
+print("box content: " + b.item.show())

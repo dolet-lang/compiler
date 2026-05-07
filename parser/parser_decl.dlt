@@ -16,6 +16,9 @@ fun parse_fun_def(is_async: i64) -> i64:
     name: str = cur_val()
     eat(TK_IDENT)
 
+    # Optional type parameters: fun pack<T>(...) or fun map<T, U>(...)
+    fn_type_params: i64 = parse_type_param_list()
+
     # Parse parameters
     eat(TK_LPAREN)
     params: i64 = mk_node_list(16)
@@ -68,11 +71,11 @@ fun parse_fun_def(is_async: i64) -> i64:
         advance()
         skip_newlines()
         body: i64 = parse_indented_block(fi)
-        return mk_fun_def(name, params, ret_type, body, 0, is_variadic, variadic_param, is_async)
+        return mk_fun_def(name, params, ret_type, body, fn_type_params, is_variadic, variadic_param, is_async)
 
     # No colon = abstract method (trait method signature)
     body2: i64 = mk_node_list(4)
-    return mk_fun_def(name, params, ret_type, body2, 0, is_variadic, variadic_param, is_async)
+    return mk_fun_def(name, params, ret_type, body2, fn_type_params, is_variadic, variadic_param, is_async)
 
 # ==========================================
 # Parse Type Parameter List: <T>, <T, U>, <K, V>
@@ -86,7 +89,19 @@ fun parse_type_param_list() -> i64:
     while cur_kind() != TK_GREATER and cur_kind() != TK_EOF:
         pname: str = cur_val()
         eat(TK_IDENT)
-        nl_add(params, pname as i64)
+        # Optional trait bound: T: TraitName
+        bound: str = ""
+        if cur_kind() == TK_COLON:
+            advance()
+            bound = cur_val()
+            eat(TK_IDENT)
+        # Encode as a 16-byte item: [name_i64, bound_i64].
+        # Plain `T` items have bound = "" so existing code that reads
+        # the first slot as a string still works after a Memory.read_i64.
+        item: i64 = Memory.malloc_zeroed(16 as i64)
+        Memory.write_i64(item + 0, pname as i64)
+        Memory.write_i64(item + 8, bound as i64)
+        nl_add(params, item)
         if cur_kind() == TK_COMMA:
             advance()
     eat(TK_GREATER)

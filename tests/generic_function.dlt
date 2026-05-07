@@ -1,0 +1,19 @@
+import std
+
+# Generic functions: explicit type-arg syntax pack<i32>(42).
+
+struct Box<T>:
+    value: T
+
+extend Box:
+    fun get(self) -> T:
+        return self.value
+
+fun pack<T>(x: T) -> Box<T>:
+    return Box<T>(value=x)
+
+a: Box<i32> = pack<i32>(42)
+print("a=" + Convert.i32_to_str(a.get()))
+
+b: Box<str> = pack<str>("hello")
+print("b=" + b.get())

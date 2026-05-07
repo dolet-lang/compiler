@@ -220,8 +220,91 @@ fun parse_primary() -> i64:
     if k == TK_IDENT:
         return parse_ident_expr()
 
+    # C1: lambda expression `|args| body` or `|args|: <block>`.
+    # `|` only appears as a binary operator AFTER an operand, so seeing it
+    # at the start of a primary expression is unambiguously a lambda.
+    if k == TK_BIT_OR:
+        return parse_lambda()
+
     panic(@"Unexpected token in expression: kind={k} val='{cur_val()}'")
     return 0
+
+# C1: parse `|args| expr` or `|args|: <indented-block>`.
+fun parse_lambda() -> i64:
+    li: i32 = cur_indent()
+    eat(TK_BIT_OR)
+    params: i64 = mk_node_list(8)
+    while cur_kind() != TK_BIT_OR and cur_kind() != TK_EOF:
+        pname: str = cur_val()
+        eat(TK_IDENT)
+        ptype: str = ""
+        if cur_kind() == TK_COLON:
+            advance()
+            ptype = parse_type_name()
+        nl_add(params, mk_param(pname, ptype, 0))
+        if cur_kind() == TK_COMMA:
+            advance()
+    eat(TK_BIT_OR)
+
+    # Optional return-type annotation: |x| -> i32 ...
+    ret_type: str = ""
+    if cur_kind() == TK_ARROW:
+        advance()
+        ret_type = parse_type_name()
+
+    # Body: `|x|: <block>` or single-expression `|x| expr`
+    body: i64 = mk_node_list(4)
+    if cur_kind() == TK_COLON:
+        advance()
+        skip_newlines()
+        body = parse_indented_block(li)
+    else:
+        # Single expression — wrap in implicit return
+        expr: i64 = parse_expression()
+        nl_add(body, mk_return(expr))
+    return mk_lambda(params, body, ret_type)
+
+# B3: Lookahead — does `<` here open a generic type-arg list?
+# Returns 1 if the `<...>` is balanced and immediately followed by `(`.
+# Used to disambiguate `Box<i32>(value=42)` from `a < b > c`.
+fun looks_like_type_args() -> i32:
+    if cur_kind() != TK_LESS:
+        return 0
+    depth: i32 = 1
+    off: i32 = 1
+    safety: i32 = 0
+    while depth > 0 and safety < 64:
+        k: i32 = peek_kind(off)
+        if k == TK_LESS:
+            depth = depth + 1
+        elif k == TK_GREATER:
+            depth = depth - 1
+            if depth == 0:
+                return peek_kind(off + 1) == TK_LPAREN as i32
+        elif k == TK_SHIFT_RIGHT:
+            depth = depth - 2
+            if depth <= 0:
+                return peek_kind(off + 1) == TK_LPAREN as i32
+        elif k == TK_EOF or k == TK_NEWLINE or k == TK_SEMICOLON:
+            return 0
+        elif k == TK_LEFT_BRACE or k == TK_RIGHT_BRACE or k == TK_RPAREN:
+            return 0
+        off = off + 1
+        safety = safety + 1
+    return 0
+
+# B3: Parse `<T1, T2>` into a node_list of type-name strings.
+# Caller already at TK_LESS; consumes through closing `>`.
+fun parse_type_arg_list() -> i64:
+    eat(TK_LESS)
+    args: i64 = mk_node_list(4)
+    while cur_kind() != TK_GREATER and cur_kind() != TK_SHIFT_RIGHT and cur_kind() != TK_EOF:
+        tn: str = parse_type_name()
+        nl_add(args, tn as i64)
+        if cur_kind() == TK_COMMA:
+            advance()
+    eat_greater()
+    return args
 
 # ==========================================
 # Identifier Expression
@@ -230,6 +313,16 @@ fun parse_primary() -> i64:
 fun parse_ident_expr() -> i64:
     name: str = cur_val()
     eat(TK_IDENT)
+
+    # B3: Generic struct instantiation / function call: Box<i32>(value=42)
+    # Disambiguated by lookahead — `<...>(` is generic, anything else is `<` operator.
+    if cur_kind() == TK_LESS and looks_like_type_args() == 1:
+        type_args: i64 = parse_type_arg_list()
+        cargs_g: i64 = parse_arg_list()
+        fc_g: i64 = mk_fun_call(name, cargs_g, type_args)
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
+            return parse_chained_dot(fc_g)
+        return fc_g
 
     # Function call: name(args)
     if cur_kind() == TK_LPAREN:

@@ -137,10 +137,10 @@ TK_CHAR_TYPE: i32 = 134
 # indents buffer: i32 array (4 bytes each)
 # ==========================================
 
-MAX_TOKENS: i32 = 131072
-out_kinds: i64 = Memory.malloc_zeroed(524288)
-out_values: i64 = Memory.malloc_zeroed(1048576)
-out_indents: i64 = Memory.malloc_zeroed(524288)
+MAX_TOKENS: i32 = 524288
+out_kinds: i64 = Memory.malloc_zeroed(2097152)
+out_values: i64 = Memory.malloc_zeroed(4194304)
+out_indents: i64 = Memory.malloc_zeroed(2097152)
 out_count: i32 = 0
 
 fun emit_token(kind: i32, value: str, indent: i32):

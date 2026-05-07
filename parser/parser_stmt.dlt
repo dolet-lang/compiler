@@ -327,7 +327,7 @@ fun parse_pattern() -> i64:
         advance()
         return mk_pattern("value", bv as i64, 0, 0, 0, "", "", "", 0)
 
-    # Identifier: variable pattern or enum access
+    # Identifier: variable pattern, enum access, or sum-type constructor
     if k == TK_IDENT:
         name: str = cur_val()
         eat(TK_IDENT)
@@ -338,6 +338,26 @@ fun parse_pattern() -> i64:
             variant: str = cur_val()
             eat(TK_IDENT)
             return mk_pattern("enum", 0, 0, 0, 0, "", name, variant, 0)
+
+        # Constructor pattern for Option/Result:
+        #   case Some(x): / case Ok(x): / case Err(e): / case None:
+        # Stores variant_name (Some/None/Ok/Err) in slot +64,
+        # bind variable name (x/e or "") in slot +48.
+        if str_eq(name, "Some") == 1 or str_eq(name, "Ok") == 1 or str_eq(name, "Err") == 1:
+            bind: str = ""
+            if cur_kind() == TK_LPAREN:
+                eat(TK_LPAREN)
+                if cur_kind() == TK_IDENT:
+                    bind = cur_val()
+                    eat(TK_IDENT)
+                eat(TK_RPAREN)
+            return mk_pattern("ctor", 0, 0, 0, 0, bind, "", name, 0)
+        if str_eq(name, "None") == 1:
+            # Optional empty parens for symmetry: case None():
+            if cur_kind() == TK_LPAREN:
+                eat(TK_LPAREN)
+                eat(TK_RPAREN)
+            return mk_pattern("ctor", 0, 0, 0, 0, "", "", "None", 0)
 
         # Variable capture pattern
         return mk_pattern("variable", 0, 0, 0, 0, name, "", "", 0)

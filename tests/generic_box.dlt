@@ -1,0 +1,21 @@
+import std
+
+# B3 Phase 2: User-defined generic struct with monomorphization
+struct Box<T>:
+    value: T
+
+# Box<i32> instantiation
+b1: Box<i32> = Box<i32>(value=42)
+print("b1=" + Convert.i32_to_str(b1.value))
+
+# Box<i64> — separate monomorphization
+b2: Box<i64> = Box<i64>(value=1000 as i64)
+print("b2=" + Convert.i64_to_str(b2.value))
+
+# Box<str>
+b3: Box<str> = Box<str>(value="hello")
+print("b3=" + b3.value)
+
+# Box<bool>
+b4: Box<bool> = Box<bool>(value=true)
+print("b4=" + Convert.bool_to_str(b4.value))

@@ -1,0 +1,18 @@
+import std
+
+# B3 Phase 4: trait bounds — must FAIL to compile.
+# Cat does NOT implement Display, so Box<Cat: Display> should reject.
+
+trait Display:
+    fun show(self) -> str
+
+struct Cat:
+    name: str
+
+# Cat does NOT have show() defined → bound violation
+
+struct Box<T: Display>:
+    item: T
+
+c: Cat = Cat(name="luna")
+b: Box<Cat> = Box<Cat>(item=c)

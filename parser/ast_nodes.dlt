@@ -126,6 +126,12 @@ NODE_ANNOT_DEF: i32 = 170
 NODE_ANNOT_PARAM: i32 = 171
 NODE_ANNOT_USE: i32 = 172
 
+# C1 Phase 1: lambda expression — `|args| body` or `|args|: <block>`.
+# Captures are NOT supported in Phase 1. Lambda lifting (in
+# codegen_mono.dlt or a sibling pass) converts these to a top-level
+# fn_def + a NODE_FUN_REF to that fn.
+NODE_LAMBDA: i32 = 180
+
 # Helpers (not in Python AST but needed for Dolet representation)
 NODE_PARAM: i32 = 150
 NODE_FIELD_VAL: i32 = 151
@@ -679,6 +685,24 @@ fun param_ptype(n: i64) -> str:
 
 fun param_nullable(n: i64) -> i64:
     return Memory.read_i64(n + 24)
+
+# LambdaNode: f0=params (node_list of NODE_PARAM), f1=body (node_list of stmts),
+#             f2=ret_type (str, "" if to be inferred)
+fun mk_lambda(params: i64, body: i64, ret_type: str) -> i64:
+    n: i64 = alloc_node(NODE_LAMBDA)
+    Memory.write_i64(n + 8, params)
+    Memory.write_i64(n + 16, body)
+    Memory.write_i64(n + 24, ret_type as i64)
+    return n
+
+fun lambda_params(n: i64) -> i64:
+    return Memory.read_i64(n + 8)
+
+fun lambda_body(n: i64) -> i64:
+    return Memory.read_i64(n + 16)
+
+fun lambda_ret_type(n: i64) -> str:
+    return Memory.read_i64(n + 24) as str
 
 # FunctionCallNode: f0=name (str), f1=args (node_list), f2=type_args (node_list, 0 if none)
 fun mk_fun_call(name: str, args: i64, type_args: i64) -> i64:
