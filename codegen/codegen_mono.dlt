@@ -602,27 +602,323 @@ fun next_lambda_name() -> str:
     g_lambda_counter = g_lambda_counter + 1
     return n
 
-# Lift one lambda node into a top-level fun_def. Returns a fun_ref
-# that replaces the lambda at its use site.
+# ==========================================
+# Phase 2: Capture analysis
+# Walks a lambda body to find VAR_REF names that aren't:
+#   (a) the lambda's own params
+#   (b) registered globals
+#   (c) registered top-level functions
+# Those are "free variables" — captures from the enclosing scope.
+# ==========================================
+
+# Returns 1 if `name` is in the params list (skipping the lambda's own args).
+fun is_lambda_param(name: str, params: i64) -> i32:
+    if params == 0:
+        return 0
+    pc: i32 = nl_count(params)
+    pi: i32 = 0
+    while pi < pc:
+        p: i64 = nl_get(params, pi)
+        pn: str = Memory.read_i64(p + 8) as str
+        if str_eq(pn, name) == 1:
+            return 1
+        pi = pi + 1
+    return 0
+
+# A var name is "captured" if not a param of the lambda, not a global,
+# not a top-level fn name. We use the codegen registries (already
+# populated at this stage) to filter.
+fun is_capture(name: str, params: i64, scope_capt: i64) -> i32:
+    if is_lambda_param(name, params) == 1:
+        return 0
+    if is_global_var(name) == 1:
+        return 0
+    # Top-level fn?
+    if str_eq(get_fun_ret_type(name), "unknown") == 0:
+        return 0
+    # Already collected?
+    if scope_capt != 0:
+        c: i32 = nl_count(scope_capt)
+        i: i32 = 0
+        while i < c:
+            if str_eq(nl_get(scope_capt, i) as str, name) == 1:
+                return 0
+            i = i + 1
+    return 1
+
+# Walk node and collect names of free variables into `out`.
+fun collect_caps_node(node: i64, params: i64, out: i64):
+    if node < 4096 as i64:
+        return
+    nt: i32 = nd_type(node)
+    if nt <= 0 or nt > 200:
+        return
+    if nt == NODE_VAR_REF:
+        name: str = Memory.read_i64(node + 8) as str
+        if is_capture(name, params, out) == 1:
+            nl_add(out, name as i64)
+        return
+    if nt == NODE_RETURN or nt == NODE_PAREN or nt == NODE_TRY_OP or nt == NODE_UNARY_OP:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        return
+    if nt == NODE_VAR_DECL:
+        collect_caps_node(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_ASSIGN or nt == NODE_FIELD_VAL:
+        collect_caps_node(Memory.read_i64(node + 16), params, out)
+        return
+    if nt == NODE_FIELD_ASSIGN:
+        collect_caps_node(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP or nt == NODE_STR_CONCAT:
+        collect_caps_node(Memory.read_i64(node + 16), params, out)
+        collect_caps_node(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_TERNARY:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        collect_caps_node(Memory.read_i64(node + 16), params, out)
+        collect_caps_node(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_FUN_CALL or nt == NODE_BUILTIN_CALL:
+        collect_caps_list(Memory.read_i64(node + 16), params, out)
+        return
+    if nt == NODE_STATIC_METHOD or nt == NODE_INST_METHOD:
+        collect_caps_list(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_NESTED_METHOD:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        collect_caps_list(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_NESTED_FIELD:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        return
+    if nt == NODE_CAST:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        return
+    if nt == NODE_BLOCK:
+        collect_caps_list(Memory.read_i64(node + 8), params, out)
+        return
+    if nt == NODE_IF:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        collect_caps_list(Memory.read_i64(node + 16), params, out)
+        collect_caps_list(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_WHILE:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        collect_caps_list(Memory.read_i64(node + 16), params, out)
+        return
+
+fun collect_caps_list(lst: i64, params: i64, out: i64):
+    if lst == 0:
+        return
+    c: i32 = nl_count(lst)
+    i: i32 = 0
+    while i < c:
+        collect_caps_node(nl_get(lst, i), params, out)
+        i = i + 1
+
+# Find the type of `name` by searching `scope_body` for a NODE_VAR_DECL
+# or by checking if it's a fn-param of the enclosing fn (which we don't
+# easily have — fall back to "i64" if the decl isn't found).
+fun find_capture_type(scope_body: i64, scope_params: i64, name: str) -> str:
+    # Check enclosing fn's params first
+    if scope_params != 0:
+        pc: i32 = nl_count(scope_params)
+        pi: i32 = 0
+        while pi < pc:
+            p: i64 = nl_get(scope_params, pi)
+            pn: str = Memory.read_i64(p + 8) as str
+            if str_eq(pn, name) == 1:
+                return Memory.read_i64(p + 16) as str
+            pi = pi + 1
+    # Check for a var_decl with this name in scope_body
+    if scope_body != 0:
+        bc: i32 = nl_count(scope_body)
+        bi: i32 = 0
+        while bi < bc:
+            stmt: i64 = nl_get(scope_body, bi)
+            if stmt != 0:
+                if nd_type(stmt) == NODE_VAR_DECL:
+                    vname: str = Memory.read_i64(stmt + 16) as str
+                    if str_eq(vname, name) == 1:
+                        return Memory.read_i64(stmt + 8) as str
+            bi = bi + 1
+    return "i64"
+
+# Pick the right Memory.read_X method for a capture's type.
+fun mem_read_for_type(t: str) -> str:
+    if str_eq(t, "i32") == 1:
+        return "read_i32"
+    if str_eq(t, "i64") == 1:
+        return "read_i64"
+    if str_eq(t, "bool") == 1:
+        return "read_i32"
+    if str_eq(t, "f64") == 1:
+        return "read_f64"
+    if str_eq(t, "f32") == 1:
+        return "read_f32"
+    return "read_i64"
+
+# Pick the right Memory.write_X method for a capture's type.
+fun mem_write_for_type(t: str) -> str:
+    if str_eq(t, "i32") == 1:
+        return "write_i32"
+    if str_eq(t, "i64") == 1:
+        return "write_i64"
+    if str_eq(t, "bool") == 1:
+        return "write_i32"
+    if str_eq(t, "f64") == 1:
+        return "write_f64"
+    if str_eq(t, "f32") == 1:
+        return "write_f32"
+    return "write_i64"
+
+# Scope tracking — enclosing fn's body+params, used by capture analysis
+# to look up types of captured local vars.
+g_lift_scope_body: i64 = 0
+g_lift_scope_params: i64 = 0
+
+# Lift one lambda node into a top-level fun_def. If the body has free
+# variables (captures from enclosing scope), generate an env-allocating
+# factory and rewrite to call it. Returns the replacement expression.
 fun lift_one_lambda(ast: i64, node: i64) -> i64:
     params: i64 = Memory.read_i64(node + 8)
     body: i64 = Memory.read_i64(node + 16)
     ret_type: str = Memory.read_i64(node + 24) as str
     if (ret_type as i64) == 0:
         ret_type = ""
-    # If ret_type was not specified, leave it empty — codegen infers
-    # from the return statement. (Phase 2 may add proper inference.)
+
+    # Phase 2: capture analysis — collect free variable names
+    captures: i64 = mk_node_list(8)
+    collect_caps_list(body, params, captures)
+    cap_count: i32 = nl_count(captures)
+
+    # NOTE: even non-capturing lambdas go through env convention so the
+    # gen_indirect_call site has uniform handling. Tiny env = {fn_ptr}.
+    # cap_count is 0 here for that case.
+
+    # Phase 2 path — captures present. Build:
+    #   1) cap_types[]    — types of each captured name (from enclosing scope)
+    #   2) lifted fn      — takes env: ptr first, body prepended with
+    #                       `<name>: <type> = Memory.read_X(env + offset)`
+    #   3) factory fn     — takes captures as params, mallocs env,
+    #                       writes fn_ptr + captures, returns env ptr
+    #   4) replacement    — NODE_FUN_CALL to factory passing captured values
+
+    # Allocate parallel arrays for type / offset
+    cap_types: i64 = mk_node_list(8)
+    ci: i32 = 0
+    while ci < cap_count:
+        cn: str = nl_get(captures, ci) as str
+        ct: str = find_capture_type(g_lift_scope_body, g_lift_scope_params, cn)
+        nl_add(cap_types, ct as i64)
+        ci = ci + 1
 
     name: str = next_lambda_name()
-    fn_def: i64 = mk_fun_def(name, params, ret_type, body, 0, 0, "", 0)
+    factory_name: str = Str.concat(name, "_make")
+
+    # ------ Build lifted fn ------
+    new_params: i64 = mk_node_list(8)
+    nl_add(new_params, mk_param("__env", "ptr", 0))
+    pp: i32 = 0
+    if params != 0:
+        ppc: i32 = nl_count(params)
+        while pp < ppc:
+            nl_add(new_params, nl_get(params, pp))
+            pp = pp + 1
+
+    # Prepend var-decls that load each capture from env
+    new_body: i64 = mk_node_list(16)
+    cj: i32 = 0
+    while cj < cap_count:
+        cn2: str = nl_get(captures, cj) as str
+        ct2: str = nl_get(cap_types, cj) as str
+        offset_lit: i64 = mk_int_lit(8 + (cj as i64) * 8)
+        env_as_i64: i64 = mk_cast(mk_var_ref("__env"), "i64")
+        addr_expr: i64 = mk_binary_op("+", env_as_i64, offset_lit)
+        rargs: i64 = mk_node_list(2)
+        nl_add(rargs, addr_expr)
+        rcall: i64 = mk_static_method("Memory", mem_read_for_type(ct2), rargs)
+        # str needs cast back from i64
+        rval: i64 = rcall
+        if str_eq(ct2, "str") == 1:
+            rval = mk_cast(rcall, "str")
+        nl_add(new_body, mk_var_decl(ct2, cn2, rval, 0, 0, 0))
+        cj = cj + 1
+    # Append original body statements
+    if body != 0:
+        bc: i32 = nl_count(body)
+        bi2: i32 = 0
+        while bi2 < bc:
+            nl_add(new_body, nl_get(body, bi2))
+            bi2 = bi2 + 1
+
+    fn_def: i64 = mk_fun_def(name, new_params, ret_type, new_body, 0, 0, "", 0)
     nl_add(ast, fn_def)
+    fn_pt: str = build_param_types_str(new_params)
+    fn_mang: str = register_overload(name, fn_pt)
+    register_fun_sig_with_params(fn_mang, ret_type, fn_pt)
 
-    # Register signature for callers
-    pt_str: str = build_param_types_str(params)
-    mangled: str = register_overload(name, pt_str)
-    register_fun_sig_with_params(mangled, ret_type, pt_str)
+    # ------ Build factory fn ------
+    # fun __lambda_N_make(c1: T1, c2: T2, ...) -> ptr:
+    #     addr: i64 = Memory.malloc(sz as i64) as i64
+    #     Memory.write_i64(addr, __lambda_N as i64)
+    #     Memory.write_X(addr + 8,  c1)
+    #     Memory.write_X(addr + 16, c2)
+    #     return addr as ptr
+    fact_params: i64 = mk_node_list(8)
+    ck: i32 = 0
+    while ck < cap_count:
+        cn3: str = nl_get(captures, ck) as str
+        ct3: str = nl_get(cap_types, ck) as str
+        nl_add(fact_params, mk_param(cn3, ct3, 0))
+        ck = ck + 1
+    fact_body: i64 = mk_node_list(16)
+    sz_bytes: i64 = 8 + (cap_count as i64) * 8
+    # addr: i64 = Memory.malloc(sz)
+    malloc_args: i64 = mk_node_list(2)
+    nl_add(malloc_args, mk_int_lit(sz_bytes))
+    malloc_call: i64 = mk_static_method("Memory", "malloc", malloc_args)
+    addr_decl: i64 = mk_var_decl("i64", "__addr", mk_cast(malloc_call, "i64"), 0, 0, 0)
+    nl_add(fact_body, addr_decl)
+    # Memory.write_i64(addr, __lambda_N as i64)
+    fnref_args: i64 = mk_node_list(2)
+    nl_add(fnref_args, mk_var_ref("__addr"))
+    nl_add(fnref_args, mk_cast(mk_fun_ref(name), "i64"))
+    nl_add(fact_body, mk_static_method("Memory", "write_i64", fnref_args))
+    # Per-capture writes
+    cm: i32 = 0
+    while cm < cap_count:
+        cn4: str = nl_get(captures, cm) as str
+        ct4: str = nl_get(cap_types, cm) as str
+        write_off: i64 = mk_int_lit(8 + (cm as i64) * 8)
+        write_addr: i64 = mk_binary_op("+", mk_var_ref("__addr"), write_off)
+        write_args: i64 = mk_node_list(2)
+        nl_add(write_args, write_addr)
+        # str needs cast to i64
+        write_val: i64 = mk_var_ref(cn4)
+        if str_eq(ct4, "str") == 1:
+            write_val = mk_cast(mk_var_ref(cn4), "i64")
+        nl_add(write_args, write_val)
+        nl_add(fact_body, mk_static_method("Memory", mem_write_for_type(ct4), write_args))
+        cm = cm + 1
+    # return __addr as ptr
+    nl_add(fact_body, mk_return(mk_cast(mk_var_ref("__addr"), "ptr")))
 
-    return mk_fun_ref(name)
+    fact_def: i64 = mk_fun_def(factory_name, fact_params, "ptr", fact_body, 0, 0, "", 0)
+    nl_add(ast, fact_def)
+    fact_pt: str = build_param_types_str(fact_params)
+    fact_mang: str = register_overload(factory_name, fact_pt)
+    register_fun_sig_with_params(fact_mang, "ptr", fact_pt)
+
+    # ------ Build replacement: factory_name(captured_var_refs...) ------
+    call_args: i64 = mk_node_list(8)
+    co: i32 = 0
+    while co < cap_count:
+        cn5: str = nl_get(captures, co) as str
+        nl_add(call_args, mk_var_ref(cn5))
+        co = co + 1
+    return mk_fun_call(factory_name, call_args, 0)
 
 # Recursively walk a node, lifting any nested lambdas. Returns the
 # (possibly replaced) node so callers can write the new pointer back
@@ -703,7 +999,14 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
         # Lift any lambdas nested in the body, but DON'T cross into
         # generic-fn bodies (their T refs need substitution first).
         if Memory.read_i64(node + 40) == 0:
+            # Push scope (enclosing fn body+params) for capture analysis
+            old_body: i64 = g_lift_scope_body
+            old_params: i64 = g_lift_scope_params
+            g_lift_scope_body = Memory.read_i64(node + 32)
+            g_lift_scope_params = Memory.read_i64(node + 16)
             lift_lambdas_in_list(ast, Memory.read_i64(node + 32))
+            g_lift_scope_body = old_body
+            g_lift_scope_params = old_params
         return node
 
     if nt == NODE_BLOCK:

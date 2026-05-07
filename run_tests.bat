@@ -142,6 +142,7 @@ for %%f in (
     generic_t_body
     generic_function
     closures_basic
+    closures_local
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

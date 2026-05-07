@@ -293,21 +293,25 @@ fun parse_fun_ptr_ret_type(ftype: str) -> str:
     return "void"
 
 fun gen_indirect_call(node: i64, fname: str, fvar_type: str, args_list: i64) -> str:
-    # Load the function pointer from the variable (param / local / global)
+    # C1 Phase 2: closures use uniform env-convention. The variable holds
+    # an env pointer; offset 0 is the fn pointer; captures follow.
+    # Calling convention: fn(env_ptr, original_args...)
     mlir_nm: str = get_mlir_name(fname)
-    fp_val: str = ""
+    env_val: str = ""
     if is_param_var(fname) == 1:
-        # Function parameter — already an SSA value, no load needed
-        fp_val = Str.concat("%", mlir_nm)
+        env_val = Str.concat("%", mlir_nm)
     elif is_global_var(fname) == 1:
-        fp_src: str = emit_addr_of(mlir_nm)
-        fp_val = emit_load(fp_src, "!llvm.ptr")
+        env_src: str = emit_addr_of(mlir_nm)
+        env_val = emit_load(env_src, "!llvm.ptr")
     else:
-        fp_val = emit_load(Str.concat("%", mlir_nm), "!llvm.ptr")
+        env_val = emit_load(Str.concat("%", mlir_nm), "!llvm.ptr")
 
-    # Build argument list
-    arg_str: str = ""
-    type_str: str = ""
+    # Load fn pointer from env's offset 0
+    fp_val: str = emit_load(env_val, "!llvm.ptr")
+
+    # Build argument list — env is first, then user args
+    arg_str: str = env_val
+    type_str: str = "!llvm.ptr"
     ac: i32 = 0
     if args_list != 0:
         ac = nl_count(args_list)
@@ -319,20 +323,16 @@ fun gen_indirect_call(node: i64, fname: str, fvar_type: str, args_list: i64) -> 
             at = "i64"
         av: str = gen_expr(anode, at)
         amt: str = mlir_type(at)
-        if ii > 0:
-            arg_str = Str.concat(arg_str, ", ")
-            type_str = Str.concat(type_str, ", ")
-        arg_str = Str.concat(arg_str, av)
-        type_str = Str.concat(type_str, amt)
+        arg_str = Str.concat(arg_str, Str.concat(", ", av))
+        type_str = Str.concat(type_str, Str.concat(", ", amt))
         ii = ii + 1
 
-    # Parse return type from function pointer type
+    # Parse return type from fun-ptr declared type
     ret_type: str = parse_fun_ptr_ret_type(fvar_type)
     ret_mt: str = ""
     if str_eq(ret_type, "void") == 0 and str_eq(ret_type, "") == 0:
         ret_mt = mlir_type(ret_type)
 
-    # Emit indirect call — MLIR syntax: llvm.call %ptr(args) : !llvm.ptr, (arg_types) -> ret_type
     if str_eq(ret_mt, "") == 1:
         emit_ind(Str.concat3(Str.concat3("llvm.call ", fp_val, "("), arg_str, Str.concat3(") : !llvm.ptr, (", type_str, ") -> ()")))
         return ""
