@@ -905,6 +905,16 @@ g_continue_label: str = ""
 # 0 = compiler internals (Memory.* / _scope_arena_* / _str_*) — skip.
 g_arena_emit: i32 = 0
 
+# Stack-trace instrumentation — set by --debug flag, read by codegen.
+# When 1, every non-exempt function gets __frame_push/__frame_pop calls
+# wrapped around its body so dolet_panic can print a multi-frame trace.
+# Default 0 → release builds compile to identical code as before.
+g_debug_mode: i32 = 0
+# Per-function decision: 1 if this function should emit __frame_push/pop.
+# Set by gen_fun_def/gen_method_def after consulting g_debug_mode and
+# is_frame_exempt. Read by gen_return and the implicit-return paths.
+g_debug_emit: i32 = 0
+
 fun is_arena_exempt(mlir_fname: str) -> i32:
     # Scope arena helpers themselves — must never recurse through arena.
     if str_eq(mlir_fname, "_scope_arena_push") == 1:
@@ -956,8 +966,61 @@ fun is_arena_exempt(mlir_fname: str) -> i32:
         return 1
     return 0
 
-# ==========================================
-# Annotation Registry
+# Frame-tracking exempt list. Used only when --debug is on. Skips:
+#   1. Frame helpers themselves (__frame_push/__frame_pop/__print_stack_trace)
+#      — instrumenting them would self-recurse on every push.
+#   2. Anything is_arena_exempt already skips — these are runtime helpers
+#      that allocate or do raw memory work, transitively reached from
+#      __frame_push (Memory.malloc_zeroed, _scope_arena_*, _str_*, etc.).
+#   3. The panic + I/O lowering helpers — dolet_panic and print/println
+#      run while a panic is in progress; instrumenting them would push
+#      frames AFTER we already started printing the trace.
+#   4. The Str_*, Convert_*, IOOps_*, Process_* runtime families — these
+#      are called from inside __print_stack_trace and from print itself;
+#      a hot-path loop printing N frames would re-enter __frame_push
+#      a few hundred times for no useful information.
+fun is_frame_exempt(mlir_fname: str) -> i32:
+    if Str.starts_with(mlir_fname, "__") == true:
+        return 1
+    if is_arena_exempt(mlir_fname) == 1:
+        return 1
+    if str_eq(mlir_fname, "dolet_panic") == 1:
+        return 1
+    if str_eq(mlir_fname, "print") == 1:
+        return 1
+    if str_eq(mlir_fname, "println") == 1:
+        return 1
+    if Str.starts_with(mlir_fname, "print_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "println_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "Str_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "Convert_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "IOOps_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "Process_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "FileOps_") == true:
+        return 1
+    return 0
+
+# Emits `llvm.call @__frame_push(@.name, @.file) : (!llvm.ptr, !llvm.ptr) -> ()`.
+# The two str literals are registered through gen_string_const so they
+# share the same global-string deduplication every str literal uses.
+# Caller must ensure g_debug_emit == 1 before calling.
+fun emit_frame_push(fname: str):
+    name_label: str = gen_string_const(fname)
+    file_label: str = gen_string_const(g_source_file_basename)
+    name_ptr: str = new_tmp()
+    file_ptr: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(name_ptr, " = llvm.mlir.addressof "), name_label), " : !llvm.ptr"))
+    emit_ind(Str.concat(Str.concat(Str.concat(file_ptr, " = llvm.mlir.addressof "), file_label), " : !llvm.ptr"))
+    emit_ind(Str.concat(Str.concat(Str.concat("llvm.call @__frame_push(", name_ptr), Str.concat(", ", file_ptr)), ") : (!llvm.ptr, !llvm.ptr) -> ()"))
+
+fun emit_frame_pop():
+    emit_ind("llvm.call @__frame_pop() : () -> ()")
 # Parallel arrays storing custom annotation definitions
 g_annot_names: i64 = 0
 g_annot_targets: i64 = 0

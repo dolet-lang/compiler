@@ -750,6 +750,15 @@ fun generate(ast: i64) -> str:
         g_arena_emit = 1
         emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
 
+        # Note: we deliberately do NOT push a "main" frame here. The first
+        # statements inside main are the zero-init stores for every global
+        # `g_x: T = 0` declaration (including the frame stack's own
+        # globals), which would clobber any frame pushed before them.
+        # Without an injection point between the init block and user code,
+        # frames pushed by user functions called from main are sufficient
+        # — the panic prefix already pinpoints the panic site, so a
+        # top-level panic just shows no extra trace lines.
+
         # Generate all top-level statements in source order
         # (var decls with init values are generated inline, preserving execution order)
         gen_main_body(ast)

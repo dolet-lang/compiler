@@ -1,0 +1,20 @@
+import std
+
+# Multi-level call chain. With --debug each function should appear in
+# the printed stack trace, deepest first.
+
+fun divide(a: i32, b: i32) -> i32:
+    if b == 0:
+        panic("division by zero")
+    return a / b
+
+fun compute_avg(total: i32, count: i32) -> i32:
+    return divide(total, count)
+
+fun process_batch():
+    avg: i32 = compute_avg(100, 0)
+    print(avg)
+
+print("starting")
+process_batch()
+print("UNREACHABLE")

@@ -1599,6 +1599,7 @@ fun main() -> i32:
         IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
         IOOps.io_println("  --no-runtime       Don't auto-import runtime libraries")
         IOOps.io_println("  --no-console       GUI mode (no console window)")
+        IOOps.io_println("  --debug            Emit stack-trace instrumentation (panic prints call chain)")
         IOOps.io_println("  --version          Show compiler version")
         return 1
 
@@ -1639,6 +1640,12 @@ fun main() -> i32:
             g_validate_enabled = 0
         elif str_eq(arg, "--validate") == 1:
             g_validate_enabled = 1
+        elif str_eq(arg, "--debug") == 1:
+            # Wraps every non-exempt function with __frame_push/__frame_pop
+            # so dolet_panic can print a multi-frame stack trace. Off by
+            # default: release builds compile to identical code as before
+            # this flag was introduced.
+            g_debug_mode = 1
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:

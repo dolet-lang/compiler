@@ -96,6 +96,7 @@ fun gen_fun_def(node: i64):
     old_ret_type: str = g_cur_fn_ret_type
     old_fn_name: str = g_cur_fn_name
     old_arena_emit: i32 = g_arena_emit
+    old_debug_emit: i32 = g_debug_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = fname
@@ -111,6 +112,14 @@ fun gen_fun_def(node: i64):
         g_arena_emit = 0
     else:
         g_arena_emit = 1
+
+    # Mirror for stack-trace instrumentation. Independent decision: a
+    # str-returning function still wants frame push/pop (push doesn't
+    # touch the return value).
+    if g_debug_mode == 1 and is_frame_exempt(mlir_fname) == 0:
+        g_debug_emit = 1
+    else:
+        g_debug_emit = 0
 
     push_var_scope()
 
@@ -144,6 +153,11 @@ fun gen_fun_def(node: i64):
     if g_arena_emit == 1:
         emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
 
+    # Frame push for --debug stack traces. Use the unmangled fname so
+    # users see "divide" not "Calculator_divide_i32_i32".
+    if g_debug_emit == 1:
+        emit_frame_push(fname)
+
     if body != 0:
         gen_block(body)
 
@@ -158,6 +172,8 @@ fun gen_fun_def(node: i64):
         if body == 0 or block_always_returns(body) == 0:
             if g_arena_emit == 1:
                 emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+            if g_debug_emit == 1:
+                emit_frame_pop()
             emit_ind("llvm.return")
     else:
         if body == 0 or block_always_returns(body) == 0:
@@ -166,18 +182,24 @@ fun gen_fun_def(node: i64):
                 def_ret: str = emit_zero_ptr()
                 if g_arena_emit == 1:
                     emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+                if g_debug_emit == 1:
+                    emit_frame_pop()
                 emit_ind(Str.concat(Str.concat("llvm.return ", def_ret), " : !llvm.ptr"))
             elif is_int_type(ret_type) == 1:
                 def_ret2: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret2, " = llvm.mlir.constant(0 : "), ret_mt), Str.concat(") : ", ret_mt)))
                 if g_arena_emit == 1:
                     emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+                if g_debug_emit == 1:
+                    emit_frame_pop()
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret2), " : "), ret_mt))
             elif is_float_type(ret_type) == 1:
                 def_ret3: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret3, " = llvm.mlir.constant(0.0 : "), ret_mt), Str.concat(") : ", ret_mt)))
                 if g_arena_emit == 1:
                     emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+                if g_debug_emit == 1:
+                    emit_frame_pop()
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret3), " : "), ret_mt))
 
     pop_var_scope()
@@ -187,6 +209,7 @@ fun gen_fun_def(node: i64):
     g_cur_fn_ret_type = old_ret_type
     g_cur_fn_name = old_fn_name
     g_arena_emit = old_arena_emit
+    g_debug_emit = old_debug_emit
 
     indent_dec()
     emit_ind("}")
@@ -354,6 +377,7 @@ fun gen_method_def(struct_name: str, node: i64):
     old_fn_name: str = g_cur_fn_name
     old_method_struct: str = g_cur_method_struct
     old_arena_emit_m: i32 = g_arena_emit
+    old_debug_emit_m: i32 = g_debug_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = mangled
@@ -367,6 +391,12 @@ fun gen_method_def(struct_name: str, node: i64):
         g_arena_emit = 0
     else:
         g_arena_emit = 1
+
+    # --debug stack-trace instrumentation for methods.
+    if g_debug_mode == 1 and is_frame_exempt(mangled) == 0:
+        g_debug_emit = 1
+    else:
+        g_debug_emit = 0
 
     push_var_scope()
 
@@ -401,6 +431,11 @@ fun gen_method_def(struct_name: str, node: i64):
     if g_arena_emit == 1:
         emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
 
+    # Stack-trace push. mname (unmangled) is what users want to see —
+    # struct context is implied by the trace's call chain.
+    if g_debug_emit == 1:
+        emit_frame_push(Str.concat(Str.concat(struct_name, "."), mname))
+
     if body != 0:
         gen_block(body)
 
@@ -414,6 +449,8 @@ fun gen_method_def(struct_name: str, node: i64):
         if body == 0 or block_always_returns(body) == 0:
             if g_arena_emit == 1:
                 emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+            if g_debug_emit == 1:
+                emit_frame_pop()
             emit_ind("llvm.return")
 
     pop_var_scope()
@@ -423,6 +460,7 @@ fun gen_method_def(struct_name: str, node: i64):
     g_cur_fn_name = old_fn_name
     g_cur_method_struct = old_method_struct
     g_arena_emit = old_arena_emit_m
+    g_debug_emit = old_debug_emit_m
 
     indent_dec()
     emit_ind("}")

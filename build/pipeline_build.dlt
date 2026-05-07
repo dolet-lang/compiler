@@ -6346,6 +6346,16 @@ g_continue_label: str = ""
 # 0 = compiler internals (Memory.* / _scope_arena_* / _str_*) — skip.
 g_arena_emit: i32 = 0
 
+# Stack-trace instrumentation — set by --debug flag, read by codegen.
+# When 1, every non-exempt function gets __frame_push/__frame_pop calls
+# wrapped around its body so dolet_panic can print a multi-frame trace.
+# Default 0 → release builds compile to identical code as before.
+g_debug_mode: i32 = 0
+# Per-function decision: 1 if this function should emit __frame_push/pop.
+# Set by gen_fun_def/gen_method_def after consulting g_debug_mode and
+# is_frame_exempt. Read by gen_return and the implicit-return paths.
+g_debug_emit: i32 = 0
+
 fun is_arena_exempt(mlir_fname: str) -> i32:
     # Scope arena helpers themselves — must never recurse through arena.
     if str_eq(mlir_fname, "_scope_arena_push") == 1:
@@ -6397,8 +6407,61 @@ fun is_arena_exempt(mlir_fname: str) -> i32:
         return 1
     return 0
 
-# ==========================================
-# Annotation Registry
+# Frame-tracking exempt list. Used only when --debug is on. Skips:
+#   1. Frame helpers themselves (__frame_push/__frame_pop/__print_stack_trace)
+#      — instrumenting them would self-recurse on every push.
+#   2. Anything is_arena_exempt already skips — these are runtime helpers
+#      that allocate or do raw memory work, transitively reached from
+#      __frame_push (Memory.malloc_zeroed, _scope_arena_*, _str_*, etc.).
+#   3. The panic + I/O lowering helpers — dolet_panic and print/println
+#      run while a panic is in progress; instrumenting them would push
+#      frames AFTER we already started printing the trace.
+#   4. The Str_*, Convert_*, IOOps_*, Process_* runtime families — these
+#      are called from inside __print_stack_trace and from print itself;
+#      a hot-path loop printing N frames would re-enter __frame_push
+#      a few hundred times for no useful information.
+fun is_frame_exempt(mlir_fname: str) -> i32:
+    if Str.starts_with(mlir_fname, "__") == true:
+        return 1
+    if is_arena_exempt(mlir_fname) == 1:
+        return 1
+    if str_eq(mlir_fname, "dolet_panic") == 1:
+        return 1
+    if str_eq(mlir_fname, "print") == 1:
+        return 1
+    if str_eq(mlir_fname, "println") == 1:
+        return 1
+    if Str.starts_with(mlir_fname, "print_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "println_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "Str_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "Convert_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "IOOps_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "Process_") == true:
+        return 1
+    if Str.starts_with(mlir_fname, "FileOps_") == true:
+        return 1
+    return 0
+
+# Emits `llvm.call @__frame_push(@.name, @.file) : (!llvm.ptr, !llvm.ptr) -> ()`.
+# The two str literals are registered through gen_string_const so they
+# share the same global-string deduplication every str literal uses.
+# Caller must ensure g_debug_emit == 1 before calling.
+fun emit_frame_push(fname: str):
+    name_label: str = gen_string_const(fname)
+    file_label: str = gen_string_const(g_source_file_basename)
+    name_ptr: str = new_tmp()
+    file_ptr: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(name_ptr, " = llvm.mlir.addressof "), name_label), " : !llvm.ptr"))
+    emit_ind(Str.concat(Str.concat(Str.concat(file_ptr, " = llvm.mlir.addressof "), file_label), " : !llvm.ptr"))
+    emit_ind(Str.concat(Str.concat(Str.concat("llvm.call @__frame_push(", name_ptr), Str.concat(", ", file_ptr)), ") : (!llvm.ptr, !llvm.ptr) -> ()"))
+
+fun emit_frame_pop():
+    emit_ind("llvm.call @__frame_pop() : () -> ()")
 # Parallel arrays storing custom annotation definitions
 g_annot_names: i64 = 0
 g_annot_targets: i64 = 0
@@ -9455,6 +9518,8 @@ fun gen_return(node: i64):
                     panic(Str.concat(Str.concat("bare 'return' in function declared to return non-void type '", g_cur_fn_ret_type), "' — supply a return value"))
         if g_arena_emit == 1:
             emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+        if g_debug_emit == 1:
+            emit_frame_pop()
         emit_ind("llvm.return")
         return
 
@@ -9490,6 +9555,8 @@ fun gen_return(node: i64):
             # the caller's frame, so we skip the explicit pop here.
         else:
             emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+    if g_debug_emit == 1:
+        emit_frame_pop()
     emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", val), " : "), mt))
 
 # ==========================================
@@ -10033,6 +10100,7 @@ fun gen_fun_def(node: i64):
     old_ret_type: str = g_cur_fn_ret_type
     old_fn_name: str = g_cur_fn_name
     old_arena_emit: i32 = g_arena_emit
+    old_debug_emit: i32 = g_debug_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = fname
@@ -10048,6 +10116,14 @@ fun gen_fun_def(node: i64):
         g_arena_emit = 0
     else:
         g_arena_emit = 1
+
+    # Mirror for stack-trace instrumentation. Independent decision: a
+    # str-returning function still wants frame push/pop (push doesn't
+    # touch the return value).
+    if g_debug_mode == 1 and is_frame_exempt(mlir_fname) == 0:
+        g_debug_emit = 1
+    else:
+        g_debug_emit = 0
 
     push_var_scope()
 
@@ -10081,6 +10157,11 @@ fun gen_fun_def(node: i64):
     if g_arena_emit == 1:
         emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
 
+    # Frame push for --debug stack traces. Use the unmangled fname so
+    # users see "divide" not "Calculator_divide_i32_i32".
+    if g_debug_emit == 1:
+        emit_frame_push(fname)
+
     if body != 0:
         gen_block(body)
 
@@ -10095,6 +10176,8 @@ fun gen_fun_def(node: i64):
         if body == 0 or block_always_returns(body) == 0:
             if g_arena_emit == 1:
                 emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+            if g_debug_emit == 1:
+                emit_frame_pop()
             emit_ind("llvm.return")
     else:
         if body == 0 or block_always_returns(body) == 0:
@@ -10103,18 +10186,24 @@ fun gen_fun_def(node: i64):
                 def_ret: str = emit_zero_ptr()
                 if g_arena_emit == 1:
                     emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+                if g_debug_emit == 1:
+                    emit_frame_pop()
                 emit_ind(Str.concat(Str.concat("llvm.return ", def_ret), " : !llvm.ptr"))
             elif is_int_type(ret_type) == 1:
                 def_ret2: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret2, " = llvm.mlir.constant(0 : "), ret_mt), Str.concat(") : ", ret_mt)))
                 if g_arena_emit == 1:
                     emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+                if g_debug_emit == 1:
+                    emit_frame_pop()
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret2), " : "), ret_mt))
             elif is_float_type(ret_type) == 1:
                 def_ret3: str = new_tmp()
                 emit_ind(Str.concat(Str.concat(Str.concat(def_ret3, " = llvm.mlir.constant(0.0 : "), ret_mt), Str.concat(") : ", ret_mt)))
                 if g_arena_emit == 1:
                     emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+                if g_debug_emit == 1:
+                    emit_frame_pop()
                 emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", def_ret3), " : "), ret_mt))
 
     pop_var_scope()
@@ -10124,6 +10213,7 @@ fun gen_fun_def(node: i64):
     g_cur_fn_ret_type = old_ret_type
     g_cur_fn_name = old_fn_name
     g_arena_emit = old_arena_emit
+    g_debug_emit = old_debug_emit
 
     indent_dec()
     emit_ind("}")
@@ -10291,6 +10381,7 @@ fun gen_method_def(struct_name: str, node: i64):
     old_fn_name: str = g_cur_fn_name
     old_method_struct: str = g_cur_method_struct
     old_arena_emit_m: i32 = g_arena_emit
+    old_debug_emit_m: i32 = g_debug_emit
     g_in_function = 1
     g_cur_fn_ret_type = ret_type
     g_cur_fn_name = mangled
@@ -10304,6 +10395,12 @@ fun gen_method_def(struct_name: str, node: i64):
         g_arena_emit = 0
     else:
         g_arena_emit = 1
+
+    # --debug stack-trace instrumentation for methods.
+    if g_debug_mode == 1 and is_frame_exempt(mangled) == 0:
+        g_debug_emit = 1
+    else:
+        g_debug_emit = 0
 
     push_var_scope()
 
@@ -10338,6 +10435,11 @@ fun gen_method_def(struct_name: str, node: i64):
     if g_arena_emit == 1:
         emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
 
+    # Stack-trace push. mname (unmangled) is what users want to see —
+    # struct context is implied by the trace's call chain.
+    if g_debug_emit == 1:
+        emit_frame_push(Str.concat(Str.concat(struct_name, "."), mname))
+
     if body != 0:
         gen_block(body)
 
@@ -10351,6 +10453,8 @@ fun gen_method_def(struct_name: str, node: i64):
         if body == 0 or block_always_returns(body) == 0:
             if g_arena_emit == 1:
                 emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+            if g_debug_emit == 1:
+                emit_frame_pop()
             emit_ind("llvm.return")
 
     pop_var_scope()
@@ -10360,6 +10464,7 @@ fun gen_method_def(struct_name: str, node: i64):
     g_cur_fn_name = old_fn_name
     g_cur_method_struct = old_method_struct
     g_arena_emit = old_arena_emit_m
+    g_debug_emit = old_debug_emit_m
 
     indent_dec()
     emit_ind("}")
@@ -13879,6 +13984,15 @@ fun generate(ast: i64) -> str:
         g_arena_emit = 1
         emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
 
+        # Note: we deliberately do NOT push a "main" frame here. The first
+        # statements inside main are the zero-init stores for every global
+        # `g_x: T = 0` declaration (including the frame stack's own
+        # globals), which would clobber any frame pushed before them.
+        # Without an injection point between the init block and user code,
+        # frames pushed by user functions called from main are sufficient
+        # — the panic prefix already pinpoints the panic site, so a
+        # top-level panic just shows no extra trace lines.
+
         # Generate all top-level statements in source order
         # (var decls with init values are generated inline, preserving execution order)
         gen_main_body(ast)
@@ -15688,6 +15802,7 @@ fun main() -> i32:
         IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
         IOOps.io_println("  --no-runtime       Don't auto-import runtime libraries")
         IOOps.io_println("  --no-console       GUI mode (no console window)")
+        IOOps.io_println("  --debug            Emit stack-trace instrumentation (panic prints call chain)")
         IOOps.io_println("  --version          Show compiler version")
         return 1
 
@@ -15728,6 +15843,12 @@ fun main() -> i32:
             g_validate_enabled = 0
         elif str_eq(arg, "--validate") == 1:
             g_validate_enabled = 1
+        elif str_eq(arg, "--debug") == 1:
+            # Wraps every non-exempt function with __frame_push/__frame_pop
+            # so dolet_panic can print a multi-frame stack trace. Off by
+            # default: release builds compile to identical code as before
+            # this flag was introduced.
+            g_debug_mode = 1
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:

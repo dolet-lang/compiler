@@ -503,6 +503,8 @@ fun gen_return(node: i64):
                     panic(Str.concat(Str.concat("bare 'return' in function declared to return non-void type '", g_cur_fn_ret_type), "' — supply a return value"))
         if g_arena_emit == 1:
             emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+        if g_debug_emit == 1:
+            emit_frame_pop()
         emit_ind("llvm.return")
         return
 
@@ -538,6 +540,8 @@ fun gen_return(node: i64):
             # the caller's frame, so we skip the explicit pop here.
         else:
             emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+    if g_debug_emit == 1:
+        emit_frame_pop()
     emit_ind(Str.concat(Str.concat(Str.concat("llvm.return ", val), " : "), mt))
 
 # ==========================================
