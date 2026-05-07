@@ -1,0 +1,36 @@
+import std
+
+# Zero-arg lambda — `||` reaches the parser as a single TK_OR token but
+# at primary-expression position can only mean an empty parameter list.
+
+# Form 1: bare local
+fun test1():
+    f: fun() -> i32 = || -> i32 42
+    print(f())   # 42
+
+# Form 2: heap return
+fun make_thunk() -> @heap fun() -> i32:
+    return || -> i32 99
+
+fun test2():
+    g: @heap fun() -> i32 = make_thunk()
+    print(g())   # 99
+
+# Form 3: zero-arg, void return, captures local
+fun test3():
+    msg: str = "hi"
+    h: fun() = || print(msg)
+    h()
+    h()
+
+# Form 4: still parse `a || b` as logical OR after operands
+fun test4():
+    a: bool = true
+    b: bool = false
+    if a || b:
+        print("either")
+
+test1()
+test2()
+test3()
+test4()

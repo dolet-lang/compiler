@@ -3055,6 +3055,13 @@ fun parse_primary() -> i64:
     if k == TK_BIT_OR:
         return parse_lambda()
 
+    # Zero-arg lambda `||` reaches the parser as a single TK_OR token
+    # (the lexer can't distinguish `a || b` from `|| -> i32 ...` without
+    # parser context). At a primary-expression position `||` can only
+    # be a zero-arg lambda — there's no left operand for logical-or.
+    if k == TK_OR:
+        return parse_lambda_zero()
+
     panic(@"Unexpected token in expression: kind={k} val='{cur_val()}'")
     return 0
 
@@ -3074,23 +3081,39 @@ fun parse_lambda() -> i64:
         if cur_kind() == TK_COMMA:
             advance()
     eat(TK_BIT_OR)
+    return parse_lambda_tail(params, li)
 
-    # Optional return-type annotation: |x| -> i32 ...
+# Zero-arg lambda `||`. The single `||` token already ate both pipes,
+# so we go straight to the return type / body parse.
+fun parse_lambda_zero() -> i64:
+    li: i32 = cur_indent()
+    eat(TK_OR)
+    return parse_lambda_tail(mk_node_list(2), li)
+
+# Shared tail: ret-type annotation + body. Caller has already consumed
+# the parameter list and the closing `|` (or the merged `||`).
+fun parse_lambda_tail(params: i64, li: i32) -> i64:
     ret_type: str = ""
     if cur_kind() == TK_ARROW:
         advance()
         ret_type = parse_type_name()
 
-    # Body: `|x|: <block>` or single-expression `|x| expr`
     body: i64 = mk_node_list(4)
     if cur_kind() == TK_COLON:
         advance()
         skip_newlines()
         body = parse_indented_block(li)
     else:
-        # Single expression — wrap in implicit return
+        # Single-expression body. With an explicit `-> T` return type,
+        # the expression is the return value. Without one, the lambda
+        # is void and the expression is a statement (e.g. `|| print(x)`)
+        # — wrapping it in `return` would emit `llvm.return %v : ` with
+        # an empty type and reject at MLIR translation.
         expr: i64 = parse_expression()
-        nl_add(body, mk_return(expr))
+        if str_eq(ret_type, "") == 0:
+            nl_add(body, mk_return(expr))
+        else:
+            nl_add(body, expr)
     return mk_lambda(params, body, ret_type)
 
 # B3: Lookahead — does `<` here open a generic type-arg list?
@@ -12716,6 +12739,16 @@ fun collect_caps_node(node: i64, params: i64, out: i64):
         if is_capture(name, params, out) == 1:
             nl_add(out, name as i64)
         return
+    if nt == NODE_SELF or nt == NODE_SELF_FIELD:
+        # `self` capture in a method-local lambda needs the enclosing
+        # struct's type plumbed through find_capture_type, the env
+        # layout to take a struct ptr, and the body to be rewritten so
+        # NODE_SELF / NODE_SELF_FIELD become regular var_ref / field
+        # access against a captured local. That's a multi-pass change.
+        # For now fail loud with the workaround pattern so the user
+        # gets a useful message instead of a segfault on a null env.
+        panic("`self` capture inside a closure isn't supported yet. Workaround: copy the field to a local first — e.g. `n: i32 = self.n` and capture `n`.")
+        return
     if nt == NODE_RETURN or nt == NODE_PAREN or nt == NODE_TRY_OP or nt == NODE_UNARY_OP:
         collect_caps_node(Memory.read_i64(node + 8), params, out)
         return
@@ -12738,6 +12771,12 @@ fun collect_caps_node(node: i64, params: i64, out: i64):
         collect_caps_node(Memory.read_i64(node + 24), params, out)
         return
     if nt == NODE_FUN_CALL or nt == NODE_BUILTIN_CALL:
+        # The callee name itself can be a captured local — `f(g(x))` in
+        # `compose` captures both `f` and `g`. is_capture filters out
+        # top-level fns and globals, so it only fires for actual locals.
+        cname: str = Memory.read_i64(node + 8) as str
+        if is_capture(cname, params, out) == 1:
+            nl_add(out, cname as i64)
         collect_caps_list(Memory.read_i64(node + 16), params, out)
         return
     if nt == NODE_STATIC_METHOD or nt == NODE_INST_METHOD:
@@ -12831,6 +12870,216 @@ fun mem_write_for_type(t: str) -> str:
         return "write_f32"
     return "write_i64"
 
+# ==========================================
+# Capture rewriting (mutable captures persist across calls)
+# ==========================================
+# Old approach: prepend `n: T = Memory.read_T(env+offset)` to the lifted
+# body, treating captures as locals. Mutations updated the local but
+# never wrote back to env, so each call started over from env's stale
+# value (counter pattern: 1, 1, 1 instead of 1, 2, 3).
+#
+# New approach: rewrite the body so every reference to a captured name
+# becomes a direct env load/store. The env IS the variable's home. No
+# locals, no write-back, mutations persist naturally.
+
+# Returns the index of `name` in the captures list, or -1 if absent.
+fun capture_index(name: str, captures: i64) -> i32:
+    if captures == 0:
+        return -1
+    cc: i32 = nl_count(captures)
+    ci: i32 = 0
+    while ci < cc:
+        cn: str = nl_get(captures, ci) as str
+        if str_eq(cn, name) == 1:
+            return ci
+        ci = ci + 1
+    return -1
+
+# A capture is "rewriteable" if rewriting var_ref(n) → Memory.read_T(env+off)
+# preserves all the type information codegen needs at use sites.
+#
+# Allow-list of scalar primitives + str. Everything else (closures,
+# structs, enums, generics) keeps the var-decl prologue so the call
+# site / field-access / method-dispatch codegen can see the proper
+# typed slot. A raw `Memory.read_i64(env+8)` discards type info and
+# codegen falls back to "i64 doesn't have a `(...)` operator" or
+# `getelementptr ...[0, -1]` on an unknown struct.
+fun is_rewriteable_ctype(ct: str) -> i32:
+    if str_eq(ct, "i8") == 1:
+        return 1
+    if str_eq(ct, "i16") == 1:
+        return 1
+    if str_eq(ct, "i32") == 1:
+        return 1
+    if str_eq(ct, "i64") == 1:
+        return 1
+    if str_eq(ct, "u8") == 1:
+        return 1
+    if str_eq(ct, "u16") == 1:
+        return 1
+    if str_eq(ct, "u32") == 1:
+        return 1
+    if str_eq(ct, "u64") == 1:
+        return 1
+    if str_eq(ct, "f32") == 1:
+        return 1
+    if str_eq(ct, "f64") == 1:
+        return 1
+    if str_eq(ct, "bool") == 1:
+        return 1
+    if str_eq(ct, "char") == 1:
+        return 1
+    if str_eq(ct, "str") == 1:
+        return 1
+    return 0
+
+# Build an expression that reads capture #idx from __env. Layout:
+# env[0..8) = fn_ptr, env[8+idx*8 ..) = capture i.
+fun build_env_load(idx: i32, ctype: str) -> i64:
+    offset_lit: i64 = mk_int_lit(8 + (idx as i64) * 8)
+    env_as_i64: i64 = mk_cast(mk_var_ref("__env"), "i64")
+    addr_expr: i64 = mk_binary_op("+", env_as_i64, offset_lit)
+    rargs: i64 = mk_node_list(2)
+    nl_add(rargs, addr_expr)
+    rcall: i64 = mk_static_method("Memory", mem_read_for_type(ctype), rargs)
+    if str_eq(ctype, "str") == 1:
+        return mk_cast(rcall, "str")
+    return rcall
+
+# Build a statement that writes `value_expr` into capture #idx of __env.
+fun build_env_store(idx: i32, ctype: str, value_expr: i64) -> i64:
+    offset_lit2: i64 = mk_int_lit(8 + (idx as i64) * 8)
+    env_as_i64_2: i64 = mk_cast(mk_var_ref("__env"), "i64")
+    addr_expr2: i64 = mk_binary_op("+", env_as_i64_2, offset_lit2)
+    val: i64 = value_expr
+    if str_eq(ctype, "str") == 1:
+        val = mk_cast(value_expr, "i64")
+    wargs: i64 = mk_node_list(2)
+    nl_add(wargs, addr_expr2)
+    nl_add(wargs, val)
+    return mk_static_method("Memory", mem_write_for_type(ctype), wargs)
+
+# Walk a node, replacing var_refs and assigns to captured names with
+# direct env loads/stores. Returns the (possibly new) node — caller
+# must update the parent's slot if the returned pointer differs.
+fun rewrite_captures_in(node: i64, captures: i64, cap_types: i64) -> i64:
+    if node < 4096 as i64:
+        return node
+    nt: i32 = nd_type(node)
+    if nt <= 0 or nt > 200:
+        return node
+
+    if nt == NODE_VAR_REF:
+        name: str = var_ref_name(node)
+        idx: i32 = capture_index(name, captures)
+        if idx >= 0:
+            ct: str = nl_get(cap_types, idx) as str
+            if is_rewriteable_ctype(ct) == 1:
+                return build_env_load(idx, ct)
+        return node
+
+    if nt == NODE_ASSIGN:
+        aname: str = assign_name(node)
+        v: i64 = assign_value(node)
+        nv: i64 = rewrite_captures_in(v, captures, cap_types)
+        aidx: i32 = capture_index(aname, captures)
+        if aidx >= 0:
+            ct2: str = nl_get(cap_types, aidx) as str
+            if is_rewriteable_ctype(ct2) == 1:
+                return build_env_store(aidx, ct2, nv)
+        if nv != v:
+            Memory.write_i64(node + 16, nv)
+        return node
+
+    if nt == NODE_VAR_DECL:
+        v2: i64 = Memory.read_i64(node + 24)
+        nv2: i64 = rewrite_captures_in(v2, captures, cap_types)
+        if nv2 != v2:
+            Memory.write_i64(node + 24, nv2)
+        return node
+
+    if nt == NODE_RETURN:
+        v3: i64 = Memory.read_i64(node + 8)
+        nv3: i64 = rewrite_captures_in(v3, captures, cap_types)
+        if nv3 != v3:
+            Memory.write_i64(node + 8, nv3)
+        return node
+
+    if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
+        l: i64 = Memory.read_i64(node + 16)
+        r: i64 = Memory.read_i64(node + 24)
+        nl: i64 = rewrite_captures_in(l, captures, cap_types)
+        nr: i64 = rewrite_captures_in(r, captures, cap_types)
+        if nl != l:
+            Memory.write_i64(node + 16, nl)
+        if nr != r:
+            Memory.write_i64(node + 24, nr)
+        return node
+
+    if nt == NODE_FUN_CALL or nt == NODE_BUILTIN_CALL:
+        rewrite_captures_in_list(Memory.read_i64(node + 16), captures, cap_types)
+        return node
+    if nt == NODE_STATIC_METHOD or nt == NODE_INST_METHOD:
+        rewrite_captures_in_list(Memory.read_i64(node + 24), captures, cap_types)
+        return node
+    if nt == NODE_NESTED_METHOD:
+        in2: i64 = Memory.read_i64(node + 8)
+        nin: i64 = rewrite_captures_in(in2, captures, cap_types)
+        if nin != in2:
+            Memory.write_i64(node + 8, nin)
+        rewrite_captures_in_list(Memory.read_i64(node + 24), captures, cap_types)
+        return node
+
+    if nt == NODE_FIELD_VAL:
+        v4: i64 = Memory.read_i64(node + 16)
+        nv4: i64 = rewrite_captures_in(v4, captures, cap_types)
+        if nv4 != v4:
+            Memory.write_i64(node + 16, nv4)
+        return node
+
+    if nt == NODE_FIELD_ASSIGN:
+        v5: i64 = Memory.read_i64(node + 24)
+        nv5: i64 = rewrite_captures_in(v5, captures, cap_types)
+        if nv5 != v5:
+            Memory.write_i64(node + 24, nv5)
+        return node
+
+    if nt == NODE_BLOCK:
+        rewrite_captures_in_list(Memory.read_i64(node + 8), captures, cap_types)
+        return node
+    if nt == NODE_IF:
+        cnd: i64 = Memory.read_i64(node + 8)
+        ncnd: i64 = rewrite_captures_in(cnd, captures, cap_types)
+        if ncnd != cnd:
+            Memory.write_i64(node + 8, ncnd)
+        rewrite_captures_in_list(Memory.read_i64(node + 16), captures, cap_types)
+        rewrite_captures_in_list(Memory.read_i64(node + 24), captures, cap_types)
+        return node
+    if nt == NODE_WHILE:
+        wc: i64 = Memory.read_i64(node + 8)
+        nwc: i64 = rewrite_captures_in(wc, captures, cap_types)
+        if nwc != wc:
+            Memory.write_i64(node + 8, nwc)
+        rewrite_captures_in_list(Memory.read_i64(node + 16), captures, cap_types)
+        return node
+
+    return node
+
+fun rewrite_captures_in_list(lst: i64, captures: i64, cap_types: i64):
+    if lst == 0:
+        return
+    c: i32 = nl_count(lst)
+    cap: i32 = Memory.read_i32(lst + 4)
+    if c > cap:
+        c = cap
+    i: i32 = 0
+    while i < c:
+        item: i64 = nl_get(lst, i)
+        new_item: i64 = rewrite_captures_in(item, captures, cap_types)
+        if new_item != item:
+            Memory.write_i64(lst + 8 + (i as i64) * 8, new_item)
+        i = i + 1
+
 # Scope tracking — enclosing fn's body+params, used by capture analysis
 # to look up types of captured local vars.
 g_lift_scope_body: i64 = 0
@@ -12911,26 +13160,32 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
             nl_add(new_params, nl_get(params, pp))
             pp = pp + 1
 
-    # Prepend var-decls that load each capture from env
+    # Hybrid capture handling:
+    #   - Rewriteable types (i32/i64/f*/bool/str): rewrite var_ref(n) →
+    #     Memory.read_T(env+off) and assign(n=v) → Memory.write_T. The
+    #     env IS the variable's home, so mutations persist across calls.
+    #   - Non-rewriteable types (closures `fun(...)`, structs): prepend
+    #     a var-decl `n: T = Memory.read_T(env+off)` so the call site
+    #     keeps full type info (closure-call needs to know arg/ret
+    #     types, struct field access needs the layout). These captures
+    #     are effectively read-only inside the lambda — mutating a
+    #     captured closure isn't a meaningful operation anyway.
     new_body: i64 = mk_node_list(16)
     cj: i32 = 0
     while cj < cap_count:
         cn2: str = nl_get(captures, cj) as str
         ct2: str = nl_get(cap_types, cj) as str
-        offset_lit: i64 = mk_int_lit(8 + (cj as i64) * 8)
-        env_as_i64: i64 = mk_cast(mk_var_ref("__env"), "i64")
-        addr_expr: i64 = mk_binary_op("+", env_as_i64, offset_lit)
-        rargs: i64 = mk_node_list(2)
-        nl_add(rargs, addr_expr)
-        rcall: i64 = mk_static_method("Memory", mem_read_for_type(ct2), rargs)
-        # str needs cast back from i64
-        rval: i64 = rcall
-        if str_eq(ct2, "str") == 1:
-            rval = mk_cast(rcall, "str")
-        nl_add(new_body, mk_var_decl(ct2, cn2, rval, 0, 0, 0))
+        if is_rewriteable_ctype(ct2) == 0:
+            offset_lit: i64 = mk_int_lit(8 + (cj as i64) * 8)
+            env_as_i64: i64 = mk_cast(mk_var_ref("__env"), "i64")
+            addr_expr: i64 = mk_binary_op("+", env_as_i64, offset_lit)
+            rargs: i64 = mk_node_list(2)
+            nl_add(rargs, addr_expr)
+            rcall: i64 = mk_static_method("Memory", mem_read_for_type(ct2), rargs)
+            nl_add(new_body, mk_var_decl(ct2, cn2, rcall, 0, 0, 0))
         cj = cj + 1
-    # Append original body statements
     if body != 0:
+        rewrite_captures_in_list(body, captures, cap_types)
         bc: i32 = nl_count(body)
         bi2: i32 = 0
         while bi2 < bc:
@@ -13128,6 +13383,18 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
             g_lift_scope_ret_type = old_ret
         return node
 
+    # Methods live inside extend/impl blocks as NODE_FUN_DEFs in the
+    # block's methods list. Without this case the lifter only sees
+    # top-level fns, so a lambda inside a method body never gets
+    # lifted — the method silently compiles to `return null` and the
+    # caller segfaults dereferencing the null closure.
+    if nt == NODE_EXTEND_BLOCK:
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 16))
+        return node
+    if nt == NODE_IMPL_BLOCK:
+        lift_lambdas_in_list(ast, Memory.read_i64(node + 16))
+        return node
+
     if nt == NODE_BLOCK:
         lift_lambdas_in_list(ast, Memory.read_i64(node + 8))
         return node
@@ -13206,6 +13473,15 @@ fun scan_for_lambda_node(node: i64):
     if nt == NODE_FUN_DEF:
         if Memory.read_i64(node + 40) == 0:
             scan_for_lambda_list(Memory.read_i64(node + 32))
+        return
+    # Methods inside extend/impl blocks — same NODE_FUN_DEF body, just
+    # nested one level deeper. Without these, a lambda inside a method
+    # is invisible to the scan and the whole lift pass gets skipped.
+    if nt == NODE_EXTEND_BLOCK:
+        scan_for_lambda_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_IMPL_BLOCK:
+        scan_for_lambda_list(Memory.read_i64(node + 16))
         return
 
 fun scan_for_lambda_list(lst: i64):

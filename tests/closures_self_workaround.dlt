@@ -1,0 +1,22 @@
+import std
+
+# Self-capture in method-local lambdas isn't supported yet. The user is
+# directed to copy fields to a local first; that's what this test
+# exercises — capturing the local works just like any other capture.
+
+struct Counter:
+    n: i32
+
+extend Counter:
+    fun bind_inc(self) -> @heap fun(i32) -> i32:
+        # Workaround: copy field to local, then capture the local.
+        n: i32 = self.n
+        return |delta: i32| -> i32 n + delta
+
+fun do_test():
+    c: Counter = Counter(n=10)
+    f: @heap fun(i32) -> i32 = c.bind_inc()
+    print(f(5))    # 15
+    print(f(100))  # 110
+
+do_test()

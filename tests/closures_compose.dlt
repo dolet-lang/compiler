@@ -1,0 +1,30 @@
+import std
+
+# Functional composition — a closure captures other closures and calls
+# them inside its body. The captured fns are non-rewriteable (the call
+# site needs full closure type), so they keep their var-decl prologue
+# while any scalar captures still rewrite to direct env access.
+
+fun compose(f: fun(i32) -> i32, g: fun(i32) -> i32) -> @heap fun(i32) -> i32:
+    return |x: i32| -> i32 f(g(x))
+
+fun do_test():
+    times2: fun(i32) -> i32 = |x: i32| -> i32 x * 2
+    plus1:  fun(i32) -> i32 = |x: i32| -> i32 x + 1
+    cmb: @heap fun(i32) -> i32 = compose(plus1, times2)
+    print(cmb(5))   # (5*2)+1 = 11
+    print(cmb(10))  # (10*2)+1 = 21
+
+# Mixed: scalar mutable + closure immutable in the same lambda
+fun do_mixed():
+    times3: fun(i32) -> i32 = |x: i32| -> i32 x * 3
+    n: i32 = 0
+    g: @heap fun(i32) -> i32 = |x: i32| -> i32:
+        n = n + 1
+        return times3(x) + n
+    print(g(10))  # 30 + 1 = 31
+    print(g(10))  # 30 + 2 = 32
+    print(g(5))   # 15 + 3 = 18
+
+do_test()
+do_mixed()

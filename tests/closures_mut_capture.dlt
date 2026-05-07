@@ -1,0 +1,30 @@
+import std
+
+# Mutable capture: closure modifies a captured local var. With the
+# inline-rewrite approach, the env IS the variable's home — every
+# read/write hits env directly, so updates persist across calls.
+
+fun make_counter() -> @heap fun(i32) -> i32:
+    n: i32 = 0
+    return |delta: i32| -> i32:
+        n = n + delta
+        return n
+
+fun do_test():
+    c: @heap fun(i32) -> i32 = make_counter()
+    print(c(1))   # 1
+    print(c(1))   # 2
+    print(c(5))   # 7
+    print(c(10))  # 17
+
+# Two independent counters — env is per-closure.
+fun do_two():
+    a: @heap fun(i32) -> i32 = make_counter()
+    b: @heap fun(i32) -> i32 = make_counter()
+    print(a(10))  # 10
+    print(b(3))   # 3   (b is independent)
+    print(a(5))   # 15  (a kept its state)
+    print(b(2))   # 5
+
+do_test()
+do_two()

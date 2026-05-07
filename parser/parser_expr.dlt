@@ -226,6 +226,13 @@ fun parse_primary() -> i64:
     if k == TK_BIT_OR:
         return parse_lambda()
 
+    # Zero-arg lambda `||` reaches the parser as a single TK_OR token
+    # (the lexer can't distinguish `a || b` from `|| -> i32 ...` without
+    # parser context). At a primary-expression position `||` can only
+    # be a zero-arg lambda — there's no left operand for logical-or.
+    if k == TK_OR:
+        return parse_lambda_zero()
+
     panic(@"Unexpected token in expression: kind={k} val='{cur_val()}'")
     return 0
 
@@ -245,23 +252,39 @@ fun parse_lambda() -> i64:
         if cur_kind() == TK_COMMA:
             advance()
     eat(TK_BIT_OR)
+    return parse_lambda_tail(params, li)
 
-    # Optional return-type annotation: |x| -> i32 ...
+# Zero-arg lambda `||`. The single `||` token already ate both pipes,
+# so we go straight to the return type / body parse.
+fun parse_lambda_zero() -> i64:
+    li: i32 = cur_indent()
+    eat(TK_OR)
+    return parse_lambda_tail(mk_node_list(2), li)
+
+# Shared tail: ret-type annotation + body. Caller has already consumed
+# the parameter list and the closing `|` (or the merged `||`).
+fun parse_lambda_tail(params: i64, li: i32) -> i64:
     ret_type: str = ""
     if cur_kind() == TK_ARROW:
         advance()
         ret_type = parse_type_name()
 
-    # Body: `|x|: <block>` or single-expression `|x| expr`
     body: i64 = mk_node_list(4)
     if cur_kind() == TK_COLON:
         advance()
         skip_newlines()
         body = parse_indented_block(li)
     else:
-        # Single expression — wrap in implicit return
+        # Single-expression body. With an explicit `-> T` return type,
+        # the expression is the return value. Without one, the lambda
+        # is void and the expression is a statement (e.g. `|| print(x)`)
+        # — wrapping it in `return` would emit `llvm.return %v : ` with
+        # an empty type and reject at MLIR translation.
         expr: i64 = parse_expression()
-        nl_add(body, mk_return(expr))
+        if str_eq(ret_type, "") == 0:
+            nl_add(body, mk_return(expr))
+        else:
+            nl_add(body, expr)
     return mk_lambda(params, body, ret_type)
 
 # B3: Lookahead — does `<` here open a generic type-arg list?
