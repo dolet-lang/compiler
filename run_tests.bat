@@ -145,6 +145,7 @@ for %%f in (
     closures_local
     closures_advanced
     closures_escape
+    closures_all_forms
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

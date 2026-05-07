@@ -804,18 +804,19 @@ fun lift_one_lambda(ast: i64, node: i64) -> i64:
     # NOTE: even non-capturing lambdas go through env convention so the
     # gen_indirect_call site has uniform handling. Tiny env = {fn_ptr}.
 
-    # ONE RULE: closures default to STACK. User opts in to heap by
-    # writing `@heap` on the target type. No compile-time escape
-    # check — Dolet trusts the user (consistent with manual memory
-    # management via `Memory.malloc/free`). Returning a stack closure
-    # without `@heap` produces UAF at runtime — user's responsibility.
+    # Allocation rule:
+    #   - var-decl:  stack by default; `@heap fun(...)` opts in to heap.
+    #   - return:    heap always (stack-return-of-closure is provably
+    #                UAF, never has a valid use case — so we don't
+    #                expose it). `@heap` annotation on the return type
+    #                is allowed for documentation but redundant.
+    #   - elsewhere: stack (passed-as-arg, etc.)
     use_stack: i32 = 1
     if g_lift_parent_type == NODE_VAR_DECL:
         if Str.starts_with(g_lift_target_type, "@heap ") == 1:
             use_stack = 0
     elif g_lift_parent_type == NODE_RETURN:
-        if Str.starts_with(g_lift_scope_ret_type, "@heap ") == 1:
-            use_stack = 0
+        use_stack = 0
 
     # Phase 2 path — captures present. Build:
     #   1) cap_types[]    — types of each captured name (from enclosing scope)

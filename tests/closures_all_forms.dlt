@@ -1,0 +1,28 @@
+import std
+
+# Verify all 4 closure forms work correctly.
+
+# 1) Stack default, local var
+fun test1():
+    f: fun(i32) -> i32 = |x: i32| -> i32 x + 1
+    print("1) " + Convert.i32_to_str(f(5)))   # 6
+
+# 2) @heap explicit, local var
+fun test2():
+    g: @heap fun(i32) -> i32 = |x: i32| -> i32 x * 2
+    print("2) " + Convert.i32_to_str(g(5)))   # 10
+
+# 3) Return closure with @heap (explicit)
+fun make3() -> @heap fun(i32) -> i32:
+    return |x: i32| -> i32 x + 100
+
+# 4) Return closure WITHOUT @heap — used to be UAF, now auto-heap
+fun make4() -> fun(i32) -> i32:
+    return |x: i32| -> i32 x + 200
+
+test1()
+test2()
+c3: @heap fun(i32) -> i32 = make3()
+print("3) " + Convert.i32_to_str(c3(5)))      # 105
+c4: fun(i32) -> i32 = make4()
+print("4) " + Convert.i32_to_str(c4(5)))      # 205 — WORKS NOW
