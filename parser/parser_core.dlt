@@ -317,6 +317,12 @@ fun cur_indent() -> i32:
         return Memory.read_i32(p_indents + ((p_pos as i64) * 4))
     return 0
 
+# C2: source line number of the current token (1-based).
+fun cur_line() -> i32:
+    if p_pos < p_count:
+        return Memory.read_i32(out_lines + ((p_pos as i64) * 4))
+    return 0
+
 fun peek_kind(offset: i32) -> i32:
     idx: i32 = p_pos + offset
     if idx < p_count:

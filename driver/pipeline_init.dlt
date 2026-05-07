@@ -133,6 +133,8 @@ fun init_tokenizer_buffers():
     out_kinds = Memory.malloc_zeroed(2097152)
     out_values = Memory.malloc_zeroed(4194304)
     out_indents = Memory.malloc_zeroed(2097152)
+    out_lines = Memory.malloc_zeroed(2097152)
+    g_tok_cur_line = 1
     out_count = 0
     tok_pos = 0
     tok_len = 0

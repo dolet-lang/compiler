@@ -37,6 +37,15 @@ fun str_from_range(src: str, start: i64, end_pos: i64) -> str:
 fun char_at(s: str, idx: i64) -> i8:
     return Memory.read_i8((s as i64) + idx)
 
+# C2: source-file basename (no path, no extension) — used by panic
+# codegen to embed `[panic at FILE:LINE]` prefix. Set by the driver
+# before calling generate().
+g_source_file_basename: str = "<source>"
+# Newlines in (prelude + runtime + imports) prefix BEFORE user source
+# starts. Subtracted from raw token line numbers so panic prefixes
+# show user-file line, not concatenated-source line.
+g_user_line_offset: i32 = 0
+
 fun panic(msg: str):
     IOOps.io_println(msg)
     ExitProcess(1)

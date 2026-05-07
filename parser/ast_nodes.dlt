@@ -525,13 +525,17 @@ fun mk_pass() -> i64:
 # PanicNode: f0=msg (str literal). User code: `panic "message"`.
 # Codegen lowers to a call into the runtime helper dolet_panic(msg)
 # which prints `[panic] msg` and exits with code 101.
-fun mk_panic(msg: str) -> i64:
+fun mk_panic(msg: str, line: i32) -> i64:
     n: i64 = alloc_node(NODE_PANIC)
     Memory.write_i64(n + 8, msg as i64)
+    Memory.write_i32(n + 16, line)
     return n
 
 fun panic_msg(n: i64) -> str:
     return Memory.read_i64(n + 8) as str
+
+fun panic_line(n: i64) -> i32:
+    return Memory.read_i32(n + 16)
 
 # TryOpNode: f0=inner (the wrapped expression). Postfix `?` operator
 # that propagates Err/None from result/option types. Codegen

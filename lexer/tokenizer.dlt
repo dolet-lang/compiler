@@ -141,7 +141,10 @@ MAX_TOKENS: i32 = 524288
 out_kinds: i64 = Memory.malloc_zeroed(2097152)
 out_values: i64 = Memory.malloc_zeroed(4194304)
 out_indents: i64 = Memory.malloc_zeroed(2097152)
+# C2: per-token source line numbers (1-based), parallel to out_kinds
+out_lines: i64 = Memory.malloc_zeroed(2097152)
 out_count: i32 = 0
+g_tok_cur_line: i32 = 1
 
 fun emit_token(kind: i32, value: str, indent: i32):
     if out_count >= MAX_TOKENS:
@@ -150,9 +153,11 @@ fun emit_token(kind: i32, value: str, indent: i32):
     ko: i64 = (out_count as i64) * 4
     vo: i64 = (out_count as i64) * 8
     io: i64 = (out_count as i64) * 4
+    lo: i64 = (out_count as i64) * 4
     Memory.write_i32(out_kinds + ko, kind)
     Memory.write_i64(out_values + vo, value as i64)
     Memory.write_i32(out_indents + io, indent)
+    Memory.write_i32(out_lines + lo, g_tok_cur_line)
     out_count = out_count + 1
 
 fun get_kind(idx: i32) -> i32:
@@ -261,6 +266,13 @@ fun tok_peek(offset: i64) -> i8:
     return char_at(tok_code, nxt)
 
 fun tok_advance():
+    # C2: track source line. Single source of truth — every byte
+    # advance goes through here, including bytes inside strings,
+    # char-literals, and multiline comments. The main loop relies
+    # on this and does NOT separately increment g_tok_cur_line.
+    if tok_pos < tok_len:
+        if tok_char() == 10 as i8:
+            g_tok_cur_line = g_tok_cur_line + 1
     tok_pos = tok_pos + 1
 
 # ==========================================
@@ -687,6 +699,7 @@ fun tokenize(code: str):
     tok_indent = 0
     tok_at_line_start = 1
     out_count = 0
+    g_tok_cur_line = 1
 
     c: i8 = 0 as i8
     fs: i64 = 0

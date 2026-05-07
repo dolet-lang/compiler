@@ -1762,6 +1762,19 @@ fun main() -> i32:
     # constants are initialized before user code runs in @main
     if imp_len > 0:
         source = Str.concat(source, Str.concat("\n", imp_src))
+
+    # C2: capture how many lines precede the user source. Used by
+    # panic codegen so file:line prefixes show user-file line numbers.
+    pre_user_len: i64 = Memory.strlen(source)
+    nl_count_pre: i32 = 0
+    nci: i64 = 0
+    while nci < pre_user_len:
+        if Memory.read_i8((source as i64) + nci) == 10 as i8:
+            nl_count_pre = nl_count_pre + 1
+        nci = nci + 1 as i64
+    # +1 for the "\n" separator we insert below
+    g_user_line_offset = nl_count_pre + 1
+
     source = Str.concat(source, Str.concat("\n", user_src))
 
     src_len: i64 = Memory.strlen(source)
@@ -1781,6 +1794,7 @@ fun main() -> i32:
 
     # Phase 3: Generate MLIR
     IOOps.io_println("[3/4] Generating MLIR...")
+    g_source_file_basename = path_base_name(input_path)
     mlir: str = generate(ast)
     mlir_len: i64 = Memory.strlen(mlir)
     IOOps.io_println(Str.concat("  MLIR: ", Str.concat(Convert.i64_to_str(mlir_len), " chars")))

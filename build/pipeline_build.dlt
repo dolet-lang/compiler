@@ -142,7 +142,10 @@ MAX_TOKENS: i32 = 524288
 out_kinds: i64 = Memory.malloc_zeroed(2097152)
 out_values: i64 = Memory.malloc_zeroed(4194304)
 out_indents: i64 = Memory.malloc_zeroed(2097152)
+# C2: per-token source line numbers (1-based), parallel to out_kinds
+out_lines: i64 = Memory.malloc_zeroed(2097152)
 out_count: i32 = 0
+g_tok_cur_line: i32 = 1
 
 fun emit_token(kind: i32, value: str, indent: i32):
     if out_count >= MAX_TOKENS:
@@ -151,9 +154,11 @@ fun emit_token(kind: i32, value: str, indent: i32):
     ko: i64 = (out_count as i64) * 4
     vo: i64 = (out_count as i64) * 8
     io: i64 = (out_count as i64) * 4
+    lo: i64 = (out_count as i64) * 4
     Memory.write_i32(out_kinds + ko, kind)
     Memory.write_i64(out_values + vo, value as i64)
     Memory.write_i32(out_indents + io, indent)
+    Memory.write_i32(out_lines + lo, g_tok_cur_line)
     out_count = out_count + 1
 
 fun get_kind(idx: i32) -> i32:
@@ -262,6 +267,13 @@ fun tok_peek(offset: i64) -> i8:
     return char_at(tok_code, nxt)
 
 fun tok_advance():
+    # C2: track source line. Single source of truth — every byte
+    # advance goes through here, including bytes inside strings,
+    # char-literals, and multiline comments. The main loop relies
+    # on this and does NOT separately increment g_tok_cur_line.
+    if tok_pos < tok_len:
+        if tok_char() == 10 as i8:
+            g_tok_cur_line = g_tok_cur_line + 1
     tok_pos = tok_pos + 1
 
 # ==========================================
@@ -688,6 +700,7 @@ fun tokenize(code: str):
     tok_indent = 0
     tok_at_line_start = 1
     out_count = 0
+    g_tok_cur_line = 1
 
     c: i8 = 0 as i8
     fs: i64 = 0
@@ -1462,13 +1475,17 @@ fun mk_pass() -> i64:
 # PanicNode: f0=msg (str literal). User code: `panic "message"`.
 # Codegen lowers to a call into the runtime helper dolet_panic(msg)
 # which prints `[panic] msg` and exits with code 101.
-fun mk_panic(msg: str) -> i64:
+fun mk_panic(msg: str, line: i32) -> i64:
     n: i64 = alloc_node(NODE_PANIC)
     Memory.write_i64(n + 8, msg as i64)
+    Memory.write_i32(n + 16, line)
     return n
 
 fun panic_msg(n: i64) -> str:
     return Memory.read_i64(n + 8) as str
+
+fun panic_line(n: i64) -> i32:
+    return Memory.read_i32(n + 16)
 
 # TryOpNode: f0=inner (the wrapped expression). Postfix `?` operator
 # that propagates Err/None from result/option types. Codegen
@@ -2621,6 +2638,12 @@ fun cur_val() -> str:
 fun cur_indent() -> i32:
     if p_pos < p_count:
         return Memory.read_i32(p_indents + ((p_pos as i64) * 4))
+    return 0
+
+# C2: source line number of the current token (1-based).
+fun cur_line() -> i32:
+    if p_pos < p_count:
+        return Memory.read_i32(out_lines + ((p_pos as i64) * 4))
     return 0
 
 fun peek_kind(offset: i32) -> i32:
@@ -3826,12 +3849,15 @@ fun parse_pass_stmt() -> i64:
 # and peek_kind(1) == TK_STRING. We just consume both tokens and build
 # the AST.
 fun parse_panic_stmt() -> i64:
+    line: i32 = cur_line()          # capture source line for diagnostic
     advance()                       # consume the 'panic' identifier
+    eat(TK_LPAREN)
     if cur_kind() != TK_STRING:
-        panic("panic statement requires a string literal")
+        panic("panic(...) requires a string literal")
     msg: str = cur_val()
     advance()                       # consume the string literal
-    return mk_panic(msg)
+    eat(TK_RPAREN)
+    return mk_panic(msg, line)
 
 # ==========================================
 # Match Statement
@@ -5161,10 +5187,11 @@ fun parse_statement() -> i64:
         return parse_pass_stmt()
 
     # Panic statement: `panic "message"`
-    # Detected only when followed by a string literal — the function-call
-    # form `panic(...)` falls through to expression-statement handling
-    # so the existing internal `fun panic(msg)` definitions keep working.
-    if k == TK_IDENT and str_eq(cur_val(), "panic") == 1 and peek_kind(1) == TK_STRING:
+    # User-level `panic("msg")`. Internal compiler `panic(non_literal)`
+    # calls (e.g. `panic(Str.concat(...))`) fall through to ordinary
+    # fn-call handling — we only intercept the literal-string form, so
+    # the existing `fun panic(msg: str)` runtime helper keeps working.
+    if k == TK_IDENT and str_eq(cur_val(), "panic") == 1 and peek_kind(1) == TK_LPAREN and peek_kind(2) == TK_STRING:
         return parse_panic_stmt()
 
     # Import
@@ -5450,6 +5477,15 @@ fun str_from_range(src: str, start: i64, end_pos: i64) -> str:
 
 fun char_at(s: str, idx: i64) -> i8:
     return Memory.read_i8((s as i64) + idx)
+
+# C2: source-file basename (no path, no extension) — used by panic
+# codegen to embed `[panic at FILE:LINE]` prefix. Set by the driver
+# before calling generate().
+g_source_file_basename: str = "<source>"
+# Newlines in (prelude + runtime + imports) prefix BEFORE user source
+# starts. Subtracted from raw token line numbers so panic prefixes
+# show user-file line, not concatenated-source line.
+g_user_line_offset: i32 = 0
 
 fun panic(msg: str):
     IOOps.io_println(msg)
@@ -9845,13 +9881,17 @@ fun gen_statement(node: i64):
         # No-op
         return
     elif nt == NODE_PANIC:
-        # `panic "msg"` desugars to a call to the runtime helper
-        # dolet_panic(msg) which prints "[panic] msg" and exits 101.
-        # Synthesize the FUN_CALL AST and dispatch to the existing
-        # function-call codegen path — no special MLIR emission needed.
+        # `panic("msg")` lowers to `dolet_panic("[panic at FILE:LINE] msg")`.
+        # Subtract g_user_line_offset so the line number reflects the
+        # user file, not the concatenated prelude+runtime source.
         pmsg: str = panic_msg(node)
+        pline: i32 = panic_line(node) - g_user_line_offset
+        if pline < 1:
+            pline = 1
+        prefix: str = Str.concat(Str.concat(Str.concat("[panic at ", g_source_file_basename), ":"), Convert.i32_to_str(pline))
+        full_msg: str = Str.concat(Str.concat(prefix, "] "), pmsg)
         pargs: i64 = mk_node_list(1)
-        nl_add(pargs, mk_str_lit(pmsg))
+        nl_add(pargs, mk_str_lit(full_msg))
         pproxy: i64 = mk_fun_call("dolet_panic", pargs, 0)
         gen_fun_call(pproxy)
     elif nt == NODE_FUN_CALL:
@@ -14030,6 +14070,8 @@ fun init_tokenizer_buffers():
     out_kinds = Memory.malloc_zeroed(2097152)
     out_values = Memory.malloc_zeroed(4194304)
     out_indents = Memory.malloc_zeroed(2097152)
+    out_lines = Memory.malloc_zeroed(2097152)
+    g_tok_cur_line = 1
     out_count = 0
     tok_pos = 0
     tok_len = 0
@@ -15809,6 +15851,19 @@ fun main() -> i32:
     # constants are initialized before user code runs in @main
     if imp_len > 0:
         source = Str.concat(source, Str.concat("\n", imp_src))
+
+    # C2: capture how many lines precede the user source. Used by
+    # panic codegen so file:line prefixes show user-file line numbers.
+    pre_user_len: i64 = Memory.strlen(source)
+    nl_count_pre: i32 = 0
+    nci: i64 = 0
+    while nci < pre_user_len:
+        if Memory.read_i8((source as i64) + nci) == 10 as i8:
+            nl_count_pre = nl_count_pre + 1
+        nci = nci + 1 as i64
+    # +1 for the "\n" separator we insert below
+    g_user_line_offset = nl_count_pre + 1
+
     source = Str.concat(source, Str.concat("\n", user_src))
 
     src_len: i64 = Memory.strlen(source)
@@ -15828,6 +15883,7 @@ fun main() -> i32:
 
     # Phase 3: Generate MLIR
     IOOps.io_println("[3/4] Generating MLIR...")
+    g_source_file_basename = path_base_name(input_path)
     mlir: str = generate(ast)
     mlir_len: i64 = Memory.strlen(mlir)
     IOOps.io_println(Str.concat("  MLIR: ", Str.concat(Convert.i64_to_str(mlir_len), " chars")))

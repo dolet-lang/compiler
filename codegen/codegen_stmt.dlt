@@ -929,13 +929,17 @@ fun gen_statement(node: i64):
         # No-op
         return
     elif nt == NODE_PANIC:
-        # `panic "msg"` desugars to a call to the runtime helper
-        # dolet_panic(msg) which prints "[panic] msg" and exits 101.
-        # Synthesize the FUN_CALL AST and dispatch to the existing
-        # function-call codegen path — no special MLIR emission needed.
+        # `panic("msg")` lowers to `dolet_panic("[panic at FILE:LINE] msg")`.
+        # Subtract g_user_line_offset so the line number reflects the
+        # user file, not the concatenated prelude+runtime source.
         pmsg: str = panic_msg(node)
+        pline: i32 = panic_line(node) - g_user_line_offset
+        if pline < 1:
+            pline = 1
+        prefix: str = Str.concat(Str.concat(Str.concat("[panic at ", g_source_file_basename), ":"), Convert.i32_to_str(pline))
+        full_msg: str = Str.concat(Str.concat(prefix, "] "), pmsg)
         pargs: i64 = mk_node_list(1)
-        nl_add(pargs, mk_str_lit(pmsg))
+        nl_add(pargs, mk_str_lit(full_msg))
         pproxy: i64 = mk_fun_call("dolet_panic", pargs, 0)
         gen_fun_call(pproxy)
     elif nt == NODE_FUN_CALL:
