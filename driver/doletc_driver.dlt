@@ -738,7 +738,7 @@ fun load_runtime(exe_dir: str) -> str:
     core_rt: str = load_module(library_root, Str.concat("core", Str.concat(s, "mod.dlt")))
     # 2. Platform runtime (kernel32/syscalls, alloc, io...) — platform-specific
     plat_rt: str = load_module(library_root, Str.concat("platform", Str.concat(s, Str.concat(g_plat_name, Str.concat(s, "mod.dlt")))))
-    # 3. Standard library (collections, fileIO) — platform-neutral
+    # 3. Standard library (collections, file) — platform-neutral
     std_rt: str = load_module(library_root, Str.concat("std", Str.concat(s, "mod.dlt")))
     return Str.concat(core_rt, Str.concat("\n", Str.concat(plat_rt, Str.concat("\n", std_rt))))
 
@@ -748,8 +748,12 @@ fun load_std(exe_dir: str) -> str:
     return load_module(library_root, Str.concat("std", Str.concat(s, "mod.dlt")))
 
 fun load_prelude(exe_dir: str) -> str:
+    # Compiler-built-in annotations live in core/annotations.dlt — the
+    # old library/prelude/ directory was removed in v1.5.x because it
+    # held a single file. Annotations are core-level (they describe
+    # types and behaviour, no OS), so they sit in core/ now.
     s: str = g_plat_separator
-    prelude_path: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", Str.concat(s, Str.concat("prelude", Str.concat(s, "annotations.dlt"))))))))
+    prelude_path: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", Str.concat(s, Str.concat("core", Str.concat(s, "annotations.dlt"))))))))
     src: str = read_file_to_string(prelude_path)
     return src
 
@@ -1724,7 +1728,7 @@ fun main() -> i32:
     prelude_len: i64 = Memory.strlen(prelude_src)
     if prelude_len > 0:
         source = prelude_src
-        mark_file_loaded("prelude/annotations")
+        mark_file_loaded("core/annotations")
         IOOps.io_println(Str.concat("Prelude: ", Str.concat(Convert.i64_to_str(prelude_len), " chars")))
 
     # Build platform-relative path prefix (e.g. "platform/windows/")
@@ -1735,9 +1739,9 @@ fun main() -> i32:
         rt_len: i64 = Memory.strlen(rt)
         # Mark core files as loaded
         mark_file_loaded("core/memory")
-        mark_file_loaded("core/types/integers")
-        mark_file_loaded("core/types/floats")
-        mark_file_loaded("core/types/primitives")
+        mark_file_loaded("core/integers")
+        mark_file_loaded("core/floats")
+        mark_file_loaded("core/primitives")
         # Runtime now always includes std — mark platform files dynamically
         mark_file_loaded(Str.concat(plat_prefix, "kernel32"))
         mark_file_loaded(Str.concat(plat_prefix, "syscalls"))
@@ -1750,8 +1754,8 @@ fun main() -> i32:
         mark_file_loaded(Str.concat(plat_prefix, "args"))
         mark_file_loaded(Str.concat(plat_prefix, "process"))
         mark_file_loaded("std/io")
-        mark_file_loaded("core/types/collections")
-        mark_file_loaded("std/fileIO")
+        mark_file_loaded("core/collections")
+        mark_file_loaded("std/file")
         register_module_name("std")
 
         if rt_len > 0:

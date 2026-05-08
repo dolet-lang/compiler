@@ -148,4 +148,4 @@ fun init_pipeline():
     init_module_names()
     init_local_names()
     init_annot_registry()
-    # Built-in annotations loaded from library/prelude/annotations.dlt via load_prelude()
+    # Built-in annotations loaded from library/core/annotations.dlt via load_prelude()

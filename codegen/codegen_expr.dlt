@@ -1101,7 +1101,7 @@ fun gen_builtin_call(node: i64) -> str:
 #
 # Inner type must be result[T,E] or option[T]. Mapping T to the
 # right unwrap_X method matches the per-type pattern in
-# core/types/{result,option}.dlt (see ROADMAP B1).
+# core/{result,option}.dlt (see ROADMAP B1).
 fun gen_try_op(node: i64, expected: str) -> str:
     inner: i64 = tryop_inner(node)
     inner_type: str = infer_expr_type(inner)
@@ -1134,7 +1134,7 @@ fun gen_try_op(node: i64, expected: str) -> str:
     elif Str.equals(t_type, "f64"):
         unwrap_name = "unwrap_f64"
     else:
-        panic(Str.concat("? operator: unsupported inner type '", Str.concat(t_type, "' (add unwrap_X for it in core/types/result.dlt and core/types/option.dlt)")))
+        panic(Str.concat("? operator: unsupported inner type '", Str.concat(t_type, "' (add unwrap_X for it in core/result.dlt and core/option.dlt)")))
 
     # Method name prefix and is_check name based on container type
     struct_prefix: str = "option"

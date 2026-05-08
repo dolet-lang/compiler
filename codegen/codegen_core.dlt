@@ -1136,7 +1136,7 @@ fun target_allows(targets: str, kind: str) -> i32:
     return 0
 
 fun init_builtin_annots():
-    # Built-in annotations now defined in library/prelude/annotations.dlt
+    # Built-in annotations now defined in library/core/annotations.dlt
     # and loaded automatically by load_prelude() in the driver.
     return
 
