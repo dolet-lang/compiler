@@ -157,6 +157,7 @@ for %%f in (
     atomic_counter
     atomic_cas
     random_basic
+    nested_namespace
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

@@ -314,6 +314,13 @@ fun collect_declarations(ast: i64):
         # Extend blocks
         if nt == NODE_EXTEND_BLOCK:
             etname = Memory.read_i64(node + 8) as str
+            # Nested namespace form `extend Outer.Inner:` — translate
+            # the dot to underscore so the registered mangled name
+            # matches what gen_extend_block emits and what the call
+            # site looks up. Without this the registry holds
+            # `Outer.Inner_X` (with a dot) but we look up
+            # `Outer_Inner_X` (with underscore) and miss.
+            etname = str_replace(etname, ".", "_")
             emethods = Memory.read_i64(node + 16)
             if emethods != 0:
                 mc2 = nl_count(emethods)

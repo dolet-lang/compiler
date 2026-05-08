@@ -4827,6 +4827,17 @@ fun parse_extend_block() -> i64:
     # Accept keywords like list/array/map as type names
     advance()
 
+    # `extend Outer.Inner:` — nested namespace declaration. Methods
+    # mangle as Outer_Inner_method instead of Inner_method, and the
+    # call site `Outer.Inner.X(...)` resolves to that exact mangled
+    # name (no leniency fallback). This is how Java-style nested
+    # types are spelled in Dolet.
+    while cur_kind() == TK_DOT:
+        advance()
+        sub: str = cur_val()
+        advance()
+        tname = Str.concat(Str.concat(tname, "."), sub)
+
     # Optional type parameters: extend Name<T>
     type_params: i64 = parse_type_param_list()
 
@@ -7721,13 +7732,21 @@ fun infer_expr_type(node: i64) -> str:
         nm_base: i64 = Memory.read_i64(node + 8)
         nm_mname: str = Memory.read_i64(node + 16) as str
 
-        # 3-level static A.B.method() — same dispatch as in
-        # gen_nested_method_call. When both idents are registered
-        # struct types, resolve as B.method() so the inferred
-        # return type matches what the call site emits.
+        # 3-level static A.B.method() — mirror gen_nested_method_call's
+        # two-path resolution so inferred type matches what gets emitted:
+        #   Path 1: formal `extend A.B:` → mangled A_B_method
+        #   Path 2: legacy leniency → drop A, look up B_method
         if Memory.read_i32(nm_base) == NODE_STATIC_FIELD:
             ns_a: str = Memory.read_i64(nm_base + 8) as str
             ns_b: str = Memory.read_i64(nm_base + 16) as str
+
+            # Path 1: formal A_B_method
+            ns_formal: str = Str.concat(Str.concat(Str.concat(ns_a, "_"), ns_b), Str.concat("_", nm_mname))
+            ns_formal_rt: str = get_fun_ret_type(ns_formal)
+            if str_eq(ns_formal_rt, "unknown") == 0 and str_eq(ns_formal_rt, "") == 0:
+                return ns_formal_rt
+
+            # Path 2: legacy leniency
             if is_struct_type(ns_a) == 1:
                 if is_struct_type(ns_b) == 1:
                     ns_mangled: str = Str.concat(Str.concat(ns_b, "_"), nm_mname)
@@ -10684,12 +10703,19 @@ fun gen_extend_block(node: i64):
     if methods == 0:
         return
 
+    # Nested namespace form `extend Outer.Inner:` — translate the dot
+    # to an underscore so the mangled MLIR symbol is valid (dots aren't
+    # legal in `@symbol` names). The user-facing name stays `Outer.Inner`
+    # at call sites; gen_nested_method_call will reconstruct the
+    # underscore form when it dispatches.
+    mangled_tname: str = str_replace(tname, ".", "_")
+
     mc: i32 = nl_count(methods)
     i: i32 = 0
     while i < mc:
         mnode: i64 = nl_get(methods, i)
         # Extend methods use the type name as struct name
-        gen_method_def(tname, mnode)
+        gen_method_def(mangled_tname, mnode)
         i = i + 1
 
 ##############################
@@ -10854,14 +10880,30 @@ fun gen_nested_method_call(node: i64) -> str:
     method_name: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
 
-    # 3-level static: A.B.method() where A and B are both struct
-    # types. The parser builds NODE_NESTED_METHOD with base =
-    # NODE_STATIC_FIELD(A, B) when both idents are uppercase. A
-    # acts as a namespace qualifier; resolve as B.method() so the
-    # MLIR call is identical to a plain `B.method(args)`.
+    # 3-level static: A.B.method(). Two resolution paths in priority:
+    #
+    #   1. Formal nested namespace — if `extend A.B:` was declared,
+    #      methods were mangled as A_B_method. We try that first so
+    #      the user's intent (a real nested type) wins. This is what
+    #      Java / C# / C++ would do.
+    #
+    #   2. Backward-compat leniency — if A_B_method doesn't exist,
+    #      and both A and B are top-level struct types, fall back
+    #      to dispatching as B.method() (A acts as a decorative
+    #      qualifier). Older Dolet code relies on this and we keep
+    #      it working.
     if Memory.read_i32(base_node) == NODE_STATIC_FIELD:
         a_name: str = Memory.read_i64(base_node + 8) as str
         b_name: str = Memory.read_i64(base_node + 16) as str
+
+        # Path 1: try the formal nested form A_B_method.
+        nested_struct: str = Str.concat(Str.concat(a_name, "_"), b_name)
+        nested_mangled: str = Str.concat(Str.concat(nested_struct, "_"), method_name)
+        if str_eq(get_fun_ret_type(nested_mangled), "unknown") == 0:
+            proxy_nested: i64 = mk_static_method(nested_struct, method_name, args_list)
+            return gen_static_method_call(proxy_nested)
+
+        # Path 2: legacy leniency — drop A, dispatch as B.method().
         if is_struct_type(a_name) == 1:
             if is_struct_type(b_name) == 1:
                 proxy: i64 = mk_static_method(b_name, method_name, args_list)
@@ -14142,6 +14184,13 @@ fun collect_declarations(ast: i64):
         # Extend blocks
         if nt == NODE_EXTEND_BLOCK:
             etname = Memory.read_i64(node + 8) as str
+            # Nested namespace form `extend Outer.Inner:` — translate
+            # the dot to underscore so the registered mangled name
+            # matches what gen_extend_block emits and what the call
+            # site looks up. Without this the registry holds
+            # `Outer.Inner_X` (with a dot) but we look up
+            # `Outer_Inner_X` (with underscore) and miss.
+            etname = str_replace(etname, ".", "_")
             emethods = Memory.read_i64(node + 16)
             if emethods != 0:
                 mc2 = nl_count(emethods)

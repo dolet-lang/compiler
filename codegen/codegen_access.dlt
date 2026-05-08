@@ -160,14 +160,30 @@ fun gen_nested_method_call(node: i64) -> str:
     method_name: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
 
-    # 3-level static: A.B.method() where A and B are both struct
-    # types. The parser builds NODE_NESTED_METHOD with base =
-    # NODE_STATIC_FIELD(A, B) when both idents are uppercase. A
-    # acts as a namespace qualifier; resolve as B.method() so the
-    # MLIR call is identical to a plain `B.method(args)`.
+    # 3-level static: A.B.method(). Two resolution paths in priority:
+    #
+    #   1. Formal nested namespace — if `extend A.B:` was declared,
+    #      methods were mangled as A_B_method. We try that first so
+    #      the user's intent (a real nested type) wins. This is what
+    #      Java / C# / C++ would do.
+    #
+    #   2. Backward-compat leniency — if A_B_method doesn't exist,
+    #      and both A and B are top-level struct types, fall back
+    #      to dispatching as B.method() (A acts as a decorative
+    #      qualifier). Older Dolet code relies on this and we keep
+    #      it working.
     if Memory.read_i32(base_node) == NODE_STATIC_FIELD:
         a_name: str = Memory.read_i64(base_node + 8) as str
         b_name: str = Memory.read_i64(base_node + 16) as str
+
+        # Path 1: try the formal nested form A_B_method.
+        nested_struct: str = Str.concat(Str.concat(a_name, "_"), b_name)
+        nested_mangled: str = Str.concat(Str.concat(nested_struct, "_"), method_name)
+        if str_eq(get_fun_ret_type(nested_mangled), "unknown") == 0:
+            proxy_nested: i64 = mk_static_method(nested_struct, method_name, args_list)
+            return gen_static_method_call(proxy_nested)
+
+        # Path 2: legacy leniency — drop A, dispatch as B.method().
         if is_struct_type(a_name) == 1:
             if is_struct_type(b_name) == 1:
                 proxy: i64 = mk_static_method(b_name, method_name, args_list)
