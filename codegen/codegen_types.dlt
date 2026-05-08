@@ -309,6 +309,29 @@ fun infer_expr_type(node: i64) -> str:
             rt2 = get_fun_ret_type(full)
         return rt2
 
+    # NS_STATIC_METHOD: `ns.Struct.method(args)` — look up the method's
+    # return type by mangled `Struct_method` name, ignoring the
+    # outer namespace (ns is purely for parser dispatch). Without this
+    # case the inferred type defaults to "unknown" and the call site
+    # converts the i32 result into a !llvm.ptr for print, blowing up
+    # at MLIR translation. (gen_ns_static_method itself handles the
+    # call correctly; only the type lookup needed teaching.)
+    if ntype == NODE_NS_STATIC_METHOD:
+        nss_sname: str = Memory.read_i64(node + 16) as str
+        nss_mname: str = Memory.read_i64(node + 24) as str
+        nss_full: str = Str.concat(Str.concat(nss_sname, "_"), nss_mname)
+        nss_rt: str = get_fun_ret_type(nss_full)
+        if str_eq(nss_rt, "unknown") == 1:
+            nss_full = Str.concat(Str.concat(nss_sname, "."), nss_mname)
+            nss_rt = get_fun_ret_type(nss_full)
+        return nss_rt
+
+    # NS_FUN_CALL: `ns.func(args)` — codegen drops ns and calls plain
+    # `func`. Same idea for type inference.
+    if ntype == NODE_NS_FUN_CALL:
+        nsf_fname: str = Memory.read_i64(node + 16) as str
+        return get_fun_ret_type(nsf_fname)
+
     if ntype == NODE_FIELD_ACCESS:
         fa_obj: str = Memory.read_i64(node + 8) as str
         fa_field: str = Memory.read_i64(node + 16) as str

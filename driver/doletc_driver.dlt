@@ -398,6 +398,25 @@ fun load_library_registry(library_root: str):
                             Memory.write_i64(g_lib_reg_names + ((g_lib_reg_count as i64) * 8), reg_name as i64)
                             Memory.write_i64(g_lib_reg_paths + ((g_lib_reg_count as i64) * 8), reg_win_path as i64)
                             g_lib_reg_count = g_lib_reg_count + 1
+                            # Register parser-side module name so dotted
+                            # access like `Random.Secure.method()` is
+                            # dispatched through NS_FUN_CALL /
+                            # NS_STATIC_METHOD instead of falling back to
+                            # static-method mangling on a struct that
+                            # doesn't exist (Random_range etc.). For dotted
+                            # names like sys.windows, register the first
+                            # component (sys) — same convention the import
+                            # scanner uses.
+                            reg_first_comp: str = reg_name
+                            rfc_len: i64 = Memory.strlen(reg_name)
+                            rfc_i: i64 = 0
+                            while rfc_i < rfc_len:
+                                rfc_c: i8 = Memory.read_i8((reg_name as i64) + rfc_i)
+                                if rfc_c == 46:
+                                    reg_first_comp = str_from_range(reg_name, 0, rfc_i)
+                                    break
+                                rfc_i = rfc_i + 1
+                            register_module_name(reg_first_comp)
             if rc == 13 and (ri + 1) < rlen:
                 rn0: i8 = Memory.read_i8((reg_content as i64) + ri + 1)
                 if rn0 == 10:

@@ -1,42 +1,45 @@
 import std
 
-# Random — both the explicit-state Random struct and the global helpers.
-# The seed is fixed so the output is deterministic and the test stays
-# reproducible across runs.
+# Test Random.X (default LCG, fast) and Random.Secure.X (stronger PRNG).
+# Both are pure CPU — no OS, work on bare metal.
 
 fun do_test():
-    # Explicit-state generator. Same seed → same sequence every run.
-    rng: Random = Random.new(42 as i64)
+    # ---- Default: Random.X = LCG, fast ----
+    Random.seed(42 as i64)
+    print("--- Random.range(1, 100) x 5 ---")
+    print(Random.range(1, 100))
+    print(Random.range(1, 100))
+    print(Random.range(1, 100))
+    print(Random.range(1, 100))
+    print(Random.range(1, 100))
 
-    print("--- range_i32(1, 100) x 5 ---")
-    print(rng.range_i32(1, 100))
-    print(rng.range_i32(1, 100))
-    print(rng.range_i32(1, 100))
-    print(rng.range_i32(1, 100))
-    print(rng.range_i32(1, 100))
+    print("--- Random.next_f64() x 3 ---")
+    print(Random.next_f64())
+    print(Random.next_f64())
+    print(Random.next_f64())
 
-    print("--- next_f64 x 3 ---")
-    print(rng.next_f64())
-    print(rng.next_f64())
-    print(rng.next_f64())
+    Random.seed(42 as i64)
+    print("--- after Random.seed(42) ---")
+    print(Random.range(1, 100))    # same as first roll above
 
-    # Re-seed → same first value as a fresh generator with that seed.
-    rng.reseed(42 as i64)
-    print("--- after reseed(42) ---")
-    print(rng.range_i32(1, 100))    # same first value as the first call above
+    # ---- Secure: Random.Secure.X = stronger PRNG ----
+    Random.Secure.seed(42 as i64)
+    print("--- Random.Secure.range(1, 100) x 5 ---")
+    print(Random.Secure.range(1, 100))
+    print(Random.Secure.range(1, 100))
+    print(Random.Secure.range(1, 100))
+    print(Random.Secure.range(1, 100))
+    print(Random.Secure.range(1, 100))
 
-    # Independent generators with different seeds.
-    a: Random = Random.new(1 as i64)
-    b: Random = Random.new(2 as i64)
-    print("--- a vs b first roll ---")
-    print(a.range_i32(0, 9))
-    print(b.range_i32(0, 9))
+    Random.Secure.seed(42 as i64)
+    print("--- after Random.Secure.seed(42) ---")
+    print(Random.Secure.range(1, 100))   # same as first secure roll
 
-    # Global default RNG.
-    rand_seed(7 as i64)
-    print("--- global rand_range(0, 9) x 3 ---")
-    print(rand_range(0, 9))
-    print(rand_range(0, 9))
-    print(rand_range(0, 9))
+    # ---- Explicit-state Lcg instance ----
+    g: Lcg = Lcg.new(7 as i64)
+    print("--- explicit Lcg.new(7).range_i32(0, 9) x 3 ---")
+    print(g.range_i32(0, 9))
+    print(g.range_i32(0, 9))
+    print(g.range_i32(0, 9))
 
 do_test()

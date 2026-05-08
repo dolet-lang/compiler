@@ -7623,6 +7623,29 @@ fun infer_expr_type(node: i64) -> str:
             rt2 = get_fun_ret_type(full)
         return rt2
 
+    # NS_STATIC_METHOD: `ns.Struct.method(args)` — look up the method's
+    # return type by mangled `Struct_method` name, ignoring the
+    # outer namespace (ns is purely for parser dispatch). Without this
+    # case the inferred type defaults to "unknown" and the call site
+    # converts the i32 result into a !llvm.ptr for print, blowing up
+    # at MLIR translation. (gen_ns_static_method itself handles the
+    # call correctly; only the type lookup needed teaching.)
+    if ntype == NODE_NS_STATIC_METHOD:
+        nss_sname: str = Memory.read_i64(node + 16) as str
+        nss_mname: str = Memory.read_i64(node + 24) as str
+        nss_full: str = Str.concat(Str.concat(nss_sname, "_"), nss_mname)
+        nss_rt: str = get_fun_ret_type(nss_full)
+        if str_eq(nss_rt, "unknown") == 1:
+            nss_full = Str.concat(Str.concat(nss_sname, "."), nss_mname)
+            nss_rt = get_fun_ret_type(nss_full)
+        return nss_rt
+
+    # NS_FUN_CALL: `ns.func(args)` — codegen drops ns and calls plain
+    # `func`. Same idea for type inference.
+    if ntype == NODE_NS_FUN_CALL:
+        nsf_fname: str = Memory.read_i64(node + 16) as str
+        return get_fun_ret_type(nsf_fname)
+
     if ntype == NODE_FIELD_ACCESS:
         fa_obj: str = Memory.read_i64(node + 8) as str
         fa_field: str = Memory.read_i64(node + 16) as str
@@ -15172,6 +15195,25 @@ fun load_library_registry(library_root: str):
                             Memory.write_i64(g_lib_reg_names + ((g_lib_reg_count as i64) * 8), reg_name as i64)
                             Memory.write_i64(g_lib_reg_paths + ((g_lib_reg_count as i64) * 8), reg_win_path as i64)
                             g_lib_reg_count = g_lib_reg_count + 1
+                            # Register parser-side module name so dotted
+                            # access like `Random.Secure.method()` is
+                            # dispatched through NS_FUN_CALL /
+                            # NS_STATIC_METHOD instead of falling back to
+                            # static-method mangling on a struct that
+                            # doesn't exist (Random_range etc.). For dotted
+                            # names like sys.windows, register the first
+                            # component (sys) — same convention the import
+                            # scanner uses.
+                            reg_first_comp: str = reg_name
+                            rfc_len: i64 = Memory.strlen(reg_name)
+                            rfc_i: i64 = 0
+                            while rfc_i < rfc_len:
+                                rfc_c: i8 = Memory.read_i8((reg_name as i64) + rfc_i)
+                                if rfc_c == 46:
+                                    reg_first_comp = str_from_range(reg_name, 0, rfc_i)
+                                    break
+                                rfc_i = rfc_i + 1
+                            register_module_name(reg_first_comp)
             if rc == 13 and (ri + 1) < rlen:
                 rn0: i8 = Memory.read_i8((reg_content as i64) + ri + 1)
                 if rn0 == 10:
