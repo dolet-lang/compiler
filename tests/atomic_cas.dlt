@@ -1,0 +1,37 @@
+import std
+
+# CAS basics — single-threaded sanity for the cas() primitive. A more
+# realistic test (compete-for-the-CAS across threads) runs in
+# tests/atomic_counter.dlt; this one just verifies the contract:
+#
+#   cas(expected, desired) returns true and updates iff the storage
+#   currently holds `expected`; otherwise returns false and leaves it.
+
+fun do_test():
+    a: AtomicI32 = AtomicI32.new(10)
+
+    # First CAS sees 10 (matches), so swaps to 99 and returns true.
+    ok1: bool = a.cas(10, 99)
+    print(ok1)              # true
+    print(a.load())         # 99
+
+    # Second CAS expects 10 again — but storage is 99 now, so fails.
+    ok2: bool = a.cas(10, 0)
+    print(ok2)              # false
+    print(a.load())         # 99 (unchanged)
+
+    # CAS with the new expected value succeeds.
+    ok3: bool = a.cas(99, 7)
+    print(ok3)              # true
+    print(a.load())         # 7
+
+    # AtomicI64 sanity — same contract, 64-bit width.
+    b: AtomicI64 = AtomicI64.new(0 as i64)
+    print(b.fetch_add(1000 as i64))   # 0 (fetch_add returns OLD value)
+    print(b.load())                    # 1000
+    print(b.fetch_sub(250 as i64))    # 1000
+    print(b.load())                    # 750
+    print(b.swap(42 as i64))          # 750 (swap returns OLD value)
+    print(b.load())                    # 42
+
+do_test()

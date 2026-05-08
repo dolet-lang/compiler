@@ -1,0 +1,35 @@
+import std
+
+# Lock-free counter — 4 OS threads each run 1000 atomic increments on
+# the same shared AtomicI32. Without atomics this races (each store
+# loses partial increments); with fetch_add the final value is exactly
+# 4000 every run.
+
+g_counter: AtomicI32 = AtomicI32.new(0)
+
+fun increment_many():
+    i: i32 = 0
+    while i < 1000:
+        g_counter.fetch_add(1)
+        i = i + 1
+
+fun do_test():
+    f0: @heap fun() = fun() increment_many()
+    f1: @heap fun() = fun() increment_many()
+    f2: @heap fun() = fun() increment_many()
+    f3: @heap fun() = fun() increment_many()
+
+    t0: Thread = Thread.spawn(f0)
+    t1: Thread = Thread.spawn(f1)
+    t2: Thread = Thread.spawn(f2)
+    t3: Thread = Thread.spawn(f3)
+
+    t0.join()
+    t1.join()
+    t2.join()
+    t3.join()
+
+    # 4 threads * 1000 increments = 4000, exact (no race).
+    print(g_counter.load())
+
+do_test()

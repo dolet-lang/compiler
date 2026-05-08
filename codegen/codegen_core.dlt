@@ -1786,12 +1786,32 @@ fun init_all_registries():
     init_module_registry()
     init_tree_shaking()
     init_emitted_fns()
+    register_atomic_intrinsics()
     # Pre-register common strings
     gen_string_const("%s\n")
     gen_string_const("null")
     gen_string_const("")
     gen_string_const("true")
     gen_string_const("false")
+
+# C3 atomic intrinsics — pre-register their signatures so the type
+# system knows the return types when these names appear in user code.
+# The codegen call-site dispatcher (gen_fun_call_typed) intercepts the
+# `__atomic_` prefix and lowers directly to MLIR atomic ops, so the
+# bodies are never generated; only the signatures matter here.
+fun register_atomic_intrinsics():
+    register_fun_sig_with_params("__atomic_load_i32",      "i32",  "i64")
+    register_fun_sig_with_params("__atomic_load_i64",      "i64",  "i64")
+    register_fun_sig_with_params("__atomic_store_i32",     "void", "i64,i32")
+    register_fun_sig_with_params("__atomic_store_i64",     "void", "i64,i64")
+    register_fun_sig_with_params("__atomic_fetch_add_i32", "i32",  "i64,i32")
+    register_fun_sig_with_params("__atomic_fetch_add_i64", "i64",  "i64,i64")
+    register_fun_sig_with_params("__atomic_fetch_sub_i32", "i32",  "i64,i32")
+    register_fun_sig_with_params("__atomic_fetch_sub_i64", "i64",  "i64,i64")
+    register_fun_sig_with_params("__atomic_swap_i32",      "i32",  "i64,i32")
+    register_fun_sig_with_params("__atomic_swap_i64",      "i64",  "i64,i64")
+    register_fun_sig_with_params("__atomic_cas_i32",       "bool", "i64,i32,i32")
+    register_fun_sig_with_params("__atomic_cas_i64",       "bool", "i64,i64,i64")
 
 # ==========================================
 # Function Deduplication (prevent duplicate MLIR emissions)

@@ -342,6 +342,124 @@ fun gen_indirect_call(node: i64, fname: str, fvar_type: str, args_list: i64) -> 
         return tmp
 
 # ==========================================
+# C3 Atomic intrinsics — lowered to MLIR LLVM-dialect atomic ops with
+# seq_cst ordering (the conservative default; future work may expose
+# acquire/release knobs through additional intrinsic suffixes).
+#
+# Layout: every atomic intrinsic takes the storage address as its
+# first arg (i64). We inttoptr it once into !llvm.ptr, then dispatch
+# by the name suffix to one of:
+#   __atomic_load_<T>     -> llvm.load atomic
+#   __atomic_store_<T>    -> llvm.store atomic
+#   __atomic_fetch_add_<T> -> llvm.atomicrmw add
+#   __atomic_fetch_sub_<T> -> llvm.atomicrmw sub
+#   __atomic_swap_<T>      -> llvm.atomicrmw xchg
+#   __atomic_cas_<T>       -> llvm.cmpxchg + extractvalue
+#
+# Supported widths: i32, i64. Adding wider/narrower types means a new
+# branch + matching alignment. Floats are intentionally NOT supported
+# — atomic floats are easy to misuse (no NaN-safe arithmetic).
+# ==========================================
+fun gen_atomic_intrinsic(fname: str, args: i64) -> str:
+    if args == 0 or nl_count(args) < 1:
+        panic(@"atomic intrinsic '{fname}' called with no arguments")
+
+    # First arg is always the storage address (i64). Convert to !llvm.ptr.
+    addr_node: i64 = nl_get(args, 0)
+    addr_val: str = gen_expr(addr_node, "i64")
+    ptr: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(ptr, " = llvm.inttoptr "), addr_val), " : i64 to !llvm.ptr"))
+
+    # Loads — read atomically and return the value.
+    if str_eq(fname, "__atomic_load_i32") == 1:
+        rv1: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(rv1, " = llvm.load "), Str.concat(ptr, " atomic seq_cst {alignment = 4 : i64} : !llvm.ptr -> i32")))
+        return rv1
+    if str_eq(fname, "__atomic_load_i64") == 1:
+        rv2: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(rv2, " = llvm.load "), Str.concat(ptr, " atomic seq_cst {alignment = 8 : i64} : !llvm.ptr -> i64")))
+        return rv2
+
+    # Stores — write atomically. No return value (caller must not bind).
+    if str_eq(fname, "__atomic_store_i32") == 1:
+        v1_node: i64 = nl_get(args, 1)
+        v1: str = gen_expr(v1_node, "i32")
+        emit_ind(Str.concat(Str.concat("llvm.store ", v1), Str.concat(", ", Str.concat(ptr, " atomic seq_cst {alignment = 4 : i64} : i32, !llvm.ptr"))))
+        return ""
+    if str_eq(fname, "__atomic_store_i64") == 1:
+        v2_node: i64 = nl_get(args, 1)
+        v2: str = gen_expr(v2_node, "i64")
+        emit_ind(Str.concat(Str.concat("llvm.store ", v2), Str.concat(", ", Str.concat(ptr, " atomic seq_cst {alignment = 8 : i64} : i64, !llvm.ptr"))))
+        return ""
+
+    # Read-modify-write. Returns the value BEFORE the operation —
+    # standard atomicrmw semantics matching C11 / Rust / Java.
+    if str_eq(fname, "__atomic_fetch_add_i32") == 1:
+        d1_node: i64 = nl_get(args, 1)
+        d1: str = gen_expr(d1_node, "i32")
+        rv3: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(rv3, " = llvm.atomicrmw add "), ptr), Str.concat(", ", Str.concat(d1, " seq_cst : !llvm.ptr, i32"))))
+        return rv3
+    if str_eq(fname, "__atomic_fetch_add_i64") == 1:
+        d2_node: i64 = nl_get(args, 1)
+        d2: str = gen_expr(d2_node, "i64")
+        rv4: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(rv4, " = llvm.atomicrmw add "), ptr), Str.concat(", ", Str.concat(d2, " seq_cst : !llvm.ptr, i64"))))
+        return rv4
+    if str_eq(fname, "__atomic_fetch_sub_i32") == 1:
+        s1_node: i64 = nl_get(args, 1)
+        s1: str = gen_expr(s1_node, "i32")
+        rv5: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(rv5, " = llvm.atomicrmw sub "), ptr), Str.concat(", ", Str.concat(s1, " seq_cst : !llvm.ptr, i32"))))
+        return rv5
+    if str_eq(fname, "__atomic_fetch_sub_i64") == 1:
+        s2_node: i64 = nl_get(args, 1)
+        s2: str = gen_expr(s2_node, "i64")
+        rv6: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(rv6, " = llvm.atomicrmw sub "), ptr), Str.concat(", ", Str.concat(s2, " seq_cst : !llvm.ptr, i64"))))
+        return rv6
+    if str_eq(fname, "__atomic_swap_i32") == 1:
+        x1_node: i64 = nl_get(args, 1)
+        x1: str = gen_expr(x1_node, "i32")
+        rv7: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(rv7, " = llvm.atomicrmw xchg "), ptr), Str.concat(", ", Str.concat(x1, " seq_cst : !llvm.ptr, i32"))))
+        return rv7
+    if str_eq(fname, "__atomic_swap_i64") == 1:
+        x2_node: i64 = nl_get(args, 1)
+        x2: str = gen_expr(x2_node, "i64")
+        rv8: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(rv8, " = llvm.atomicrmw xchg "), ptr), Str.concat(", ", Str.concat(x2, " seq_cst : !llvm.ptr, i64"))))
+        return rv8
+
+    # Compare-and-swap. cmpxchg returns a {value, success} struct;
+    # we keep only the success bit for the bool result. Callers that
+    # need the witnessed value should call __atomic_load after a
+    # failed CAS — mirrors C11's compare_exchange_strong with discard.
+    if str_eq(fname, "__atomic_cas_i32") == 1:
+        old1_node: i64 = nl_get(args, 1)
+        new1_node: i64 = nl_get(args, 2)
+        old1: str = gen_expr(old1_node, "i32")
+        new1: str = gen_expr(new1_node, "i32")
+        cx1: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(cx1, " = llvm.cmpxchg "), Str.concat(ptr, Str.concat(", ", Str.concat(old1, Str.concat(", ", Str.concat(new1, " seq_cst seq_cst : !llvm.ptr, i32"))))) ))
+        ok1: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(ok1, " = llvm.extractvalue "), Str.concat(cx1, "[1] : !llvm.struct<(i32, i1)>")))
+        return ok1
+    if str_eq(fname, "__atomic_cas_i64") == 1:
+        old2_node: i64 = nl_get(args, 1)
+        new2_node: i64 = nl_get(args, 2)
+        old2: str = gen_expr(old2_node, "i64")
+        new2: str = gen_expr(new2_node, "i64")
+        cx2: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(cx2, " = llvm.cmpxchg "), Str.concat(ptr, Str.concat(", ", Str.concat(old2, Str.concat(", ", Str.concat(new2, " seq_cst seq_cst : !llvm.ptr, i64"))))) ))
+        ok2: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(ok2, " = llvm.extractvalue "), Str.concat(cx2, "[1] : !llvm.struct<(i64, i1)>")))
+        return ok2
+
+    panic(@"unknown atomic intrinsic '{fname}'")
+    return ""
+
+# ==========================================
 # Function Call
 # ==========================================
 fun gen_fun_call(node: i64) -> str:
@@ -352,6 +470,16 @@ fun gen_fun_call(node: i64) -> str:
 fun gen_fun_call_typed(node: i64, expected: str) -> str:
     fname: str = Memory.read_i64(node + 8) as str
     args_list: i64 = Memory.read_i64(node + 16)
+
+    # C3 atomic intrinsics. Recognized by name prefix `__atomic_` and
+    # lowered directly to MLIR's `llvm.load atomic` / `llvm.store atomic`
+    # / `llvm.atomicrmw` / `llvm.cmpxchg` ops with seq_cst ordering.
+    # The library wraps these in Atomic<T>; users never call them
+    # directly. Lives in the call-site dispatcher so the rest of the
+    # function-call machinery (overload resolution, ctor sugar, etc.)
+    # never sees them.
+    if Str.starts_with(fname, "__atomic_") == true:
+        return gen_atomic_intrinsic(fname, args_list)
 
     # Check if it's actually a struct instantiation
     if is_struct_type(fname) == 1:

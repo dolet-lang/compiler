@@ -154,6 +154,8 @@ for %%f in (
     closures_locals_in_body
     thread_basic
     thread_parallel_sum
+    atomic_counter
+    atomic_cas
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
