@@ -1,0 +1,42 @@
+import std
+
+# Random — both the explicit-state Random struct and the global helpers.
+# The seed is fixed so the output is deterministic and the test stays
+# reproducible across runs.
+
+fun do_test():
+    # Explicit-state generator. Same seed → same sequence every run.
+    rng: Random = Random.new(42 as i64)
+
+    print("--- range_i32(1, 100) x 5 ---")
+    print(rng.range_i32(1, 100))
+    print(rng.range_i32(1, 100))
+    print(rng.range_i32(1, 100))
+    print(rng.range_i32(1, 100))
+    print(rng.range_i32(1, 100))
+
+    print("--- next_f64 x 3 ---")
+    print(rng.next_f64())
+    print(rng.next_f64())
+    print(rng.next_f64())
+
+    # Re-seed → same first value as a fresh generator with that seed.
+    rng.reseed(42 as i64)
+    print("--- after reseed(42) ---")
+    print(rng.range_i32(1, 100))    # same first value as the first call above
+
+    # Independent generators with different seeds.
+    a: Random = Random.new(1 as i64)
+    b: Random = Random.new(2 as i64)
+    print("--- a vs b first roll ---")
+    print(a.range_i32(0, 9))
+    print(b.range_i32(0, 9))
+
+    # Global default RNG.
+    rand_seed(7 as i64)
+    print("--- global rand_range(0, 9) x 3 ---")
+    print(rand_range(0, 9))
+    print(rand_range(0, 9))
+    print(rand_range(0, 9))
+
+do_test()

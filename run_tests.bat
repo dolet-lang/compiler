@@ -156,6 +156,7 @@ for %%f in (
     thread_parallel_sum
     atomic_counter
     atomic_cas
+    random_basic
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
