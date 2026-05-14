@@ -27,8 +27,10 @@ struct Tools:
 struct Outer:
     _placeholder: i32
 
-    static inner: Inner = Inner()
-    static tools: Tools = Tools()
+    # Type-only — the slot is never read; Path 3 dispatch only needs
+    # the registered type to look up methods on Inner / Tools.
+    static inner: Inner
+    static tools: Tools
 
     static fun greet() -> str:
         return "Outer.greet"

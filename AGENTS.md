@@ -274,12 +274,20 @@ struct Display_Box<T: Display>:
 struct Player extends Entity:
     weapon: str
 
-# 8. Nested namespace — the dot is a name, not a path
-struct Random.Secure:
+# 8. Composition — namespace nested capabilities through a static field.
+# Replaces the removed `struct A.B:` / `extend A.B:` syntax.
+struct Secure:
     _placeholder: i32
-
     static fun range(min: i32, max: i32) -> i32:
         ...
+
+struct Random:
+    _placeholder: i32
+    static secure: Secure   # type-only; slot never read, just typed
+    static fun range(min: i32, max: i32) -> i32:
+        ...
+
+# user: Random.secure.range(1, 100) → dispatches to Secure.range(1, 100)
 ```
 
 ### Method block forms (all equivalent in semantics)
@@ -345,10 +353,12 @@ access compiles to a hard error with file:line.
 | `struct Foo:` `fun bar(self):` | `Foo_bar` |
 | `group Foo:` `fun bar(self):` | `Foo_bar` |
 | `impl Foo:` `static fun zero():` | `Foo_zero` |
-| `group Outer.Inner:` `fun X():` | `Outer_Inner_X` (dot → underscore in `gen_struct_inline_methods` `codegen_decl.dlt:579`) |
 | `Box<T>` after monomorphization with T=i32 | `Box__i32_method` (two underscores between type and arg) |
 | `Pair<i32, str>` | `Pair__i32_str` (multiple args joined with `_`) |
 | Overload `fun bar(i32)` vs `fun bar(str)` | `Foo_bar__i32` vs `Foo_bar__str` |
+
+**Removed in this version:** `struct A.B:` and `extend/group A.B:` no
+longer parse. Use composition (`static b: B` on A) — see Path 3 below.
 
 ### Dispatch — `x.method(args)` (instance call)
 
@@ -367,23 +377,41 @@ Resolved in `codegen_access.dlt::gen_inst_method_call` (~line 764):
 
 `codegen_access.dlt::gen_static_method_call` (~line 616):
 
-1. `Type.new(...)` is special-cased to struct instantiation.
+1. `Type.new(...)` first checks for a user-defined `static fun new`
+   on the type via `find_impl_method(Type, "new")`. If found, dispatch
+   to it normally. Only if NO custom `new` exists does the codegen
+   fall back to the auto-generated struct-instantiation constructor.
+   This lets library types do setup (allocate OS state, init fields)
+   under the same `.new(...)` ergonomic name.
 2. Otherwise: `find_impl_method_overload(Type, mname, ...)` + emit `llvm.call @Type_method(...)` with no implicit self.
 
 ### Dispatch — `A.B.method(args)` (3-level / nested)
 
-`codegen_access.dlt::gen_nested_method_call` (~line 158).
+`codegen_access.dlt::gen_nested_method_call` (~line 158). Three paths
+tried in this order:
 
-**Path 1 (formal nested, preferred):**
+**Path 1 (legacy formal nested):**
 - Build `nested_mangled = A_B_method`.
 - If `get_fun_ret_type(nested_mangled) != "unknown"` → call it.
+- Dead after the dotted-struct removal but kept for any third-party
+  code that still ships an `A_B_method` symbol.
+
+**Path 3 (composition — preferred):**
+- A is a struct AND A has a static field `B` of type T (looked up via
+  `lookup_static_field_type("A__B")`, validated as a real struct by
+  `is_struct_type`).
+- AND `T_method` is a registered function.
+- Dispatch as `T.method(args)` — a regular static method call on T.
+- This is how `Random.secure.range(1, 100)` resolves: Random has
+  `static secure: Secure`, and the call lowers to `@Secure_range`.
 
 **Path 2 (legacy leniency):**
-- Only if Path 1 fails AND both `A` and `B` are top-level struct types.
-- Drop `A`, dispatch as `B.method(args)`.
+- Only when Paths 1 and 3 fail AND both `A` and `B` are top-level
+  struct types. Drop `A`, dispatch as `B.method(args)`. Preserved
+  for older "decorative qualifier" patterns.
 
-This is what makes `Random.Secure.range(...)` resolve to
-`@Random_Secure_range` directly (Path 1).
+`infer_expr_type` mirrors the same three-path order so the return
+type at type-check time matches what gets emitted.
 
 ### Overload resolution
 
@@ -789,13 +817,37 @@ id: i32 = Thread.current_id()
 
 `Thread` is small (just an i64 handle) — stays stack-allocated.
 
+### Mutex — `library/std/mutex.dlt`
+
+```dolet
+m: Mutex = Mutex.new()         # allocates 40-byte CRITICAL_SECTION + Initialize
+m.lock()
+shared = shared + 1            # critical section
+m.unlock()
+
+# Or closure form — exception-safe, can't forget unlock:
+body: @heap fun() = fun(): shared = shared + 1
+m.with(body)
+
+# Non-blocking probe:
+if m.try_lock():
+    ...
+    m.unlock()
+
+m.destroy()                    # release OS state + free buffer
+```
+
+`@heap struct Mutex` — the OS handle needs a stable address across
+thread spawns. Backed by Win32 `EnterCriticalSection` (uncontended
+~10 ns, single CMPXCHG); pthread_mutex on Linux is a future task.
+
 ### Pending (not shipped)
 
-- `Mutex` — `EnterCriticalSection` / pthread_mutex
 - `RwLock`
 - `Channel<T>` — message passing
 - `Atomic<T>` generic (pending generics-aware mangling)
 - Memory ordering (Acquire/Release/Relaxed); currently only SeqCst
+- Linux pthread_mutex backing for Mutex
 
 ---
 
@@ -879,13 +931,13 @@ library/
 │   ├── primitives.dlt                # Bool, Char, Pointer
 │   ├── math.dlt                      # Math functions
 │   ├── random/
-│   │   ├── random.dlt                # struct Random (LCG default)
-│   │   └── secure.dlt                # struct Random.Secure (SplitMix64)
+│   │   ├── random.dlt                # struct Random (LCG default) + static `secure: Secure`
+│   │   └── secure.dlt                # struct Secure (SplitMix64); reached via Random.secure
 │   └── mod.dlt                       # core load orchestrator
 │
 ├── platform/
 │   ├── windows/                      # AUTO-LOADED on Windows targets
-│   │   ├── kernel32.dlt              # Win32 FFI
+│   │   ├── kernel32.dlt              # Win32 FFI (incl. CRITICAL_SECTION for Mutex)
 │   │   ├── alloc.dlt                 # Memory.malloc via HeapAlloc
 │   │   ├── format.dlt                # number → str via Win32 helpers
 │   │   ├── io.dlt                    # console I/O
@@ -896,7 +948,7 @@ library/
 │   │   ├── dir.dlt
 │   │   ├── time.dlt
 │   │   ├── platform.conf             # toolchain config
-│   │   ├── resources/                # runtime_helpers.obj, etc.
+│   │   ├── resources/                # runtime_helpers.obj, kernel32.def/lib, etc.
 │   │   └── mod.dlt
 │   └── linux/ (mirror, mostly stubbed)
 │
@@ -905,6 +957,7 @@ library/
     ├── file.dlt                      # File, Dir
     ├── system.dlt                    # System, Args, Command, Output
     ├── thread.dlt                    # Thread.spawn / join / sleep
+    ├── mutex.dlt                     # Mutex (CRITICAL_SECTION-backed)
     ├── panic.dlt                     # dolet_panic, __frame_*
     ├── time.dlt                      # Time helpers
     ├── async/                        # EventLoop, Task, JoinHandle
@@ -1025,6 +1078,32 @@ The self-hosted `bin/doletc.exe` is the source of truth.
 ---
 
 ## 20. Common pitfalls (verified from past sessions)
+
+### `struct A.B:` and `extend/group A.B:` are REJECTED
+
+```dolet
+struct Random.Secure:   # ❌ parser panics with a hint
+    ...
+extend Random.Secure:   # ❌ same
+group Random.Secure:    # ❌ same
+```
+
+The dotted-struct syntax conflated "namespace" with "type" and the
+compiler had to invent name-mangling rules to make it work. Use
+composition instead:
+
+```dolet
+struct Secure:                # ✓ regular top-level struct
+    static fun range(...): ...
+
+struct Random:
+    static secure: Secure     # ✓ static field — type-only, no init
+    static fun range(...): ...
+
+# At call sites: Random.secure.range(1, 100) dispatches through
+# the codegen's Path 3 to Secure.range(1, 100) — same ergonomics,
+# no special parser/mangler magic.
+```
 
 ### `@heap` on var-decl breaks method lookup
 
