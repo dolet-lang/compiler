@@ -120,6 +120,12 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
     name: str = cur_val()
     eat(TK_IDENT)
 
+    # `struct A.B:` is no longer accepted — composition (a `static B`
+    # field on A) is the canonical namespacing idiom. Reject early with
+    # a clear hint so old code surfaces immediately during migration.
+    if cur_kind() == TK_DOT:
+        panic("`struct A.B:` is not supported — declare `struct B:` and add `static b: B = B()` to A instead. Calls `A.b.method(...)` then dispatch to `B.method(...)` automatically.")
+
     # Optional type parameters: struct Name<T, U>
     type_params: i64 = parse_type_param_list()
 
@@ -552,16 +558,12 @@ fun parse_extend_block() -> i64:
     # Accept keywords like list/array/map as type names
     advance()
 
-    # `extend Outer.Inner:` — nested namespace declaration. Methods
-    # mangle as Outer_Inner_method instead of Inner_method, and the
-    # call site `Outer.Inner.X(...)` resolves to that exact mangled
-    # name (no leniency fallback). This is how Java-style nested
-    # types are spelled in Dolet.
-    while cur_kind() == TK_DOT:
-        advance()
-        sub: str = cur_val()
-        advance()
-        tname = Str.concat(Str.concat(tname, "."), sub)
+    # `extend/group A.B:` is no longer accepted. Use composition:
+    # declare `group B:` (or `extend B:`) and add a `static b: B` field
+    # to A. Calls `A.b.method(...)` then dispatch via the codegen's
+    # composition path — no special parser/mangler support needed.
+    if cur_kind() == TK_DOT:
+        panic("`extend/group A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
 
     # Optional type parameters: extend Name<T>
     type_params: i64 = parse_type_param_list()

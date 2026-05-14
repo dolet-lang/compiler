@@ -461,6 +461,11 @@ fun resolve_keyword(name: str) -> i32:
         return TK_PASS
     if str_eq(name, "extend") == 1:
         return TK_EXTEND
+    # `group` is the preferred spelling — `extend` stays as an alias
+    # for backward compatibility but is being phased out (it reads too
+    # close to Java's `extends` for inheritance).
+    if str_eq(name, "group") == 1:
+        return TK_EXTEND
     if str_eq(name, "module") == 1:
         return TK_MODULE
     if str_eq(name, "export") == 1:

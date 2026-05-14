@@ -606,17 +606,10 @@ fun gen_extend_block(node: i64):
     if methods == 0:
         return
 
-    # Nested namespace form `extend Outer.Inner:` — translate the dot
-    # to an underscore so the mangled MLIR symbol is valid (dots aren't
-    # legal in `@symbol` names). The user-facing name stays `Outer.Inner`
-    # at call sites; gen_nested_method_call will reconstruct the
-    # underscore form when it dispatches.
-    mangled_tname: str = str_replace(tname, ".", "_")
-
     mc: i32 = nl_count(methods)
     i: i32 = 0
     while i < mc:
         mnode: i64 = nl_get(methods, i)
         # Extend methods use the type name as struct name
-        gen_method_def(mangled_tname, mnode)
+        gen_method_def(tname, mnode)
         i = i + 1

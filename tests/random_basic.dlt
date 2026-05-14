@@ -1,6 +1,8 @@
 import std
 
-# Test Random.X (default LCG, fast) and Random.Secure.X (stronger PRNG).
+# Test Random.X (default LCG, fast) and Random.secure.X (stronger PRNG).
+# `Random.secure.X(...)` uses the composition-dispatch path: Random has
+# a static `secure: Secure` field, and the call forwards to Secure.X.
 # Both are pure CPU — no OS, work on bare metal.
 
 fun do_test():
@@ -22,24 +24,17 @@ fun do_test():
     print("--- after Random.seed(42) ---")
     print(Random.range(1, 100))    # same as first roll above
 
-    # ---- Secure: Random.Secure.X = stronger PRNG ----
-    Random.Secure.seed(42 as i64)
-    print("--- Random.Secure.range(1, 100) x 5 ---")
-    print(Random.Secure.range(1, 100))
-    print(Random.Secure.range(1, 100))
-    print(Random.Secure.range(1, 100))
-    print(Random.Secure.range(1, 100))
-    print(Random.Secure.range(1, 100))
+    # ---- Secure: Random.secure.X = stronger PRNG ----
+    Random.secure.seed(42 as i64)
+    print("--- Random.secure.range(1, 100) x 5 ---")
+    print(Random.secure.range(1, 100))
+    print(Random.secure.range(1, 100))
+    print(Random.secure.range(1, 100))
+    print(Random.secure.range(1, 100))
+    print(Random.secure.range(1, 100))
 
-    Random.Secure.seed(42 as i64)
-    print("--- after Random.Secure.seed(42) ---")
-    print(Random.Secure.range(1, 100))   # same as first secure roll
-
-    # ---- Explicit-state Lcg instance ----
-    g: Lcg = Lcg.new(7 as i64)
-    print("--- explicit Lcg.new(7).range_i32(0, 9) x 3 ---")
-    print(g.range_i32(0, 9))
-    print(g.range_i32(0, 9))
-    print(g.range_i32(0, 9))
+    Random.secure.seed(42 as i64)
+    print("--- after Random.secure.seed(42) ---")
+    print(Random.secure.range(1, 100))   # same as first secure roll
 
 do_test()

@@ -156,6 +156,7 @@ for %%f in (
     thread_parallel_sum
     atomic_counter
     atomic_cas
+    mutex_basic
     random_basic
     nested_namespace
 ) do (

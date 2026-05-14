@@ -7,7 +7,7 @@ struct MyOption<T>:
     tag: i32
     value: T
 
-extend MyOption:
+group MyOption:
     fun is_some(self) -> bool:
         return self.tag == 0
     fun is_none(self) -> bool:

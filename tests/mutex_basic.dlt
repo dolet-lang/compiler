@@ -1,0 +1,51 @@
+import std
+
+# Mutex basics — 4 OS threads each push 1000 items into a SHARED list.
+# Without the lock, list.append() races (the underlying buffer realloc
+# corrupts when two threads hit it at once); with the mutex, every
+# append is serialized and the final size is exactly 4000.
+#
+# Atomics couldn't help here — list.append is multi-step (length read,
+# capacity check, possible realloc, store). Mutex is the right tool.
+
+g_shared: list<i32> = []
+g_lock: Mutex = Mutex.new()
+
+fun push_many(start: i32):
+    i: i32 = 0
+    while i < 1000:
+        g_lock.lock()
+        g_shared.append(start + i)
+        g_lock.unlock()
+        i = i + 1
+
+fun do_test():
+    f0: @heap fun() = fun() push_many(0)
+    f1: @heap fun() = fun() push_many(1000)
+    f2: @heap fun() = fun() push_many(2000)
+    f3: @heap fun() = fun() push_many(3000)
+
+    t0: Thread = Thread.spawn(f0)
+    t1: Thread = Thread.spawn(f1)
+    t2: Thread = Thread.spawn(f2)
+    t3: Thread = Thread.spawn(f3)
+
+    t0.join()
+    t1.join()
+    t2.join()
+    t3.join()
+
+    # Exactly 4000 items — no race lost an append.
+    print(g_shared.size())
+
+    # ---- try_lock smoke test ----
+    m2: Mutex = Mutex.new()
+    got: bool = m2.try_lock()        # uncontended → must succeed
+    print(got)                       # true
+    m2.unlock()
+
+    # ---- destroy releases OS state ----
+    g_lock.destroy()
+    m2.destroy()
+
+do_test()

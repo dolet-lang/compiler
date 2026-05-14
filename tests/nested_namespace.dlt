@@ -1,22 +1,16 @@
 import std
 
-# `extend Outer.Inner:` declares a formal nested namespace. Methods
-# get mangled as Outer_Inner_method instead of Inner_method, and the
-# call site `Outer.Inner.X(...)` resolves to that exact name. This
-# is Java/C#-style nested types — Inner is NOT a top-level struct,
-# it's purely the nested label inside Outer.
+# Composition-based namespacing: a struct holds a static field of
+# another struct's type, and calls of the form `A.b.method(...)`
+# dispatch directly to `B.method(...)` via the codegen's Path 3.
+# This replaces the older (now-removed) `struct A.B:` / `group A.B:`
+# syntax: same ergonomic surface, no special parser/mangler magic.
 
-struct Outer:
-    _: i32
+struct Inner:
+    _placeholder: i32
 
-extend Outer:
     static fun greet() -> str:
-        return "Outer.greet"
-
-# No `struct Inner:` — Inner exists only as a nested label here.
-extend Outer.Inner:
-    static fun greet() -> str:
-        return "Outer.Inner.greet"
+        return "Outer.inner.greet"
 
     static fun add(a: i32, b: i32) -> i32:
         return a + b
@@ -24,21 +18,31 @@ extend Outer.Inner:
     static fun pi() -> f64:
         return 3.14159265
 
-# Two levels of nesting — Outer.Tools.helper(...).
-extend Outer.Tools:
+struct Tools:
+    _placeholder: i32
+
     static fun shout(s: str) -> str:
         return s + "!"
 
+struct Outer:
+    _placeholder: i32
+
+    static inner: Inner = Inner()
+    static tools: Tools = Tools()
+
+    static fun greet() -> str:
+        return "Outer.greet"
+
 fun do_test():
-    # 2-level (regular static)
+    # 2-level static (regular static method on Outer)
     print(Outer.greet())                  # "Outer.greet"
 
-    # 3-level — formal nested namespace
-    print(Outer.Inner.greet())            # "Outer.Inner.greet"
-    print(Outer.Inner.add(3, 4))          # 7
-    print(Outer.Inner.pi())               # 3.14159265
+    # 3-level via composition — Path 3 dispatch
+    print(Outer.inner.greet())            # "Outer.inner.greet"
+    print(Outer.inner.add(3, 4))          # 7
+    print(Outer.inner.pi())               # 3.14159265
 
-    # Different nested namespace under same Outer
-    print(Outer.Tools.shout("hello"))     # "hello!"
+    # Different namespaced helper under same Outer
+    print(Outer.tools.shout("hello"))     # "hello!"
 
 do_test()

@@ -9,7 +9,7 @@ struct Vector2:
     x: f32
     y: f32
 
-extend Vector2:
+group Vector2:
     fun length() -> f32:
         return @sqrt(self.x * self.x + self.y * self.y)
 

@@ -408,8 +408,9 @@ fun infer_expr_type(node: i64) -> str:
         nm_mname: str = Memory.read_i64(node + 16) as str
 
         # 3-level static A.B.method() — mirror gen_nested_method_call's
-        # two-path resolution so inferred type matches what gets emitted:
-        #   Path 1: formal `extend A.B:` → mangled A_B_method
+        # three-path resolution so inferred type matches what gets emitted:
+        #   Path 1: legacy formal `extend A.B:` → mangled A_B_method
+        #   Path 3: composition — A has static field B of type T, T has method
         #   Path 2: legacy leniency → drop A, look up B_method
         if Memory.read_i32(nm_base) == NODE_STATIC_FIELD:
             ns_a: str = Memory.read_i64(nm_base + 8) as str
@@ -420,6 +421,16 @@ fun infer_expr_type(node: i64) -> str:
             ns_formal_rt: str = get_fun_ret_type(ns_formal)
             if str_eq(ns_formal_rt, "unknown") == 0 and str_eq(ns_formal_rt, "") == 0:
                 return ns_formal_rt
+
+            # Path 3: composition — A.B is a static-field access; dispatch on B's type
+            if is_struct_type(ns_a) == 1:
+                ns_sf_full: str = Str.concat(Str.concat(ns_a, "__"), ns_b)
+                ns_field_type: str = lookup_static_field_type(ns_sf_full)
+                if is_struct_type(ns_field_type) == 1:
+                    ns_t_method: str = Str.concat(Str.concat(ns_field_type, "_"), nm_mname)
+                    ns_t_rt: str = get_fun_ret_type(ns_t_method)
+                    if str_eq(ns_t_rt, "unknown") == 0 and str_eq(ns_t_rt, "") == 0:
+                        return ns_t_rt
 
             # Path 2: legacy leniency
             if is_struct_type(ns_a) == 1:

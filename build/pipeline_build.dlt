@@ -462,6 +462,11 @@ fun resolve_keyword(name: str) -> i32:
         return TK_PASS
     if str_eq(name, "extend") == 1:
         return TK_EXTEND
+    # `group` is the preferred spelling — `extend` stays as an alias
+    # for backward compatibility but is being phased out (it reads too
+    # close to Java's `extends` for inheritance).
+    if str_eq(name, "group") == 1:
+        return TK_EXTEND
     if str_eq(name, "module") == 1:
         return TK_MODULE
     if str_eq(name, "export") == 1:
@@ -4395,6 +4400,12 @@ fun parse_struct_decl(is_abstract: i64) -> i64:
     name: str = cur_val()
     eat(TK_IDENT)
 
+    # `struct A.B:` is no longer accepted — composition (a `static B`
+    # field on A) is the canonical namespacing idiom. Reject early with
+    # a clear hint so old code surfaces immediately during migration.
+    if cur_kind() == TK_DOT:
+        panic("`struct A.B:` is not supported — declare `struct B:` and add `static b: B = B()` to A instead. Calls `A.b.method(...)` then dispatch to `B.method(...)` automatically.")
+
     # Optional type parameters: struct Name<T, U>
     type_params: i64 = parse_type_param_list()
 
@@ -4827,16 +4838,12 @@ fun parse_extend_block() -> i64:
     # Accept keywords like list/array/map as type names
     advance()
 
-    # `extend Outer.Inner:` — nested namespace declaration. Methods
-    # mangle as Outer_Inner_method instead of Inner_method, and the
-    # call site `Outer.Inner.X(...)` resolves to that exact mangled
-    # name (no leniency fallback). This is how Java-style nested
-    # types are spelled in Dolet.
-    while cur_kind() == TK_DOT:
-        advance()
-        sub: str = cur_val()
-        advance()
-        tname = Str.concat(Str.concat(tname, "."), sub)
+    # `extend/group A.B:` is no longer accepted. Use composition:
+    # declare `group B:` (or `extend B:`) and add a `static b: B` field
+    # to A. Calls `A.b.method(...)` then dispatch via the codegen's
+    # composition path — no special parser/mangler support needed.
+    if cur_kind() == TK_DOT:
+        panic("`extend/group A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
 
     # Optional type parameters: extend Name<T>
     type_params: i64 = parse_type_param_list()
@@ -7733,8 +7740,9 @@ fun infer_expr_type(node: i64) -> str:
         nm_mname: str = Memory.read_i64(node + 16) as str
 
         # 3-level static A.B.method() — mirror gen_nested_method_call's
-        # two-path resolution so inferred type matches what gets emitted:
-        #   Path 1: formal `extend A.B:` → mangled A_B_method
+        # three-path resolution so inferred type matches what gets emitted:
+        #   Path 1: legacy formal `extend A.B:` → mangled A_B_method
+        #   Path 3: composition — A has static field B of type T, T has method
         #   Path 2: legacy leniency → drop A, look up B_method
         if Memory.read_i32(nm_base) == NODE_STATIC_FIELD:
             ns_a: str = Memory.read_i64(nm_base + 8) as str
@@ -7745,6 +7753,16 @@ fun infer_expr_type(node: i64) -> str:
             ns_formal_rt: str = get_fun_ret_type(ns_formal)
             if str_eq(ns_formal_rt, "unknown") == 0 and str_eq(ns_formal_rt, "") == 0:
                 return ns_formal_rt
+
+            # Path 3: composition — A.B is a static-field access; dispatch on B's type
+            if is_struct_type(ns_a) == 1:
+                ns_sf_full: str = Str.concat(Str.concat(ns_a, "__"), ns_b)
+                ns_field_type: str = lookup_static_field_type(ns_sf_full)
+                if is_struct_type(ns_field_type) == 1:
+                    ns_t_method: str = Str.concat(Str.concat(ns_field_type, "_"), nm_mname)
+                    ns_t_rt: str = get_fun_ret_type(ns_t_method)
+                    if str_eq(ns_t_rt, "unknown") == 0 and str_eq(ns_t_rt, "") == 0:
+                        return ns_t_rt
 
             # Path 2: legacy leniency
             if is_struct_type(ns_a) == 1:
@@ -10703,19 +10721,12 @@ fun gen_extend_block(node: i64):
     if methods == 0:
         return
 
-    # Nested namespace form `extend Outer.Inner:` — translate the dot
-    # to an underscore so the mangled MLIR symbol is valid (dots aren't
-    # legal in `@symbol` names). The user-facing name stays `Outer.Inner`
-    # at call sites; gen_nested_method_call will reconstruct the
-    # underscore form when it dispatches.
-    mangled_tname: str = str_replace(tname, ".", "_")
-
     mc: i32 = nl_count(methods)
     i: i32 = 0
     while i < mc:
         mnode: i64 = nl_get(methods, i)
         # Extend methods use the type name as struct name
-        gen_method_def(mangled_tname, mnode)
+        gen_method_def(tname, mnode)
         i = i + 1
 
 ##############################
@@ -10880,28 +10891,52 @@ fun gen_nested_method_call(node: i64) -> str:
     method_name: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
 
-    # 3-level static: A.B.method(). Two resolution paths in priority:
+    # 3-level static: A.B.method(). Three resolution paths in priority:
     #
-    #   1. Formal nested namespace — if `extend A.B:` was declared,
-    #      methods were mangled as A_B_method. We try that first so
-    #      the user's intent (a real nested type) wins. This is what
-    #      Java / C# / C++ would do.
+    #   1. Formal nested namespace (LEGACY) — `extend A.B:` mangled
+    #      methods as A_B_method. The `struct A.B:` / `extend A.B:`
+    #      syntax is being phased out in favor of composition (Path 3);
+    #      this path remains for now so any leftover symbol still
+    #      dispatches before we delete the parser support.
     #
-    #   2. Backward-compat leniency — if A_B_method doesn't exist,
-    #      and both A and B are top-level struct types, fall back
-    #      to dispatching as B.method() (A acts as a decorative
-    #      qualifier). Older Dolet code relies on this and we keep
-    #      it working.
+    #   2. Backward-compat leniency — drop A, dispatch as B.method()
+    #      when both are struct types. Lets older code use a
+    #      decorative qualifier (e.g. `Math.Vec3.zero()` → `Vec3.zero()`).
+    #
+    #   3. Composition — A has a STATIC FIELD B whose type T has the
+    #      method. Dispatch as T.method(args). This is the preferred
+    #      idiom for "namespaced capability":
+    #          struct Secure: ...
+    #          struct Random:
+    #              static secure: Secure = Secure()
+    #      lets users write `Random.secure.range(1, 100)` instead of
+    #      inventing dotted struct names. Methods on T are static
+    #      (no `self`); for instance methods, fall through to the
+    #      generic dispatcher below.
     if Memory.read_i32(base_node) == NODE_STATIC_FIELD:
         a_name: str = Memory.read_i64(base_node + 8) as str
         b_name: str = Memory.read_i64(base_node + 16) as str
 
-        # Path 1: try the formal nested form A_B_method.
+        # Path 1: try the formal nested form A_B_method (legacy).
         nested_struct: str = Str.concat(Str.concat(a_name, "_"), b_name)
         nested_mangled: str = Str.concat(Str.concat(nested_struct, "_"), method_name)
         if str_eq(get_fun_ret_type(nested_mangled), "unknown") == 0:
             proxy_nested: i64 = mk_static_method(nested_struct, method_name, args_list)
             return gen_static_method_call(proxy_nested)
+
+        # Path 3: composition — A has static field B of type T, T has method.
+        # The is_struct_type check on field_type3 doubles as a registration
+        # probe: if A has no static field named B, lookup returns the default
+        # "i64", which isn't a struct, so we skip cleanly without needing a
+        # separate "has-static-field" query.
+        if is_struct_type(a_name) == 1:
+            sf_full3: str = Str.concat(Str.concat(a_name, "__"), b_name)
+            field_type3: str = lookup_static_field_type(sf_full3)
+            if is_struct_type(field_type3) == 1:
+                t_method3: str = Str.concat(Str.concat(field_type3, "_"), method_name)
+                if str_eq(get_fun_ret_type(t_method3), "unknown") == 0:
+                    proxy3: i64 = mk_static_method(field_type3, method_name, args_list)
+                    return gen_static_method_call(proxy3)
 
         # Path 2: legacy leniency — drop A, dispatch as B.method().
         if is_struct_type(a_name) == 1:
@@ -11338,13 +11373,18 @@ fun gen_static_method_call(node: i64) -> str:
     mname: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
 
-    # .new() constructor — redirect to struct instantiation
+    # .new() constructor — redirect to struct instantiation IFF the user
+    # didn't define a custom `static fun new`. This lets libraries that
+    # need setup code (allocate OS state, init fields, etc.) provide
+    # their own factory under the same `Type.new(...)` ergonomic name
+    # without colliding with the auto-generated positional constructor.
     if str_eq(mname, "new") == 1 and is_struct_type(sname) == 1:
-        proxy: i64 = Memory.malloc_zeroed(NODE_SIZE as i64)
-        Memory.write_i32(proxy, NODE_FUN_CALL)
-        Memory.write_i64(proxy + 8, sname as i64)
-        Memory.write_i64(proxy + 16, args_list)
-        return gen_fun_call(proxy)
+        if find_impl_method(sname, "new") == 0:
+            proxy: i64 = Memory.malloc_zeroed(NODE_SIZE as i64)
+            Memory.write_i32(proxy, NODE_FUN_CALL)
+            Memory.write_i64(proxy + 8, sname as i64)
+            Memory.write_i64(proxy + 16, args_list)
+            return gen_fun_call(proxy)
 
     # Method visibility enforcement (private/protected) — hard failure.
     # Only enforce for known struct types; externs and top-level calls
