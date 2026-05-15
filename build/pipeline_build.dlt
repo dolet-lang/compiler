@@ -462,11 +462,11 @@ fun resolve_keyword(name: str) -> i32:
         return TK_PASS
     if str_eq(name, "extend") == 1:
         return TK_EXTEND
-    # `group` is the preferred spelling — `extend` stays as an alias
-    # for backward compatibility but is being phased out (it reads too
-    # close to Java's `extends` for inheritance).
-    if str_eq(name, "group") == 1:
-        return TK_EXTEND
+    # `group` is a SOFT KEYWORD — always lexes as TK_IDENT. The parser
+    # detects it at top-level statement start (where a real keyword
+    # would be expected) and dispatches to parse_extend_block. This
+    # keeps `group` usable as a parameter / field / variable name —
+    # which matters for FFI bindings (e.g. Vulkan has `group: i32`).
     if str_eq(name, "module") == 1:
         return TK_MODULE
     if str_eq(name, "export") == 1:
@@ -4832,7 +4832,10 @@ fun parse_impl_block() -> i64:
 # ==========================================
 fun parse_extend_block() -> i64:
     xi: i32 = cur_indent()
-    eat(TK_EXTEND)
+    # Accepts EITHER `extend` (TK_EXTEND keyword) OR `group` (TK_IDENT
+    # soft keyword — the caller in parser_main verifies the value).
+    # Plain `advance()` advances past whichever token started us.
+    advance()
 
     tname: str = cur_val()
     # Accept keywords like list/array/map as type names
@@ -5167,8 +5170,14 @@ fun parse_statement() -> i64:
     if k == TK_IMPL:
         return parse_impl_block()
 
-    # Extend
+    # Extend (legacy `extend X:` keyword form)
     if k == TK_EXTEND:
+        return parse_extend_block()
+
+    # Group (SOFT KEYWORD — lexes as TK_IDENT, dispatched here only at
+    # top-level statement start. Keeps `group` usable as a parameter /
+    # field / variable name in FFI bindings and elsewhere.)
+    if k == TK_IDENT and str_eq(cur_val(), "group") == 1:
         return parse_extend_block()
 
     # Type alias

@@ -461,11 +461,11 @@ fun resolve_keyword(name: str) -> i32:
         return TK_PASS
     if str_eq(name, "extend") == 1:
         return TK_EXTEND
-    # `group` is the preferred spelling — `extend` stays as an alias
-    # for backward compatibility but is being phased out (it reads too
-    # close to Java's `extends` for inheritance).
-    if str_eq(name, "group") == 1:
-        return TK_EXTEND
+    # `group` is a SOFT KEYWORD — always lexes as TK_IDENT. The parser
+    # detects it at top-level statement start (where a real keyword
+    # would be expected) and dispatches to parse_extend_block. This
+    # keeps `group` usable as a parameter / field / variable name —
+    # which matters for FFI bindings (e.g. Vulkan has `group: i32`).
     if str_eq(name, "module") == 1:
         return TK_MODULE
     if str_eq(name, "export") == 1:

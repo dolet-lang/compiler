@@ -552,7 +552,10 @@ fun parse_impl_block() -> i64:
 # ==========================================
 fun parse_extend_block() -> i64:
     xi: i32 = cur_indent()
-    eat(TK_EXTEND)
+    # Accepts EITHER `extend` (TK_EXTEND keyword) OR `group` (TK_IDENT
+    # soft keyword — the caller in parser_main verifies the value).
+    # Plain `advance()` advances past whichever token started us.
+    advance()
 
     tname: str = cur_val()
     # Accept keywords like list/array/map as type names
