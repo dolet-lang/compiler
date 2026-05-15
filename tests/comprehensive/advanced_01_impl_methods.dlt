@@ -8,7 +8,7 @@ struct Vector2:
     x: f64
     y: f64
 
-impl Vector2:
+attach Vector2:
     static fun new(x: f64, y: f64) -> Vector2:
         return Vector2(x=x, y=y)
 
@@ -32,7 +32,7 @@ struct Rectangle:
     width: f64
     height: f64
 
-impl Rectangle:
+attach Rectangle:
     static fun new(w: f64, h: f64) -> Rectangle:
         return Rectangle(width=w, height=h)
 
@@ -55,7 +55,7 @@ impl Rectangle:
 struct Counter:
     value: i32
 
-impl Counter:
+attach Counter:
     static fun new() -> Counter:
         return Counter(value=0)
 

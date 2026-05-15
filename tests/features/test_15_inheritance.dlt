@@ -8,7 +8,7 @@ struct Entity:
     x: i32
     y: i32
 
-impl Entity:
+attach Entity:
     fun position() -> str:
         return @"({self.x}, {self.y})"
 
@@ -16,7 +16,7 @@ struct Player extends Entity:
     name: str
     health: i32 = 100
 
-impl Player:
+attach Player:
     fun info() -> str:
         return @"{self.name} at ({self.x}, {self.y}) HP: {self.health}"
 

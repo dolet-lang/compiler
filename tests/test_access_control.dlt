@@ -5,7 +5,7 @@ struct Account:
     private password: str
     protect balance: i32
 
-impl Account:
+attach Account:
     fun get_name(self) -> str:
         return self.name
 

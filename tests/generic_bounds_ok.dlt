@@ -9,7 +9,7 @@ trait Display:
 struct Cat:
     name: str
 
-impl Cat:
+attach Cat:
     fun show(self) -> str:
         return "cat:" + self.name
 

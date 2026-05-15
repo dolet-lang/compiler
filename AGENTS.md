@@ -60,7 +60,7 @@ dolet-compiler/
 │   ├── parser_core.dlt              # tokens, indent helpers
 │   ├── parser_expr.dlt              # expression precedence
 │   ├── parser_stmt.dlt              # statements (if/while/for/match)
-│   ├── parser_decl.dlt              # struct, fun, impl, extend, group
+│   ├── parser_decl.dlt              # struct, fun, attach (method blocks)
 │   └── parser_main.dlt              # top-level dispatcher
 ├── codegen/
 │   ├── codegen_core.dlt             # registries, type checks
@@ -114,9 +114,9 @@ dolet-compiler/
 | `ptr<T>` | `Pointer` | `library/core/primitives.dlt` |
 
 The two are **independent**. There's no implicit alias. `Str.trim(s)` and
-`s.trim()` (via `group str:`) both work — `s.trim()` mangles to
+`s.trim()` (via `attach str:`) both work — `s.trim()` mangles to
 `@str_trim`, `Str.trim(s)` mangles to `@Str_trim` — they're separate
-symbols. The wrappers in `group str:` literally call `Str.X(self)`.
+symbols. The wrappers in `attach str:` literally call `Str.X(self)`.
 
 ---
 
@@ -214,8 +214,7 @@ Dispatched by `parser/parser_main.dlt:34-409` (`parse_statement`).
 | `trait Name:` | `parser_main.dlt:88` | Abstract method signatures |
 | `abstract struct Name:` | `parser_main.dlt:92` | Abstract struct (no instantiation) |
 | `struct Name:` | `parser_main.dlt:99` | Struct (with optional dotted name) |
-| `impl Name:` | `parser_main.dlt:103` | Method block (Rust style) |
-| `extend Name:` / `group Name:` | `parser_main.dlt:107` | Method block (preferred: `group`) |
+| `attach Name:` | `parser_main.dlt:103` | Method block (the single canonical form) |
 | `type Alias = T` | `parser_main.dlt:111` | Type alias |
 | `fun name(...):` | `parser_main.dlt:121` | Function decl |
 | `private fun` / `public fun` / `protect fun` | `parser_main.dlt:125` | Function with visibility |
@@ -290,42 +289,40 @@ struct Random:
 # user: Random.secure.range(1, 100) → dispatches to Secure.range(1, 100)
 ```
 
-### Method block forms (all equivalent in semantics)
+### Method block forms — TWO equivalent options
 
 ```dolet
-struct Foo:
-    x: i32
-
-# Form A (preferred, new keyword)
-group Foo:
-    fun method(self) -> i32:
-        return self.x
-
-# Form B (legacy alias — same TK_EXTEND token)
-extend Foo:
-    fun method(self) -> i32:
-        return self.x
-
-# Form C (Rust style)
-impl Foo:
-    fun method(self) -> i32:
-        return self.x
-
-# Form D (methods inline in struct body)
+# Form A: methods inline in struct body (use for own structs)
 struct Foo:
     x: i32
 
     fun method(self) -> i32:
         return self.x
 
-# Nested namespace
-group Outer.Inner:
-    static fun greet() -> str:
-        return "Outer.Inner.greet"
+# Form B: `attach` block (use for primitives, imported types, multi-file)
+struct Foo:
+    x: i32
+
+attach Foo:
+    fun method(self) -> i32:
+        return self.x
+
+# Form B works on primitives too — the main reason `attach` exists:
+attach str:
+    fun length(self) -> i64:
+        return Memory.strlen(self)
 ```
 
-All four forms produce the same MLIR symbol `@Foo_method`. Pick by
-style — but `group` is the going-forward keyword.
+Both forms produce the same MLIR symbol `@Foo_method`. Picking guide:
+* **methods in body** → for types you fully own, primary API.
+* **`attach Foo:`** → for extension methods (primitives, imported
+  structs, methods split across files for organization, future trait
+  implementations).
+
+**Removed in this version:**
+`extend Foo:`, `group Foo:`, `impl Foo:`, `imple Foo:` were all aliases
+producing the same MLIR symbol — purely redundant. The keyword is now
+`attach` and only `attach`.
 
 ### Visibility
 
@@ -334,7 +331,7 @@ struct Account:
     public name: str            # default
     private balance: i64        # only this struct's methods can read
 
-group Account:
+attach Account:
     fun deposit(self, amt: i64):
         self.balance = self.balance + amt   # OK — same struct's method
 ```
@@ -350,9 +347,9 @@ access compiles to a hard error with file:line.
 
 | Form | Mangled name |
 |---|---|
-| `struct Foo:` `fun bar(self):` | `Foo_bar` |
-| `group Foo:` `fun bar(self):` | `Foo_bar` |
-| `impl Foo:` `static fun zero():` | `Foo_zero` |
+| `struct Foo: fun bar(self):` (in body) | `Foo_bar` |
+| `attach Foo: fun bar(self):` | `Foo_bar` |
+| `attach Foo: static fun zero():` | `Foo_zero` |
 | `Box<T>` after monomorphization with T=i32 | `Box__i32_method` (two underscores between type and arg) |
 | `Pair<i32, str>` | `Pair__i32_str` (multiple args joined with `_`) |
 | Overload `fun bar(i32)` vs `fun bar(str)` | `Foo_bar__i32` vs `Foo_bar__str` |

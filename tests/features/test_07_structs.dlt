@@ -25,7 +25,7 @@ print(pl.score)
 print(pl.health)
 
 # Impl block with methods
-impl Player:
+attach Player:
     fun add_score(amount: i32):
         self.score += amount
 

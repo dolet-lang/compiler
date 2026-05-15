@@ -12,7 +12,7 @@ struct Animal:
     name: str
     sound: str
 
-impl Animal:
+attach Animal:
     fun to_str() -> str:
         return @"{self.name} says {self.sound}"
 

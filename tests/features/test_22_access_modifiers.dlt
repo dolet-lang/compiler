@@ -9,7 +9,7 @@ struct Account:
     private password: str
     balance: f64 = 0.0
 
-impl Account:
+attach Account:
     fun get_balance(self) -> f64:
         return self.balance
 

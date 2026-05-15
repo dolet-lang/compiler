@@ -9,7 +9,7 @@ struct Resource:
     name: str
     is_open: i32 = 0
 
-impl Resource:
+attach Resource:
     static fun open(n: str) -> Resource:
         r: Resource = Resource(name=n)
         r.is_open = 1

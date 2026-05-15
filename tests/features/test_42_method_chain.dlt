@@ -4,7 +4,7 @@ struct Builder:
     name: str = ""
     count: i32 = 0
 
-impl Builder:
+attach Builder:
     fun set_name(self, n: str) -> Builder:
         self.name = n
         return self

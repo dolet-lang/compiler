@@ -10,7 +10,7 @@ import std
 struct Counter:
     n: i32
 
-impl Counter:
+attach Counter:
     fun bind_inc(self) -> @heap fun(i32) -> i32:
         return fun(delta: i32) -> i32 self.n + delta
 
@@ -19,7 +19,7 @@ struct Box:
     a: i32
     b: i32
 
-impl Box:
+attach Box:
     fun bind_combine(self) -> @heap fun(i32) -> i32:
         return fun(x: i32) -> i32 self.a * x + self.b
 

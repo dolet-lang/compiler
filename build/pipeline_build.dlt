@@ -406,9 +406,12 @@ fun resolve_keyword(name: str) -> i32:
         return TK_ENUM
     if str_eq(name, "trait") == 1:
         return TK_TRAIT
-    if str_eq(name, "impl") == 1:
-        return TK_IMPL
-    if str_eq(name, "imple") == 1:
+    # `attach` is the SINGLE method-block keyword. Reads as the verb
+    # it actually is — "attach these methods to this type". Distinct
+    # from Rust's `impl`, Swift's `extension`, Java's "extends".
+    # `impl` and `imple` are no longer recognised; legacy code must
+    # migrate (`sed -i 's/^impl /attach /g'`).
+    if str_eq(name, "attach") == 1:
         return TK_IMPL
     if str_eq(name, "extends") == 1:
         return TK_EXTENDS

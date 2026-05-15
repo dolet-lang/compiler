@@ -8,7 +8,7 @@ struct Animal:
     name: str
     sound: str
 
-impl Animal:
+attach Animal:
     fun get_name(self) -> str:
         return self.name
 
@@ -18,7 +18,7 @@ impl Animal:
 struct Dog extends Animal:
     breed: str
 
-impl Dog:
+attach Dog:
     fun describe(self) -> str:
         return self.breed
 
