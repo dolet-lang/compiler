@@ -99,19 +99,12 @@ fun parse_statement() -> i64:
     if k == TK_STRUCT:
         return parse_struct_decl(0)
 
-    # Impl
+    # Impl — the SINGLE method-block keyword.
+    # `extend Foo:` and `group Foo:` are no longer recognized as method
+    # blocks. `impl Foo:` covers methods on own structs, primitives
+    # (`impl str:`, `impl i32:`), and imported types.
     if k == TK_IMPL:
         return parse_impl_block()
-
-    # Extend (legacy `extend X:` keyword form)
-    if k == TK_EXTEND:
-        return parse_extend_block()
-
-    # Group (SOFT KEYWORD — lexes as TK_IDENT, dispatched here only at
-    # top-level statement start. Keeps `group` usable as a parameter /
-    # field / variable name in FFI bindings and elsewhere.)
-    if k == TK_IDENT and str_eq(cur_val(), "group") == 1:
-        return parse_extend_block()
 
     # Type alias
     if k == TK_TYPE_ALIAS:

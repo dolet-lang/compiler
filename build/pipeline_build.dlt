@@ -460,13 +460,10 @@ fun resolve_keyword(name: str) -> i32:
         return TK_AWAIT
     if str_eq(name, "pass") == 1:
         return TK_PASS
-    if str_eq(name, "extend") == 1:
-        return TK_EXTEND
-    # `group` is a SOFT KEYWORD — always lexes as TK_IDENT. The parser
-    # detects it at top-level statement start (where a real keyword
-    # would be expected) and dispatches to parse_extend_block. This
-    # keeps `group` usable as a parameter / field / variable name —
-    # which matters for FFI bindings (e.g. Vulkan has `group: i32`).
+    # `extend` and `group` are NO LONGER keywords. Both names are plain
+    # identifiers — usable as parameters, fields, variables. Method
+    # blocks are spelled with `impl` exclusively. Legacy code must
+    # migrate (`sed -i 's/^extend /impl /g; s/^group /impl /g'`).
     if str_eq(name, "module") == 1:
         return TK_MODULE
     if str_eq(name, "export") == 1:
@@ -4788,8 +4785,17 @@ fun parse_impl_block() -> i64:
     ii: i32 = cur_indent()
     eat(TK_IMPL)
 
+    # Accept any identifier-like token as the type name so `impl str:`,
+    # `impl list:`, `impl i32:` etc. work on primitive type keywords —
+    # the previous `eat(TK_IDENT)` only accepted user-defined struct
+    # names. This makes `impl` the single, canonical extension form.
     sname: str = cur_val()
-    eat(TK_IDENT)
+    advance()
+
+    # `impl A.B:` is not supported — use composition (a `static b: B`
+    # field on A) instead. Mirrors the same rejection in struct decls.
+    if cur_kind() == TK_DOT:
+        panic("`impl A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
 
     # Optional type parameters: impl Name<T>
     type_params: i64 = parse_type_param_list()
@@ -4823,7 +4829,11 @@ fun parse_impl_block() -> i64:
         else:
             break
 
-    return mk_impl_block(sname, methods, trait_name, type_params)
+    # Build as NODE_EXTEND_BLOCK so impl methods flow through the
+    # extension-block code path (which registers overloads correctly).
+    # The legacy NODE_IMPL_BLOCK path remains for any leftover users
+    # but is no longer produced by this parser.
+    return mk_extend_block(sname, methods, type_params)
 
 # ==========================================
 # Extend Block
@@ -5166,19 +5176,12 @@ fun parse_statement() -> i64:
     if k == TK_STRUCT:
         return parse_struct_decl(0)
 
-    # Impl
+    # Impl — the SINGLE method-block keyword.
+    # `extend Foo:` and `group Foo:` are no longer recognized as method
+    # blocks. `impl Foo:` covers methods on own structs, primitives
+    # (`impl str:`, `impl i32:`), and imported types.
     if k == TK_IMPL:
         return parse_impl_block()
-
-    # Extend (legacy `extend X:` keyword form)
-    if k == TK_EXTEND:
-        return parse_extend_block()
-
-    # Group (SOFT KEYWORD — lexes as TK_IDENT, dispatched here only at
-    # top-level statement start. Keeps `group` usable as a parameter /
-    # field / variable name in FFI bindings and elsewhere.)
-    if k == TK_IDENT and str_eq(cur_val(), "group") == 1:
-        return parse_extend_block()
 
     # Type alias
     if k == TK_TYPE_ALIAS:
@@ -14212,7 +14215,11 @@ fun collect_declarations(ast: i64):
             if f_type_params != 0:
                 register_gen_fn(fname, node)
 
-        # Impl blocks
+        # Impl blocks — the canonical extension form. Now also registers
+        # OVERLOADS the same way the legacy extend-block path did (e.g.
+        # `impl list:` with multiple `fun set(self, idx, value: i8/i16/...)`
+        # produces `list_set__i8`, `list_set__i16`, ... mangled symbols
+        # instead of colliding on `list_set`).
         if nt == NODE_IMPL_BLOCK:
             isname = Memory.read_i64(node + 8) as str
             methods = Memory.read_i64(node + 16)
@@ -14223,9 +14230,10 @@ fun collect_declarations(ast: i64):
                     mnode = nl_get(methods, j2)
                     mname = Memory.read_i64(mnode + 8) as str
                     mret = Memory.read_i64(mnode + 24) as str
-                    mangled = Str.concat(Str.concat(isname, "_"), mname)
+                    mangled_base = Str.concat(Str.concat(isname, "_"), mname)
                     m_params = Memory.read_i64(mnode + 16)
                     m_pt = build_param_types_str_no_self(m_params)
+                    mangled = register_overload(mangled_base, m_pt)
                     register_fun_sig_with_params(mangled, mret, m_pt)
                     register_impl_method(isname, mname, mnode)
                     j2 = j2 + 1

@@ -508,8 +508,17 @@ fun parse_impl_block() -> i64:
     ii: i32 = cur_indent()
     eat(TK_IMPL)
 
+    # Accept any identifier-like token as the type name so `impl str:`,
+    # `impl list:`, `impl i32:` etc. work on primitive type keywords —
+    # the previous `eat(TK_IDENT)` only accepted user-defined struct
+    # names. This makes `impl` the single, canonical extension form.
     sname: str = cur_val()
-    eat(TK_IDENT)
+    advance()
+
+    # `impl A.B:` is not supported — use composition (a `static b: B`
+    # field on A) instead. Mirrors the same rejection in struct decls.
+    if cur_kind() == TK_DOT:
+        panic("`impl A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
 
     # Optional type parameters: impl Name<T>
     type_params: i64 = parse_type_param_list()
@@ -543,7 +552,11 @@ fun parse_impl_block() -> i64:
         else:
             break
 
-    return mk_impl_block(sname, methods, trait_name, type_params)
+    # Build as NODE_EXTEND_BLOCK so impl methods flow through the
+    # extension-block code path (which registers overloads correctly).
+    # The legacy NODE_IMPL_BLOCK path remains for any leftover users
+    # but is no longer produced by this parser.
+    return mk_extend_block(sname, methods, type_params)
 
 # ==========================================
 # Extend Block

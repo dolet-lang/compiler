@@ -293,7 +293,11 @@ fun collect_declarations(ast: i64):
             if f_type_params != 0:
                 register_gen_fn(fname, node)
 
-        # Impl blocks
+        # Impl blocks — the canonical extension form. Now also registers
+        # OVERLOADS the same way the legacy extend-block path did (e.g.
+        # `impl list:` with multiple `fun set(self, idx, value: i8/i16/...)`
+        # produces `list_set__i8`, `list_set__i16`, ... mangled symbols
+        # instead of colliding on `list_set`).
         if nt == NODE_IMPL_BLOCK:
             isname = Memory.read_i64(node + 8) as str
             methods = Memory.read_i64(node + 16)
@@ -304,9 +308,10 @@ fun collect_declarations(ast: i64):
                     mnode = nl_get(methods, j2)
                     mname = Memory.read_i64(mnode + 8) as str
                     mret = Memory.read_i64(mnode + 24) as str
-                    mangled = Str.concat(Str.concat(isname, "_"), mname)
+                    mangled_base = Str.concat(Str.concat(isname, "_"), mname)
                     m_params = Memory.read_i64(mnode + 16)
                     m_pt = build_param_types_str_no_self(m_params)
+                    mangled = register_overload(mangled_base, m_pt)
                     register_fun_sig_with_params(mangled, mret, m_pt)
                     register_impl_method(isname, mname, mnode)
                     j2 = j2 + 1

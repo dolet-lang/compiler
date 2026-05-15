@@ -459,13 +459,10 @@ fun resolve_keyword(name: str) -> i32:
         return TK_AWAIT
     if str_eq(name, "pass") == 1:
         return TK_PASS
-    if str_eq(name, "extend") == 1:
-        return TK_EXTEND
-    # `group` is a SOFT KEYWORD — always lexes as TK_IDENT. The parser
-    # detects it at top-level statement start (where a real keyword
-    # would be expected) and dispatches to parse_extend_block. This
-    # keeps `group` usable as a parameter / field / variable name —
-    # which matters for FFI bindings (e.g. Vulkan has `group: i32`).
+    # `extend` and `group` are NO LONGER keywords. Both names are plain
+    # identifiers — usable as parameters, fields, variables. Method
+    # blocks are spelled with `impl` exclusively. Legacy code must
+    # migrate (`sed -i 's/^extend /impl /g; s/^group /impl /g'`).
     if str_eq(name, "module") == 1:
         return TK_MODULE
     if str_eq(name, "export") == 1:

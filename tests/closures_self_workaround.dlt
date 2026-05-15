@@ -7,7 +7,7 @@ import std
 struct Counter:
     n: i32
 
-group Counter:
+impl Counter:
     fun bind_inc(self) -> @heap fun(i32) -> i32:
         # Workaround: copy field to local, then capture the local.
         n: i32 = self.n
