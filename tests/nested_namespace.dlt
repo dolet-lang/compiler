@@ -27,10 +27,12 @@ struct Tools:
 struct Outer:
     _placeholder: i32
 
-    # Type-only — the slot is never read; Path 3 dispatch only needs
-    # the registered type to look up methods on Inner / Tools.
-    static inner: Inner
-    static tools: Tools
+    # `= Inner()` / `= Tools()` follows the standard OOP convention for
+    # static fields. The slot is zero-initialized via the trivial ctor;
+    # Path 3 dispatch only uses the field's TYPE today, but the explicit
+    # init makes the intent unambiguous to every reader.
+    static inner: Inner = Inner()
+    static tools: Tools = Tools()
 
     static fun greet() -> str:
         return "Outer.greet"
