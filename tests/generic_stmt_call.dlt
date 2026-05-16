@@ -1,0 +1,22 @@
+import std
+
+# Generic function calls in STATEMENT position (not just as an
+# expression rhs). Previously `name<T>(args)` on its own line left the
+# parser stranded on `<` — parse_var_decl_ident now mirrors the
+# expression parser's looks_like_type_args dispatch.
+
+fun show_it<T>(x: T):
+    print(x)
+
+fun repeat_print<T>(x: T, n: i32):
+    i: i32 = 0
+    while i < n:
+        print(x)
+        i = i + 1
+
+fun do_test():
+    show_it<i32>(7)               # bare generic call, statement position
+    show_it<str>("hello")
+    repeat_print<i32>(9, 3)       # generic call + loop in body
+
+do_test()

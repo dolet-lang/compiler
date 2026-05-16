@@ -160,6 +160,7 @@ for %%f in (
     random_basic
     nested_namespace
     trait_impl
+    generic_stmt_call
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

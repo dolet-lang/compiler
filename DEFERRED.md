@@ -130,7 +130,47 @@ Holder.seeded.payload                            # access violation
 
 ---
 
-## D4. `impl Trait for Type:` — keyword reservation
+## D4. Generic methods (`fun method<T>(...)` inside `attach`)
+
+**What:** Type-parameterised *methods* — a `<T>` on a method declared
+in an `attach` block, callable as `obj.method<T>(args)` or
+`Type.method<T>(args)`.
+
+```dolet
+attach Render:
+    static fun draw<T: Drawable>(item: T):    # ← declares fine today
+        ...
+
+Render.draw<Circle>(c)        # ← call does NOT parse today
+```
+
+**Current state (verified this session):**
+- The *declaration* parses — `parse_fun_def` runs `parse_type_param_list`
+  whether the fn is free or inside an `attach` block.
+- The *call* does NOT parse. `parse_dot_stmt` (statement position) and
+  the method-chain path handle `obj.method(args)` but not a `<T>`
+  before the `(`. The parser strands on `<`.
+- Even with a parser fix, `mk_inst_method` / `mk_static_method` have
+  no `type_args` slot (unlike `mk_fun_call`), so codegen
+  monomorphization has nowhere to read T from.
+
+**Why deferred:**
+- Three layers to touch — parser (`parse_dot_stmt` + expression
+  method-chain), AST (`mk_inst_method`/`mk_static_method` need a
+  type-args field), codegen (method monomorphization in codegen_mono).
+- Generic *free functions* fully work — including statement-position
+  calls (`tests/generic_stmt_call.dlt`). They cover the same need:
+  `render_draw<Circle>(c)` instead of `Render.draw<Circle>(c)`. The
+  struct-namespace prefix is purely cosmetic.
+
+**Recommendation for now:** use a generic free function. Reach for a
+generic method only once this is built.
+
+**Estimate:** 1–2 sessions (parser + AST + codegen).
+
+---
+
+## D5. `impl Trait for Type:` — keyword reservation
 
 **What:** Not a feature to build — a **naming note**. The keyword
 `impl` is intentionally left unused (the method-block keyword is

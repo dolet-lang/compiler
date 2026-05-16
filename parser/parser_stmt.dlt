@@ -464,6 +464,19 @@ fun parse_var_decl_ident() -> i64:
         dec: i64 = mk_binary_op("-", mk_var_ref(name), mk_int_lit(1))
         return mk_assign(name, dec)
 
+    # Generic function call as statement: name<T1, T2>(args)
+    # Mirrors parse_ident_expr — `looks_like_type_args` disambiguates
+    # `name<T>(` (generic call) from `name < x` (comparison operator).
+    # Without this, a bare `show_it<i32>(7)` statement left the parser
+    # stranded on `<` and panicked with "Unknown statement".
+    if cur_kind() == TK_LESS and looks_like_type_args() == 1:
+        gtype_args: i64 = parse_type_arg_list()
+        gcargs: i64 = parse_arg_list()
+        gfc: i64 = mk_fun_call(name, gcargs, gtype_args)
+        if cur_kind() == TK_DOT:
+            return parse_chained_dot(gfc)
+        return gfc
+
     # Function call: name(args)
     if cur_kind() == TK_LPAREN:
         cargs: i64 = parse_arg_list()
