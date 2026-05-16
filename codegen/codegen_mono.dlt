@@ -407,6 +407,44 @@ fun check_bounds(ast: i64, base: str, tp: i64, types: i64):
                         mi = mi + 1
         pi = pi + 1
 
+# Phase 4b: Validate explicit `attach Trait for Type:` declarations.
+# For every such block (NODE_EXTEND_BLOCK with a trait name recorded
+# at +32), every method the trait declares must be implemented on
+# Type. Runs after collect_declarations so the impl registry is fully
+# populated. Catches missing-method errors even when the trait is
+# never used as a generic bound.
+fun check_explicit_trait_impls(ast: i64):
+    c: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < c:
+        node: i64 = nl_get(ast, i)
+        if nd_type(node) == NODE_EXTEND_BLOCK:
+            tname_raw: i64 = Memory.read_i64(node + 32)
+            if tname_raw != 0:
+                trait_name: str = tname_raw as str
+                if Memory.strlen(trait_name) > 0:
+                    type_name: str = Memory.read_i64(node + 8) as str
+                    trait_node: i64 = find_trait_decl(ast, trait_name)
+                    if trait_node == 0:
+                        panic(Str.concat(Str.concat(Str.concat("trait '", trait_name), "' not found (referenced in `attach "), Str.concat(Str.concat(trait_name, " for "), Str.concat(type_name, ":`)"))))
+                    tmethods: i64 = Memory.read_i64(trait_node + 16)
+                    if tmethods != 0:
+                        tmc: i32 = nl_count(tmethods)
+                        tmi: i32 = 0
+                        while tmi < tmc:
+                            tm: i64 = nl_get(tmethods, tmi)
+                            tmname: str = Memory.read_i64(tm + 8) as str
+                            if find_impl_method(type_name, tmname) == 0:
+                                em: str = Str.concat("type '", type_name)
+                                em = Str.concat(em, "' does not implement trait '")
+                                em = Str.concat(em, trait_name)
+                                em = Str.concat(em, "': missing method '")
+                                em = Str.concat(em, tmname)
+                                em = Str.concat(em, "'")
+                                panic(em)
+                            tmi = tmi + 1
+        i = i + 1
+
 fun mono_ensure(ast: i64, base: str, ta: i64) -> str:
     cnt: i32 = nl_count(ta)
     c: str = base

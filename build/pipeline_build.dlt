@@ -4788,24 +4788,32 @@ fun parse_impl_block() -> i64:
     ii: i32 = cur_indent()
     eat(TK_IMPL)
 
-    # Accept any identifier-like token as the type name so `impl str:`,
-    # `impl list:`, `impl i32:` etc. work on primitive type keywords —
-    # the previous `eat(TK_IDENT)` only accepted user-defined struct
-    # names. This makes `impl` the single, canonical extension form.
-    sname: str = cur_val()
+    # Accept any identifier-like token as the name so `attach str:`,
+    # `attach list:`, `attach i32:` etc. work on primitive type keywords.
+    first_name: str = cur_val()
     advance()
 
-    # `impl A.B:` is not supported — use composition (a `static b: B`
+    # `attach A.B:` is not supported — use composition (a `static b: B`
     # field on A) instead. Mirrors the same rejection in struct decls.
     if cur_kind() == TK_DOT:
-        panic("`impl A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
+        panic("`attach A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
 
-    # Optional type parameters: impl Name<T>
-    type_params: i64 = parse_type_param_list()
-
-    # Optional trait name: impl Struct for Trait
+    # `attach Trait for Type:` — the methods attach to Type; the trait
+    # name is recorded at node+32 for the conformance check (every
+    # method declared on the trait must be implemented on Type).
+    # Without `for`, `first_name` IS the target type and trait_name "".
+    sname: str = first_name
     trait_name: str = ""
-    # (simplified — Dolet uses impl Struct: syntax)
+    if cur_kind() == TK_FOR:
+        trait_name = first_name
+        advance()                       # consume `for`
+        sname = cur_val()               # the actual target type
+        advance()
+        if cur_kind() == TK_DOT:
+            panic("`attach Trait for A.B:` is not supported — the target must be a plain type name.")
+
+    # Optional type parameters: attach Name<T>
+    type_params: i64 = parse_type_param_list()
 
     if cur_kind() == TK_COLON:
         advance()
@@ -4832,11 +4840,15 @@ fun parse_impl_block() -> i64:
         else:
             break
 
-    # Build as NODE_EXTEND_BLOCK so impl methods flow through the
+    # Build as NODE_EXTEND_BLOCK so attach methods flow through the
     # extension-block code path (which registers overloads correctly).
-    # The legacy NODE_IMPL_BLOCK path remains for any leftover users
-    # but is no longer produced by this parser.
-    return mk_extend_block(sname, methods, type_params)
+    # When this is a trait impl (`attach Trait for Type:`), record the
+    # trait name at node+32 — check_explicit_trait_impls reads it to
+    # verify Type implements every method the trait declares.
+    eb: i64 = mk_extend_block(sname, methods, type_params)
+    if Memory.strlen(trait_name) > 0:
+        Memory.write_i64(eb + 32, trait_name as i64)
+    return eb
 
 # ==========================================
 # Extend Block
@@ -12764,6 +12776,44 @@ fun check_bounds(ast: i64, base: str, tp: i64, types: i64):
                         mi = mi + 1
         pi = pi + 1
 
+# Phase 4b: Validate explicit `attach Trait for Type:` declarations.
+# For every such block (NODE_EXTEND_BLOCK with a trait name recorded
+# at +32), every method the trait declares must be implemented on
+# Type. Runs after collect_declarations so the impl registry is fully
+# populated. Catches missing-method errors even when the trait is
+# never used as a generic bound.
+fun check_explicit_trait_impls(ast: i64):
+    c: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < c:
+        node: i64 = nl_get(ast, i)
+        if nd_type(node) == NODE_EXTEND_BLOCK:
+            tname_raw: i64 = Memory.read_i64(node + 32)
+            if tname_raw != 0:
+                trait_name: str = tname_raw as str
+                if Memory.strlen(trait_name) > 0:
+                    type_name: str = Memory.read_i64(node + 8) as str
+                    trait_node: i64 = find_trait_decl(ast, trait_name)
+                    if trait_node == 0:
+                        panic(Str.concat(Str.concat(Str.concat("trait '", trait_name), "' not found (referenced in `attach "), Str.concat(Str.concat(trait_name, " for "), Str.concat(type_name, ":`)"))))
+                    tmethods: i64 = Memory.read_i64(trait_node + 16)
+                    if tmethods != 0:
+                        tmc: i32 = nl_count(tmethods)
+                        tmi: i32 = 0
+                        while tmi < tmc:
+                            tm: i64 = nl_get(tmethods, tmi)
+                            tmname: str = Memory.read_i64(tm + 8) as str
+                            if find_impl_method(type_name, tmname) == 0:
+                                em: str = Str.concat("type '", type_name)
+                                em = Str.concat(em, "' does not implement trait '")
+                                em = Str.concat(em, trait_name)
+                                em = Str.concat(em, "': missing method '")
+                                em = Str.concat(em, tmname)
+                                em = Str.concat(em, "'")
+                                panic(em)
+                            tmi = tmi + 1
+        i = i + 1
+
 fun mono_ensure(ast: i64, base: str, ta: i64) -> str:
     cnt: i32 = nl_count(ta)
     c: str = base
@@ -14621,6 +14671,10 @@ fun generate(ast: i64) -> str:
     # Phase 1: Collect declarations
     collect_declarations(ast)
     IOOps.io_println("[gen] collect_declarations done")
+
+    # Phase 1.1: Validate explicit `attach Trait for Type:` blocks —
+    # every trait method must be implemented on the target type.
+    check_explicit_trait_impls(ast)
 
     # Phase 1.25: Monomorphize user generics (B3 Phase 2)
     monomorphize_pass(ast)

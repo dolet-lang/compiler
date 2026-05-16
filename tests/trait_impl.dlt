@@ -1,0 +1,45 @@
+import std
+
+# `attach Trait for Type:` — explicit trait implementation.
+# The methods attach to the TYPE; the compiler verifies the type
+# implements every method the trait declares (check_explicit_trait_impls).
+
+trait Drawable:
+    fun draw(self) -> str
+    fun layer(self) -> i32
+
+struct Circle:
+    radius: f32
+
+attach Drawable for Circle:
+    fun draw(self) -> str:
+        return "circle"
+    fun layer(self) -> i32:
+        return 1
+
+struct Rect:
+    w: f32
+    h: f32
+
+attach Drawable for Rect:
+    fun draw(self) -> str:
+        return "rect"
+    fun layer(self) -> i32:
+        return 2
+
+# Plain `attach` (no trait) still works alongside.
+attach Circle:
+    fun area(self) -> f32:
+        return 3.14159 * self.radius * self.radius
+
+fun do_test():
+    c: Circle = Circle(radius=5.0)
+    r: Rect = Rect(w=10.0, h=20.0)
+
+    print(c.draw())          # circle
+    print(c.layer())         # 1
+    print(c.area())          # 78.539...  (plain attach method)
+    print(r.draw())          # rect
+    print(r.layer())         # 2
+
+do_test()

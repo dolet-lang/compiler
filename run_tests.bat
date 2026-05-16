@@ -159,6 +159,7 @@ for %%f in (
     mutex_basic
     random_basic
     nested_namespace
+    trait_impl
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
@@ -190,6 +191,7 @@ for %%f in (
     validate_typo_method
     generic_bounds_fail
     closures_escape_fail
+    trait_impl_fail
 ) do (
     echo [TEST-MUST-FAIL] %%f
     if exist "tests\%%f.dlt" (

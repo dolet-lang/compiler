@@ -697,6 +697,10 @@ fun generate(ast: i64) -> str:
     collect_declarations(ast)
     IOOps.io_println("[gen] collect_declarations done")
 
+    # Phase 1.1: Validate explicit `attach Trait for Type:` blocks —
+    # every trait method must be implemented on the target type.
+    check_explicit_trait_impls(ast)
+
     # Phase 1.25: Monomorphize user generics (B3 Phase 2)
     monomorphize_pass(ast)
 

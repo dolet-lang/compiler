@@ -1,0 +1,22 @@
+import std
+
+# MUST FAIL: Triangle claims `attach Drawable` but is missing `layer`.
+# check_explicit_trait_impls should reject this with a clear error.
+
+trait Drawable:
+    fun draw(self) -> str
+    fun layer(self) -> i32
+
+struct Triangle:
+    base: f32
+
+attach Drawable for Triangle:
+    fun draw(self) -> str:
+        return "triangle"
+    # missing: fun layer(self) -> i32  ← compile error expected
+
+fun do_test():
+    t: Triangle = Triangle(base=3.0)
+    print(t.draw())
+
+do_test()

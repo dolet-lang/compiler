@@ -508,24 +508,32 @@ fun parse_impl_block() -> i64:
     ii: i32 = cur_indent()
     eat(TK_IMPL)
 
-    # Accept any identifier-like token as the type name so `impl str:`,
-    # `impl list:`, `impl i32:` etc. work on primitive type keywords —
-    # the previous `eat(TK_IDENT)` only accepted user-defined struct
-    # names. This makes `impl` the single, canonical extension form.
-    sname: str = cur_val()
+    # Accept any identifier-like token as the name so `attach str:`,
+    # `attach list:`, `attach i32:` etc. work on primitive type keywords.
+    first_name: str = cur_val()
     advance()
 
-    # `impl A.B:` is not supported — use composition (a `static b: B`
+    # `attach A.B:` is not supported — use composition (a `static b: B`
     # field on A) instead. Mirrors the same rejection in struct decls.
     if cur_kind() == TK_DOT:
-        panic("`impl A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
+        panic("`attach A.B:` is not supported — declare methods on plain `B` and add `static b: B = B()` to A instead.")
 
-    # Optional type parameters: impl Name<T>
-    type_params: i64 = parse_type_param_list()
-
-    # Optional trait name: impl Struct for Trait
+    # `attach Trait for Type:` — the methods attach to Type; the trait
+    # name is recorded at node+32 for the conformance check (every
+    # method declared on the trait must be implemented on Type).
+    # Without `for`, `first_name` IS the target type and trait_name "".
+    sname: str = first_name
     trait_name: str = ""
-    # (simplified — Dolet uses impl Struct: syntax)
+    if cur_kind() == TK_FOR:
+        trait_name = first_name
+        advance()                       # consume `for`
+        sname = cur_val()               # the actual target type
+        advance()
+        if cur_kind() == TK_DOT:
+            panic("`attach Trait for A.B:` is not supported — the target must be a plain type name.")
+
+    # Optional type parameters: attach Name<T>
+    type_params: i64 = parse_type_param_list()
 
     if cur_kind() == TK_COLON:
         advance()
@@ -552,11 +560,15 @@ fun parse_impl_block() -> i64:
         else:
             break
 
-    # Build as NODE_EXTEND_BLOCK so impl methods flow through the
+    # Build as NODE_EXTEND_BLOCK so attach methods flow through the
     # extension-block code path (which registers overloads correctly).
-    # The legacy NODE_IMPL_BLOCK path remains for any leftover users
-    # but is no longer produced by this parser.
-    return mk_extend_block(sname, methods, type_params)
+    # When this is a trait impl (`attach Trait for Type:`), record the
+    # trait name at node+32 — check_explicit_trait_impls reads it to
+    # verify Type implements every method the trait declares.
+    eb: i64 = mk_extend_block(sname, methods, type_params)
+    if Memory.strlen(trait_name) > 0:
+        Memory.write_i64(eb + 32, trait_name as i64)
+    return eb
 
 # ==========================================
 # Extend Block
