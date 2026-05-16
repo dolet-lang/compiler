@@ -353,6 +353,12 @@ fun collect_declarations(ast: i64):
                     emangled = register_overload(emangled_base, ept_str)
                     register_fun_sig_with_params(emangled, emret, ept_str)
                     register_impl_method(etname, emname, enode)
+                    # Generic method (`attach T: fun m<U>(...)`) — register
+                    # it in the generic-fn table under key `T_m` so the
+                    # monomorphizer can clone it per call-site type-arg.
+                    e_tp = Memory.read_i64(enode + 40)
+                    if e_tp != 0:
+                        register_gen_fn(emangled_base, enode)
                     j3 = j3 + 1
 
         # Extern blocks

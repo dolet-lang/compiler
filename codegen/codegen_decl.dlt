@@ -610,6 +610,11 @@ fun gen_extend_block(node: i64):
     i: i32 = 0
     while i < mc:
         mnode: i64 = nl_get(methods, i)
-        # Extend methods use the type name as struct name
-        gen_method_def(tname, mnode)
+        # Skip generic methods (`fun m<T>(...)`) — their body has
+        # unresolved T refs. The monomorphizer emits a concrete clone
+        # (`Type_m__i32`) as a top-level function per call-site instead.
+        m_tp: i64 = Memory.read_i64(mnode + 40)
+        if m_tp == 0:
+            # Extend methods use the type name as struct name
+            gen_method_def(tname, mnode)
         i = i + 1

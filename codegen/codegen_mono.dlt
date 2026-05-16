@@ -499,6 +499,37 @@ fun mono_walk_node(ast: i64, node: i64):
             Memory.write_i64(node + 24, 0)
         mono_walk_list(ast, Memory.read_i64(node + 16))
         return
+    # Generic STATIC method call: `Type.method<T>(args)`. The type-arg
+    # list lives at node+32. The method was registered as a generic fn
+    # under key `Type_method`; mono_ensure_fn clones it to a concrete
+    # top-level `Type_method__i32`, and we rewrite the method name so
+    # the codegen mangler (`struct + "_" + method`) lands on that clone.
+    if nt == NODE_STATIC_METHOD:
+        sm_ta: i64 = Memory.read_i64(node + 32)
+        if sm_ta != 0:
+            sm_struct: str = Memory.read_i64(node + 8) as str
+            sm_method: str = Memory.read_i64(node + 16) as str
+            sm_key: str = Str.concat(Str.concat(sm_struct, "_"), sm_method)
+            if is_generic_fn(sm_key) == 1:
+                sm_canon: str = mono_ensure_fn(ast, sm_key, sm_ta)
+                # Strip the `Type_` prefix: canon `Type_method__i32`
+                # → method name `method__i32`.
+                sm_pref: i64 = Memory.strlen(sm_struct) + 1 as i64
+                sm_new_method: str = Str.substring(sm_canon, sm_pref, Memory.strlen(sm_canon))
+                Memory.write_i64(node + 16, sm_new_method as i64)
+                Memory.write_i64(node + 32, 0)
+        mono_walk_list(ast, Memory.read_i64(node + 24))
+        return
+    # Generic INSTANCE method call: `obj.method<T>(args)`. Resolving
+    # `obj`'s struct type at mono time needs local var-type tracking
+    # that mono_walk doesn't carry yet — reject with a clear pointer
+    # to the supported forms (see DEFERRED.md D4).
+    if nt == NODE_INST_METHOD:
+        im_ta: i64 = Memory.read_i64(node + 32)
+        if im_ta != 0:
+            panic("generic instance methods (`obj.method<T>(...)`) are not supported yet — use a generic static method (`Type.method<T>(...)`) or a generic free function instead")
+        mono_walk_list(ast, Memory.read_i64(node + 24))
+        return
     if nt == NODE_VAR_DECL:
         vt: str = Memory.read_i64(node + 8) as str
         if (vt as i64) != 0:

@@ -4199,6 +4199,25 @@ fun parse_dot_stmt(name: str) -> i64:
             return mk_ns_access(name, member)
         return mk_ns_access(name, member)
 
+    # Generic method call: name.member<T1, T2>(args)
+    # `looks_like_type_args` disambiguates `<T>(` from the `<` operator.
+    # The type-arg list is stored at node+32 (NODE_INST_METHOD /
+    # NODE_STATIC_METHOD have a free slot there); the monomorphizer
+    # reads it to specialize the method.
+    if cur_kind() == TK_LESS and looks_like_type_args() == 1:
+        gm_ta: i64 = parse_type_arg_list()
+        gm_args: i64 = parse_arg_list()
+        gm_fc: i8 = Memory.read_i8(name as i64)
+        gm_node: i64 = 0
+        if gm_fc >= 65 and gm_fc <= 90:
+            gm_node = mk_static_method(name, member, gm_args)
+        else:
+            gm_node = mk_inst_method(name, member, gm_args)
+        Memory.write_i64(gm_node + 32, gm_ta)
+        if cur_kind() == TK_DOT or cur_kind() == TK_NEWLINE:
+            return parse_chained_dot(gm_node)
+        return gm_node
+
     # Method call
     if cur_kind() == TK_LPAREN:
         margs: i64 = parse_arg_list()
@@ -10765,8 +10784,13 @@ fun gen_extend_block(node: i64):
     i: i32 = 0
     while i < mc:
         mnode: i64 = nl_get(methods, i)
-        # Extend methods use the type name as struct name
-        gen_method_def(tname, mnode)
+        # Skip generic methods (`fun m<T>(...)`) — their body has
+        # unresolved T refs. The monomorphizer emits a concrete clone
+        # (`Type_m__i32`) as a top-level function per call-site instead.
+        m_tp: i64 = Memory.read_i64(mnode + 40)
+        if m_tp == 0:
+            # Extend methods use the type name as struct name
+            gen_method_def(tname, mnode)
         i = i + 1
 
 ##############################
@@ -12881,6 +12905,37 @@ fun mono_walk_node(ast: i64, node: i64):
             Memory.write_i64(node + 24, 0)
         mono_walk_list(ast, Memory.read_i64(node + 16))
         return
+    # Generic STATIC method call: `Type.method<T>(args)`. The type-arg
+    # list lives at node+32. The method was registered as a generic fn
+    # under key `Type_method`; mono_ensure_fn clones it to a concrete
+    # top-level `Type_method__i32`, and we rewrite the method name so
+    # the codegen mangler (`struct + "_" + method`) lands on that clone.
+    if nt == NODE_STATIC_METHOD:
+        sm_ta: i64 = Memory.read_i64(node + 32)
+        if sm_ta != 0:
+            sm_struct: str = Memory.read_i64(node + 8) as str
+            sm_method: str = Memory.read_i64(node + 16) as str
+            sm_key: str = Str.concat(Str.concat(sm_struct, "_"), sm_method)
+            if is_generic_fn(sm_key) == 1:
+                sm_canon: str = mono_ensure_fn(ast, sm_key, sm_ta)
+                # Strip the `Type_` prefix: canon `Type_method__i32`
+                # → method name `method__i32`.
+                sm_pref: i64 = Memory.strlen(sm_struct) + 1 as i64
+                sm_new_method: str = Str.substring(sm_canon, sm_pref, Memory.strlen(sm_canon))
+                Memory.write_i64(node + 16, sm_new_method as i64)
+                Memory.write_i64(node + 32, 0)
+        mono_walk_list(ast, Memory.read_i64(node + 24))
+        return
+    # Generic INSTANCE method call: `obj.method<T>(args)`. Resolving
+    # `obj`'s struct type at mono time needs local var-type tracking
+    # that mono_walk doesn't carry yet — reject with a clear pointer
+    # to the supported forms (see DEFERRED.md D4).
+    if nt == NODE_INST_METHOD:
+        im_ta: i64 = Memory.read_i64(node + 32)
+        if im_ta != 0:
+            panic("generic instance methods (`obj.method<T>(...)`) are not supported yet — use a generic static method (`Type.method<T>(...)`) or a generic free function instead")
+        mono_walk_list(ast, Memory.read_i64(node + 24))
+        return
     if nt == NODE_VAR_DECL:
         vt: str = Memory.read_i64(node + 8) as str
         if (vt as i64) != 0:
@@ -14341,6 +14396,12 @@ fun collect_declarations(ast: i64):
                     emangled = register_overload(emangled_base, ept_str)
                     register_fun_sig_with_params(emangled, emret, ept_str)
                     register_impl_method(etname, emname, enode)
+                    # Generic method (`attach T: fun m<U>(...)`) — register
+                    # it in the generic-fn table under key `T_m` so the
+                    # monomorphizer can clone it per call-site type-arg.
+                    e_tp = Memory.read_i64(enode + 40)
+                    if e_tp != 0:
+                        register_gen_fn(emangled_base, enode)
                     j3 = j3 + 1
 
         # Extern blocks

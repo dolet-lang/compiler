@@ -161,6 +161,7 @@ for %%f in (
     nested_namespace
     trait_impl
     generic_stmt_call
+    gen_method
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (

@@ -1,0 +1,23 @@
+import std
+
+# Generic STATIC methods — `attach Type: static fun m<T>(...)`,
+# called as `Type.m<Concrete>(args)`. The monomorphizer clones the
+# method per call-site type-arg into a concrete `Type_m__T` function.
+
+struct Render:
+    _placeholder: i32
+
+attach Render:
+    static fun show<T>(item: T):
+        print(item)
+
+    static fun pair<T>(a: T, b: T):
+        print(a)
+        print(b)
+
+fun do_test():
+    Render.show<i32>(7)
+    Render.show<str>("hello")
+    Render.pair<i32>(10, 20)
+
+do_test()

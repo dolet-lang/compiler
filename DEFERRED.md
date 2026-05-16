@@ -130,43 +130,43 @@ Holder.seeded.payload                            # access violation
 
 ---
 
-## D4. Generic methods (`fun method<T>(...)` inside `attach`)
+## D4. Generic INSTANCE methods (`obj.method<T>(...)`)
 
-**What:** Type-parameterised *methods* — a `<T>` on a method declared
-in an `attach` block, callable as `obj.method<T>(args)` or
-`Type.method<T>(args)`.
+**What:** Type-parameterised methods called on an *instance* —
+`obj.method<T>(args)` where `obj` is a variable, not a type name.
 
 ```dolet
-attach Render:
-    static fun draw<T: Drawable>(item: T):    # ← declares fine today
+attach Box:
+    fun emit<T>(self, item: T):       # ← declares + parses fine
         ...
-
-Render.draw<Circle>(c)        # ← call does NOT parse today
+b: Box = Box(...)
+b.emit<i32>(7)        # ← parses, but rejected at monomorphization
 ```
 
-**Current state (verified this session):**
-- The *declaration* parses — `parse_fun_def` runs `parse_type_param_list`
-  whether the fn is free or inside an `attach` block.
-- The *call* does NOT parse. `parse_dot_stmt` (statement position) and
-  the method-chain path handle `obj.method(args)` but not a `<T>`
-  before the `(`. The parser strands on `<`.
-- Even with a parser fix, `mk_inst_method` / `mk_static_method` have
-  no `type_args` slot (unlike `mk_fun_call`), so codegen
-  monomorphization has nowhere to read T from.
+**Shipped:** generic *static* methods — `Type.method<T>(args)` — work
+fully (parser + AST type-args slot at node+32 + monomorphization that
+clones the method into a concrete `Type_method__T` top-level fn). See
+`tests/gen_method.dlt`.
 
-**Why deferred:**
-- Three layers to touch — parser (`parse_dot_stmt` + expression
-  method-chain), AST (`mk_inst_method`/`mk_static_method` need a
-  type-args field), codegen (method monomorphization in codegen_mono).
-- Generic *free functions* fully work — including statement-position
-  calls (`tests/generic_stmt_call.dlt`). They cover the same need:
-  `render_draw<Circle>(c)` instead of `Render.draw<Circle>(c)`. The
-  struct-namespace prefix is purely cosmetic.
+**Why instance is still deferred:**
+- `obj.method<T>(...)` needs `obj`'s struct type resolved at
+  monomorphization time. `mono_walk` doesn't carry local var-type
+  scope, so it can't turn `b` into `Box`.
+- Static calls have the struct name right in the AST node — no
+  resolution needed, which is why they shipped first.
+- The compiler currently rejects generic instance calls with a clear
+  message pointing at the static / free-function alternatives.
 
-**Recommendation for now:** use a generic free function. Reach for a
-generic method only once this is built.
+**Implementation sketch:** give `mono_walk` a local var-type scope
+(populate from `NODE_VAR_DECL` declared types as it descends a
+function body), then `NODE_INST_METHOD` monomorphization mirrors the
+static path (key = `<resolved-struct>_<method>`).
 
-**Estimate:** 1–2 sessions (parser + AST + codegen).
+**Recommendation for now:** use a generic *static* method
+(`Type.method<T>(...)`) or a generic free function.
+
+**Estimate:** ~1 session (var-type scope tracking + the instance
+mono_walk case).
 
 ---
 
