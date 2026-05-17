@@ -130,43 +130,17 @@ Holder.seeded.payload                            # access violation
 
 ---
 
-## D4. Generic INSTANCE methods (`obj.method<T>(...)`)
+## D4. Generic methods — ✅ SHIPPED
 
-**What:** Type-parameterised methods called on an *instance* —
-`obj.method<T>(args)` where `obj` is a variable, not a type name.
+Both generic *static* methods (`Type.method<T>(args)`) and generic
+*instance* methods (`obj.method<T>(args)`) now work end-to-end:
+parser type-arg slot at node+32, a per-function var-type scope in
+`mono_walk` that resolves the receiver's struct, and method
+monomorphization (static → top-level clone, instance → concrete
+clone added to the struct's `attach` block). See `tests/gen_method.dlt`
+and `tests/gen_inst.dlt`.
 
-```dolet
-attach Box:
-    fun emit<T>(self, item: T):       # ← declares + parses fine
-        ...
-b: Box = Box(...)
-b.emit<i32>(7)        # ← parses, but rejected at monomorphization
-```
-
-**Shipped:** generic *static* methods — `Type.method<T>(args)` — work
-fully (parser + AST type-args slot at node+32 + monomorphization that
-clones the method into a concrete `Type_method__T` top-level fn). See
-`tests/gen_method.dlt`.
-
-**Why instance is still deferred:**
-- `obj.method<T>(...)` needs `obj`'s struct type resolved at
-  monomorphization time. `mono_walk` doesn't carry local var-type
-  scope, so it can't turn `b` into `Box`.
-- Static calls have the struct name right in the AST node — no
-  resolution needed, which is why they shipped first.
-- The compiler currently rejects generic instance calls with a clear
-  message pointing at the static / free-function alternatives.
-
-**Implementation sketch:** give `mono_walk` a local var-type scope
-(populate from `NODE_VAR_DECL` declared types as it descends a
-function body), then `NODE_INST_METHOD` monomorphization mirrors the
-static path (key = `<resolved-struct>_<method>`).
-
-**Recommendation for now:** use a generic *static* method
-(`Type.method<T>(...)`) or a generic free function.
-
-**Estimate:** ~1 session (var-type scope tracking + the instance
-mono_walk case).
+→ moved out of the backlog.
 
 ---
 

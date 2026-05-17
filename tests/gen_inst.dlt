@@ -1,0 +1,30 @@
+import std
+
+# Generic INSTANCE methods — `obj.method<T>(args)`. The receiver's
+# struct type is resolved from the monomorphizer's var-type scope.
+
+struct Box:
+    tag: i32
+
+attach Box:
+    fun emit<T>(self, item: T):
+        print(self.tag)
+        print(item)
+
+    fun twice<T>(self, item: T):
+        print(item)
+        print(item)
+
+fun do_test():
+    b: Box = Box(tag=99)
+    b.emit<i32>(7)            # resolves b → Box, monomorphizes Box.emit
+    b.emit<str>("hello")
+    b.twice<i32>(5)
+
+    # receiver passed as a parameter resolves too
+    use_box(b)
+
+fun use_box(box: Box):
+    box.emit<i32>(123)        # box → Box from the param type
+
+do_test()

@@ -9,6 +9,45 @@ g_gen_fn_names: i64 = 0
 g_gen_fn_nodes: i64 = 0
 g_gen_fn_count: i32 = 0
 
+# Per-function variable-type scope, used while mono_walk descends a
+# function body so a generic INSTANCE method call `obj.method<T>(...)`
+# can resolve `obj`'s struct type. Flat (no block scoping) and reset
+# at every NODE_FUN_DEF — a var name within one function has one type.
+g_mvt_names: i64 = 0
+g_mvt_types: i64 = 0
+g_mvt_count: i32 = 0
+
+fun mvt_alloc():
+    if g_mvt_names == 0:
+        g_mvt_names = Memory.malloc_zeroed(4096 * 8)
+        g_mvt_types = Memory.malloc_zeroed(4096 * 8)
+
+fun mvt_reset():
+    mvt_alloc()
+    g_mvt_count = 0
+
+fun mvt_add(name: str, vtype: str):
+    # Lazy-alloc — top-level var-decls reach mvt_add before any
+    # enclosing NODE_FUN_DEF has called mvt_reset.
+    mvt_alloc()
+    if g_mvt_count >= 4096:
+        return
+    off: i64 = (g_mvt_count as i64) * 8
+    Memory.write_i64(g_mvt_names + off, name as i64)
+    Memory.write_i64(g_mvt_types + off, vtype as i64)
+    g_mvt_count = g_mvt_count + 1
+
+# Returns the registered type for `name`, or "" if unknown. Last
+# write wins (a later var-decl shadows an earlier same-named one).
+fun mvt_lookup(name: str) -> str:
+    i: i32 = g_mvt_count - 1
+    while i >= 0:
+        off: i64 = (i as i64) * 8
+        if str_eq(Memory.read_i64(g_mvt_names + off) as str, name) == 1:
+            return Memory.read_i64(g_mvt_types + off) as str
+        i = i - 1
+    return ""
+
 fun init_gen_fn_registry():
     g_gen_fn_names = Memory.malloc_zeroed(8192)
     g_gen_fn_nodes = Memory.malloc_zeroed(8192)
@@ -520,14 +559,24 @@ fun mono_walk_node(ast: i64, node: i64):
                 Memory.write_i64(node + 32, 0)
         mono_walk_list(ast, Memory.read_i64(node + 24))
         return
-    # Generic INSTANCE method call: `obj.method<T>(args)`. Resolving
-    # `obj`'s struct type at mono time needs local var-type tracking
-    # that mono_walk doesn't carry yet — reject with a clear pointer
-    # to the supported forms (see DEFERRED.md D4).
+    # Generic INSTANCE method call: `obj.method<T>(args)`. `obj`'s
+    # struct type is resolved from the per-function var-type scope
+    # (mvt — populated from params + var-decls as mono_walk descends).
+    # The generic method is cloned into the struct's attach block as
+    # a concrete `method__T`, and the call's method name rewritten.
     if nt == NODE_INST_METHOD:
         im_ta: i64 = Memory.read_i64(node + 32)
         if im_ta != 0:
-            panic("generic instance methods (`obj.method<T>(...)`) are not supported yet — use a generic static method (`Type.method<T>(...)`) or a generic free function instead")
+            im_obj: str = Memory.read_i64(node + 8) as str
+            im_method: str = Memory.read_i64(node + 16) as str
+            im_struct: str = mvt_lookup(im_obj)
+            if str_eq(im_struct, "") == 1:
+                panic(Str.concat(Str.concat("cannot resolve the type of '", im_obj), "' for a generic method call — give it an explicit declared type (`x: SomeStruct = ...`)"))
+            im_key: str = Str.concat(Str.concat(im_struct, "_"), im_method)
+            if is_generic_fn(im_key) == 1:
+                im_new: str = mono_ensure_method(ast, im_struct, im_method, im_ta)
+                Memory.write_i64(node + 16, im_new as i64)
+                Memory.write_i64(node + 32, 0)
         mono_walk_list(ast, Memory.read_i64(node + 24))
         return
     if nt == NODE_VAR_DECL:
@@ -536,6 +585,19 @@ fun mono_walk_node(ast: i64, node: i64):
             nv: str = canon_if_gen(vt)
             if str_eq(nv, vt) == 0:
                 Memory.write_i64(node + 8, nv as i64)
+        # Record var → struct type so a later `var.method<T>(...)` in
+        # this function body can resolve the receiver.
+        vd_name: str = Memory.read_i64(node + 16) as str
+        vd_type: str = Memory.read_i64(node + 8) as str
+        if (vd_type as i64) != 0 and Memory.strlen(vd_type) > 0:
+            mvt_add(vd_name, vd_type)
+        else:
+            # Inferred type — if the initializer is a struct literal,
+            # the literal's struct name is the variable's type.
+            vd_val: i64 = Memory.read_i64(node + 24)
+            if vd_val != 0:
+                if nd_type(vd_val) == NODE_STRUCT_INST:
+                    mvt_add(vd_name, Memory.read_i64(vd_val + 8) as str)
         mono_walk_node(ast, Memory.read_i64(node + 24))
         return
     if nt == NODE_FUN_DEF:
@@ -545,6 +607,9 @@ fun mono_walk_node(ast: i64, node: i64):
         ftp: i64 = Memory.read_i64(node + 40)
         if ftp != 0:
             return
+        # Fresh var-type scope for this function — used so generic
+        # instance method calls in the body can resolve `obj`'s type.
+        mvt_reset()
         ps: i64 = Memory.read_i64(node + 16)
         if ps != 0:
             pc: i32 = nl_count(ps)
@@ -556,6 +621,9 @@ fun mono_walk_node(ast: i64, node: i64):
                     npt: str = canon_if_gen(pt)
                     if str_eq(npt, pt) == 0:
                         Memory.write_i64(pn + 16, npt as i64)
+                    # Record param → type for instance-method resolution.
+                    pn_name: str = Memory.read_i64(pn + 8) as str
+                    mvt_add(pn_name, Memory.read_i64(pn + 16) as str)
                 pi = pi + 1
         rt: str = Memory.read_i64(node + 24) as str
         if (rt as i64) != 0:
@@ -653,6 +721,91 @@ fun mono_ensure_fn(ast: i64, base: str, ta: i64) -> str:
             mono_record(c)
             mono_walk_list(ast, Memory.read_i64(new_fn + 32))
     return c
+
+# Find the first `attach <name>:` block in the top-level AST.
+fun find_extend_block(ast: i64, name: str) -> i64:
+    c: i32 = nl_count(ast)
+    i: i32 = 0
+    while i < c:
+        node: i64 = nl_get(ast, i)
+        if nd_type(node) == NODE_EXTEND_BLOCK:
+            if str_eq(Memory.read_i64(node + 8) as str, name) == 1:
+                return node
+        i = i + 1
+    return 0
+
+# Clone a generic attach-block method with T → concrete substituted,
+# renaming it to `short_name` and clearing its type parameters. Keeps
+# the original's is_static flag (+72) so codegen emits the right form.
+fun clone_gen_method(orig: i64, types: i64, short_name: str) -> i64:
+    tp: i64 = Memory.read_i64(orig + 40)
+    pc: i32 = 0
+    if tp != 0:
+        pc = nl_count(tp)
+    op: i64 = Memory.read_i64(orig + 16)
+    np: i64 = mk_node_list(8)
+    if op != 0:
+        ppc: i32 = nl_count(op)
+        ppi: i32 = 0
+        while ppi < ppc:
+            opn: i64 = nl_get(op, ppi)
+            psub: str = Memory.read_i64(opn + 16) as str
+            si: i32 = 0
+            while si < pc:
+                tp_it: i64 = nl_get(tp, si)
+                tn: str = Memory.read_i64(tp_it + 0) as str
+                if si < nl_count(types):
+                    ct: str = nl_get(types, si) as str
+                    psub = substitute_type(psub, tn, ct)
+                si = si + 1
+            nl_add(np, mk_param(Memory.read_i64(opn + 8) as str, psub, Memory.read_i64(opn + 24)))
+            ppi = ppi + 1
+    orig_ret: str = Memory.read_i64(orig + 24) as str
+    nret: str = orig_ret
+    si2: i32 = 0
+    while si2 < pc:
+        tp_it2: i64 = nl_get(tp, si2)
+        tn2: str = Memory.read_i64(tp_it2 + 0) as str
+        if si2 < nl_count(types):
+            ct2: str = nl_get(types, si2) as str
+            nret = substitute_type(nret, tn2, ct2)
+        si2 = si2 + 1
+    new_body: i64 = subst_body(Memory.read_i64(orig + 32), tp, types)
+    new_m: i64 = mk_fun_def(short_name, np, nret, new_body, 0, Memory.read_i64(orig + 48), Memory.read_i64(orig + 56) as str, Memory.read_i64(orig + 64))
+    Memory.write_i64(new_m + 72, Memory.read_i64(orig + 72))
+    return new_m
+
+# Ensure a generic INSTANCE-method instantiation exists. Clones the
+# generic method into the struct's `attach` block as a concrete
+# method `method__T` (so codegen emits it with proper struct/self
+# context), registers it, and returns the short name `method__T`.
+fun mono_ensure_method(ast: i64, struct_name: str, method: str, ta: i64) -> str:
+    cnt: i32 = nl_count(ta)
+    short: str = method
+    i: i32 = 0
+    while i < cnt:
+        s: str = nl_get(ta, i) as str
+        f: str = Str.replace(Str.replace(Str.replace(s, "[", "_"), "]", ""), ",", "_")
+        if i == 0:
+            short = Str.concat(Str.concat(short, "__"), f)
+        else:
+            short = Str.concat(Str.concat(short, "_"), f)
+        i = i + 1
+    canon_full: str = Str.concat(Str.concat(struct_name, "_"), short)
+    if mono_done(canon_full) == 0:
+        key: str = Str.concat(Str.concat(struct_name, "_"), method)
+        o: i64 = find_gen_fn_node(key)
+        if o != 0:
+            clone: i64 = clone_gen_method(o, ta, short)
+            blk: i64 = find_extend_block(ast, struct_name)
+            if blk != 0:
+                nl_add(Memory.read_i64(blk + 16), clone)
+            pt: str = method_pt_str(Memory.read_i64(clone + 16))
+            register_fun_sig_with_params(canon_full, Memory.read_i64(clone + 24) as str, pt)
+            register_impl_method(struct_name, short, clone)
+            mono_record(canon_full)
+            mono_walk_list(ast, Memory.read_i64(clone + 32))
+    return short
 
 # ==========================================
 # C1 Phase 1: Lambda Lifting

@@ -162,6 +162,7 @@ for %%f in (
     trait_impl
     generic_stmt_call
     gen_method
+    gen_inst
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
