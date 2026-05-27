@@ -9758,6 +9758,72 @@ fun gen_foreach_loop(node: i64):
 # ==========================================
 # Return Statement
 # ==========================================
+fun emit_arena_alloc_ptr(size: i32) -> str:
+    sz: str = emit_const_i64(size as i64)
+    raw: str = emit_call("_scope_arena_alloc", sz, "i64", "i64")
+    ptr_val: str = new_tmp()
+    emit_ind(Str.concat(Str.concat(Str.concat(ptr_val, " = llvm.inttoptr "), raw), " : i64 to !llvm.ptr"))
+    return ptr_val
+
+# Copy a stack-struct value into the caller arena. This is used for
+# returning non-heap structs because the ABI represents structs as
+# pointers; returning a callee alloca would leave callers with a dead
+# pointer. Nested stack-struct fields are copied recursively so their
+# field pointers do not keep pointing into the callee frame.
+fun copy_struct_to_arena(src_ptr: str, sname: str) -> str:
+    ssize: i32 = calculate_struct_size(sname)
+    smtype: str = get_struct_mlir_type(sname)
+    fields: i64 = get_struct_fields(sname)
+    dest: str = ""
+    if fields == 0:
+        dest = emit_arena_alloc_ptr(ssize)
+        return dest
+
+    fc: i32 = nl_count(fields)
+    prep_size: i64 = (fc as i64) * 8
+    prepared: i64 = Memory.malloc_zeroed(prep_size)
+
+    # First prepare every field value before allocating the destination
+    # struct. This avoids overwriting arena-backed field payloads, such
+    # as a str produced inside the callee frame, before they are copied.
+    fi: i32 = 0
+    while fi < fc:
+        fnode: i64 = nl_get(fields, fi)
+        ftype: str = Memory.read_i64(fnode + 16) as str
+        fmt: str = mlir_type(ftype)
+        idx_str: str = Convert.i64_to_str(fi as i64)
+
+        sgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(sgep, " = llvm.getelementptr "), src_ptr), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+
+        prepared_val: str = ""
+        if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+            src_nested: str = emit_load(sgep, fmt)
+            prepared_val = copy_struct_to_arena(src_nested, ftype)
+        elif is_string_type(ftype) == 1:
+            src_str: str = emit_load(sgep, fmt)
+            prepared_val = emit_call("_str_dupe", src_str, "!llvm.ptr", "!llvm.ptr")
+        else:
+            prepared_val = emit_load(sgep, fmt)
+        Memory.write_i64(prepared + ((fi as i64) * 8), prepared_val as i64)
+        fi = fi + 1
+
+    dest = emit_arena_alloc_ptr(ssize)
+
+    fi = 0
+    while fi < fc:
+        fnode2: i64 = nl_get(fields, fi)
+        ftype2: str = Memory.read_i64(fnode2 + 16) as str
+        fmt2: str = mlir_type(ftype2)
+        idx_str2: str = Convert.i64_to_str(fi as i64)
+        dgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(dgep, " = llvm.getelementptr "), dest), Str.concat(Str.concat("[0, ", Str.concat(idx_str2, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+        stored_val: str = Memory.read_i64(prepared + ((fi as i64) * 8)) as str
+        emit_store(stored_val, dgep, fmt2)
+        fi = fi + 1
+
+    return dest
+
 fun gen_return(node: i64):
     val_node: i64 = Memory.read_i64(node + 8)
     if val_node == 0:
@@ -9793,10 +9859,9 @@ fun gen_return(node: i64):
                     panic(Str.concat(Str.concat("internal codegen error: return value resolved to empty for non-void return type '", ret_type), "'. Likely cause: a chained method call (e.g. f().method()) lost its return type during codegen."))
 
     mt: str = mlir_type(ret_type)
-    # If the function returns a `str`, promote the value out of the arena
-    # BEFORE popping. _str_promote_return copies the string down to the
-    # caller's arena region and leaves the cursor there, so a subsequent
-    # pop won't clobber it. For non-str return types just pop.
+    # Values backed by the callee frame must be promoted before return.
+    # Strings have a runtime helper; stack structs need a recursive copy
+    # because nested struct fields are represented as pointers.
     if g_arena_emit == 1:
         if is_string_type(ret_type) == 1:
             promoted: str = new_tmp()
@@ -9804,6 +9869,9 @@ fun gen_return(node: i64):
             val = promoted
             # Note: _str_promote_return has already reset the cursor to
             # the caller's frame, so we skip the explicit pop here.
+        elif is_struct_type(ret_type) == 1 and is_heap_struct(ret_type) == 0:
+            emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+            val = copy_struct_to_arena(val, ret_type)
         else:
             emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
     if g_debug_emit == 1:
@@ -11032,8 +11100,12 @@ fun gen_nested_field_access(node: i64, expected: str) -> str:
 
     # Get type of the base expression
     base_type: str = infer_expr_type(base_node)
-    if is_struct_type(base_type) == 1 or is_string_type(base_type) == 1:
-        base_ptr = emit_load(base_ptr, mlir_type(base_type))
+    if nested_ptr_is_field_slot(base_node) == 1:
+        if is_struct_type(base_type) == 1 or is_string_type(base_type) == 1:
+            base_ptr = emit_load(base_ptr, mlir_type(base_type))
+
+    # For expression temporaries (e.g. `make().field`) gen_expr already
+    # returns the struct pointer itself, not a slot containing one.
 
     # GEP into the sub-struct for the nested field
     fidx2: i32 = get_field_index(base_type, field_name)
@@ -11046,6 +11118,19 @@ fun gen_nested_field_access(node: i64, expected: str) -> str:
 
     val2: str = emit_load(fp2, mt2)
     return val2
+
+# gen_nested_field_ptr has two possible meanings:
+# - field forms return the address of a slot that stores the field value
+# - fallback expression forms return the value pointer directly
+fun nested_ptr_is_field_slot(node: i64) -> i32:
+    nt_slot: i32 = nd_type(node)
+    if nt_slot == NODE_FIELD_ACCESS:
+        return 1
+    if nt_slot == NODE_NESTED_FIELD:
+        return 1
+    if nt_slot == NODE_SELF_FIELD:
+        return 1
+    return 0
 
 # Returns pointer to a struct field WITHOUT loading (for nested chain)
 fun gen_nested_field_ptr(node: i64) -> str:
@@ -11067,8 +11152,9 @@ fun gen_nested_field_ptr(node: i64) -> str:
         inner_field: str = Memory.read_i64(node + 16) as str
         inner_ptr: str = gen_nested_field_ptr(inner_base)
         inner_type: str = infer_expr_type(inner_base)
-        if is_struct_type(inner_type) == 1 or is_string_type(inner_type) == 1:
-            inner_ptr = emit_load(inner_ptr, mlir_type(inner_type))
+        if nested_ptr_is_field_slot(inner_base) == 1:
+            if is_struct_type(inner_type) == 1 or is_string_type(inner_type) == 1:
+                inner_ptr = emit_load(inner_ptr, mlir_type(inner_type))
         fidx4: i32 = get_field_index(inner_type, inner_field)
         struct_mlir4: str = get_struct_mlir_type(inner_type)
         fp4: str = new_tmp()
@@ -11158,13 +11244,13 @@ fun gen_nested_method_call(node: i64) -> str:
     # registered `str_trim`.
     base_type: str = normalize_type(infer_expr_type(base_node))
 
-    # B3-fix: gen_nested_field_ptr returns the address of the FIELD SLOT.
-    # For struct- or str-typed fields, the slot holds a pointer; the
-    # method needs the pointer value, not the slot address. Load once.
-    if is_struct_type(base_type) == 1 or is_string_type(base_type) == 1:
-        loaded_p: str = new_tmp()
-        emit_ind(Str.concat(Str.concat(loaded_p, " = llvm.load "), Str.concat(base_ptr, " : !llvm.ptr -> !llvm.ptr")))
-        base_ptr = loaded_p
+    # Field forms return the address of a slot; expression temporaries
+    # such as `Box.make().get()` already return the receiver pointer.
+    if nested_ptr_is_field_slot(base_node) == 1:
+        if is_struct_type(base_type) == 1 or is_string_type(base_type) == 1:
+            loaded_p: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(loaded_p, " = llvm.load "), Str.concat(base_ptr, " : !llvm.ptr -> !llvm.ptr")))
+            base_ptr = loaded_p
 
     # Build proxy NODE_INST_METHOD for the method call on the nested struct
     # We use base_ptr as the self pointer and delegate to instance method logic

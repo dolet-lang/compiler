@@ -163,6 +163,7 @@ for %%f in (
     nested_namespace
     trait_impl
     generic_stmt_call
+    temp_receiver_chain
     gen_method
     gen_inst
     gen_t_static

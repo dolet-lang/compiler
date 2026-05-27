@@ -1,0 +1,32 @@
+import std
+
+struct Box:
+    value: i32 = 0
+
+    static fun make(v: i32) -> Box:
+        return Box(value=v)
+
+    fun get(self) -> i32:
+        return self.value
+
+struct Wrapper:
+    inner: Box = Box()
+
+    static fun make(v: i32) -> Wrapper:
+        return Wrapper(inner=Box(value=v))
+
+    fun box(self) -> Box:
+        return self.inner
+
+struct Label:
+    text: str = ""
+
+    static fun make(prefix: str, suffix: str) -> Label:
+        return Label(text=prefix + suffix)
+
+    fun get(self) -> str:
+        return self.text
+
+print(Box.make(7).get())
+print(Wrapper.make(42).box().get())
+print(Label.make("do", "let").get())
