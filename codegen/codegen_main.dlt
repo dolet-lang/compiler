@@ -628,8 +628,13 @@ fun gen_functions(ast: i64):
                         gen_struct_inline_methods(node)
         elif nt == NODE_FUN_DEF:
             ts_fname: str = Memory.read_i64(node + 8) as str
-            if ts_is_reachable(ts_fname) == 1:
-                gen_fun_def(node)
+            # Skip generic functions (`fun f<T>(...)`) — their body has
+            # unresolved T refs. The monomorphizer emits a concrete clone
+            # (`f__i32`) as a separate top-level function per call-site.
+            f_tp: i64 = Memory.read_i64(node + 40)
+            if f_tp == 0:
+                if ts_is_reachable(ts_fname) == 1:
+                    gen_fun_def(node)
         elif nt == NODE_IMPL_BLOCK:
             ts_sname: str = Memory.read_i64(node + 8) as str
             if ts_is_reachable(ts_sname) == 1:

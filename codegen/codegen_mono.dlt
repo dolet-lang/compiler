@@ -219,10 +219,35 @@ fun subst_stmt(node: i64, tp: i64, types: i64) -> i64:
                 ct: str = nl_get(types, si) as str
                 new_vt = substitute_type(new_vt, tn, ct)
             si = si + 1
-        if str_eq(new_vt, vt) == 0:
-            # Allocate a fresh NODE_VAR_DECL with substituted type
-            nn: i64 = mk_var_decl(new_vt, Memory.read_i64(node + 16) as str, Memory.read_i64(node + 24), Memory.read_i64(node + 32), Memory.read_i64(node + 48), Memory.read_i64(node + 56))
+        # Recurse into the initializer — it may itself be `T.method(...)`.
+        old_init: i64 = Memory.read_i64(node + 24)
+        new_init: i64 = subst_stmt(old_init, tp, types)
+        if str_eq(new_vt, vt) == 0 or new_init != old_init:
+            # Allocate a fresh NODE_VAR_DECL with substituted type/init
+            nn: i64 = mk_var_decl(new_vt, Memory.read_i64(node + 16) as str, new_init, Memory.read_i64(node + 32), Memory.read_i64(node + 48), Memory.read_i64(node + 56))
             return nn
+        return node
+
+    # A static method call whose RECEIVER is a type-param: `T.build(...)`.
+    # Inside a generic body, `T` must become the concrete type so the
+    # codegen mangler lands on `Concrete_build`. Receiver is always a
+    # bare type name, so match it exactly against each type-param.
+    if nt == NODE_STATIC_METHOD:
+        sm_recv: str = Memory.read_i64(node + 8) as str
+        sm_new: str = sm_recv
+        smi: i32 = 0
+        while smi < pc:
+            tp_itS: i64 = nl_get(tp, smi)
+            tnS: str = Memory.read_i64(tp_itS + 0) as str
+            if smi < nl_count(types):
+                ctS: str = nl_get(types, smi) as str
+                if str_eq(sm_recv, tnS) == 1:
+                    sm_new = ctS
+            smi = smi + 1
+        if str_eq(sm_new, sm_recv) == 0:
+            nsm: i64 = mk_static_method(sm_new, Memory.read_i64(node + 16) as str, Memory.read_i64(node + 24))
+            Memory.write_i64(nsm + 32, Memory.read_i64(node + 32))
+            return nsm
         return node
 
     if nt == NODE_CAST:
@@ -579,6 +604,15 @@ fun mono_walk_node(ast: i64, node: i64):
                 Memory.write_i64(node + 32, 0)
         mono_walk_list(ast, Memory.read_i64(node + 24))
         return
+    # A method chain `recv.m()` — the receiver at +8 may itself be a
+    # generic call (`app.spawn<Cube>().set_name(...)`). Without
+    # descending here, generic calls buried inside a chain are never
+    # monomorphized and the call site keeps the un-suffixed name.
+    if nt == NODE_NESTED_METHOD:
+        mono_walk_node(ast, Memory.read_i64(node + 8))
+        mono_walk_list(ast, Memory.read_i64(node + 24))
+        return
+
     if nt == NODE_VAR_DECL:
         vt: str = Memory.read_i64(node + 8) as str
         if (vt as i64) != 0:
@@ -635,8 +669,13 @@ fun mono_walk_node(ast: i64, node: i64):
     if nt == NODE_RETURN:
         mono_walk_node(ast, Memory.read_i64(node + 8))
         return
-    if nt == NODE_ASSIGN or nt == NODE_FIELD_ASSIGN or nt == NODE_FIELD_VAL:
+    if nt == NODE_ASSIGN or nt == NODE_FIELD_VAL:
         mono_walk_node(ast, Memory.read_i64(node + 16))
+        return
+    # NODE_FIELD_ASSIGN is `obj.field = value` — value is at +24
+    # (obj@8, field@16). `flycam.camera = app.spawn<T>()...` lives here.
+    if nt == NODE_FIELD_ASSIGN:
+        mono_walk_node(ast, Memory.read_i64(node + 24))
         return
     if nt == NODE_BLOCK:
         mono_walk_list(ast, Memory.read_i64(node + 8))

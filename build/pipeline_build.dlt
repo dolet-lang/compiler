@@ -3256,6 +3256,24 @@ fun parse_dot_access(first: str) -> i64:
         # ns.symbol
         return mk_ns_access(first, member)
 
+    # Generic method call: first.member<T1, T2>(args) — expression form.
+    # Mirrors the statement-position handling in parse_dot_stmt; the
+    # type-arg list goes at node+32 for the monomorphizer to read.
+    # Without this `x = obj.m<T>()` left the parser stranded on `<`.
+    if cur_kind() == TK_LESS and looks_like_type_args() == 1:
+        gm_ta: i64 = parse_type_arg_list()
+        gm_args: i64 = parse_arg_list()
+        gm_fc: i8 = Memory.read_i8(first as i64)
+        gm_node: i64 = 0
+        if gm_fc >= 65 and gm_fc <= 90:
+            gm_node = mk_static_method(first, member, gm_args)
+        else:
+            gm_node = mk_inst_method(first, member, gm_args)
+        Memory.write_i64(gm_node + 32, gm_ta)
+        if cur_kind() == TK_DOT or cur_kind() == TK_QUESTION or cur_kind() == TK_NEWLINE:
+            return parse_chained_dot(gm_node)
+        return gm_node
+
     # Static/instance method call: Name.method(args)
     if cur_kind() == TK_LPAREN:
         margs: i64 = parse_arg_list()
@@ -12625,10 +12643,35 @@ fun subst_stmt(node: i64, tp: i64, types: i64) -> i64:
                 ct: str = nl_get(types, si) as str
                 new_vt = substitute_type(new_vt, tn, ct)
             si = si + 1
-        if str_eq(new_vt, vt) == 0:
-            # Allocate a fresh NODE_VAR_DECL with substituted type
-            nn: i64 = mk_var_decl(new_vt, Memory.read_i64(node + 16) as str, Memory.read_i64(node + 24), Memory.read_i64(node + 32), Memory.read_i64(node + 48), Memory.read_i64(node + 56))
+        # Recurse into the initializer — it may itself be `T.method(...)`.
+        old_init: i64 = Memory.read_i64(node + 24)
+        new_init: i64 = subst_stmt(old_init, tp, types)
+        if str_eq(new_vt, vt) == 0 or new_init != old_init:
+            # Allocate a fresh NODE_VAR_DECL with substituted type/init
+            nn: i64 = mk_var_decl(new_vt, Memory.read_i64(node + 16) as str, new_init, Memory.read_i64(node + 32), Memory.read_i64(node + 48), Memory.read_i64(node + 56))
             return nn
+        return node
+
+    # A static method call whose RECEIVER is a type-param: `T.build(...)`.
+    # Inside a generic body, `T` must become the concrete type so the
+    # codegen mangler lands on `Concrete_build`. Receiver is always a
+    # bare type name, so match it exactly against each type-param.
+    if nt == NODE_STATIC_METHOD:
+        sm_recv: str = Memory.read_i64(node + 8) as str
+        sm_new: str = sm_recv
+        smi: i32 = 0
+        while smi < pc:
+            tp_itS: i64 = nl_get(tp, smi)
+            tnS: str = Memory.read_i64(tp_itS + 0) as str
+            if smi < nl_count(types):
+                ctS: str = nl_get(types, smi) as str
+                if str_eq(sm_recv, tnS) == 1:
+                    sm_new = ctS
+            smi = smi + 1
+        if str_eq(sm_new, sm_recv) == 0:
+            nsm: i64 = mk_static_method(sm_new, Memory.read_i64(node + 16) as str, Memory.read_i64(node + 24))
+            Memory.write_i64(nsm + 32, Memory.read_i64(node + 32))
+            return nsm
         return node
 
     if nt == NODE_CAST:
@@ -12985,6 +13028,15 @@ fun mono_walk_node(ast: i64, node: i64):
                 Memory.write_i64(node + 32, 0)
         mono_walk_list(ast, Memory.read_i64(node + 24))
         return
+    # A method chain `recv.m()` — the receiver at +8 may itself be a
+    # generic call (`app.spawn<Cube>().set_name(...)`). Without
+    # descending here, generic calls buried inside a chain are never
+    # monomorphized and the call site keeps the un-suffixed name.
+    if nt == NODE_NESTED_METHOD:
+        mono_walk_node(ast, Memory.read_i64(node + 8))
+        mono_walk_list(ast, Memory.read_i64(node + 24))
+        return
+
     if nt == NODE_VAR_DECL:
         vt: str = Memory.read_i64(node + 8) as str
         if (vt as i64) != 0:
@@ -13041,8 +13093,13 @@ fun mono_walk_node(ast: i64, node: i64):
     if nt == NODE_RETURN:
         mono_walk_node(ast, Memory.read_i64(node + 8))
         return
-    if nt == NODE_ASSIGN or nt == NODE_FIELD_ASSIGN or nt == NODE_FIELD_VAL:
+    if nt == NODE_ASSIGN or nt == NODE_FIELD_VAL:
         mono_walk_node(ast, Memory.read_i64(node + 16))
+        return
+    # NODE_FIELD_ASSIGN is `obj.field = value` — value is at +24
+    # (obj@8, field@16). `flycam.camera = app.spawn<T>()...` lives here.
+    if nt == NODE_FIELD_ASSIGN:
+        mono_walk_node(ast, Memory.read_i64(node + 24))
         return
     if nt == NODE_BLOCK:
         mono_walk_list(ast, Memory.read_i64(node + 8))
@@ -14824,8 +14881,13 @@ fun gen_functions(ast: i64):
                         gen_struct_inline_methods(node)
         elif nt == NODE_FUN_DEF:
             ts_fname: str = Memory.read_i64(node + 8) as str
-            if ts_is_reachable(ts_fname) == 1:
-                gen_fun_def(node)
+            # Skip generic functions (`fun f<T>(...)`) — their body has
+            # unresolved T refs. The monomorphizer emits a concrete clone
+            # (`f__i32`) as a separate top-level function per call-site.
+            f_tp: i64 = Memory.read_i64(node + 40)
+            if f_tp == 0:
+                if ts_is_reachable(ts_fname) == 1:
+                    gen_fun_def(node)
         elif nt == NODE_IMPL_BLOCK:
             ts_sname: str = Memory.read_i64(node + 8) as str
             if ts_is_reachable(ts_sname) == 1:

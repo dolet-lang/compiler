@@ -1,0 +1,47 @@
+import std
+
+# Calling a STATIC method through the type parameter `T` itself,
+# from inside a generic function body — `T.build()`.
+#
+# Two compiler pieces make this work:
+#   1. subst_stmt clones `NODE_STATIC_METHOD` with the receiver type
+#      substituted (`T` -> concrete) during monomorphization.
+#   2. gen_functions skips generic `fun f<T>(...)` defs — only the
+#      monomorphized clones (`f__Foo`) are emitted.
+#
+# This is the dispatch primitive behind `app.spawn<Camera>()` style
+# APIs: a generic that delegates to per-type `T.build(...)` logic.
+
+trait Builder:
+    static fun build() -> i32
+
+struct Foo:
+    _x: i32
+
+attach Builder for Foo:
+    static fun build() -> i32:
+        return 11
+
+struct Bar:
+    _x: i32
+
+attach Builder for Bar:
+    static fun build() -> i32:
+        return 22
+
+# T.build() in return position
+fun make<T: Builder>() -> i32:
+    return T.build()
+
+# T.build() into a local var, then return the local
+fun make_local<T: Builder>() -> i32:
+    x: i32 = T.build()
+    return x
+
+fun do_test():
+    print(make<Foo>())         # 11
+    print(make<Bar>())         # 22
+    print(make_local<Foo>())   # 11
+    print(make_local<Bar>())   # 22
+
+do_test()

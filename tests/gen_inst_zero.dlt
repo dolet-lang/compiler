@@ -1,0 +1,28 @@
+import std
+
+# Generic instance method called with ZERO args, in expression
+# position, then chained — exactly `app.spawn<Cube>().set_name(...)`.
+
+trait Sp:
+    static fun build() -> i32
+
+struct Foo:
+    _x: i32
+
+attach Sp for Foo:
+    static fun build() -> i32:
+        return 7
+
+struct Box:
+    tag: i32
+
+attach Box:
+    fun make<T: Sp>(self) -> i32:
+        return T.build()
+
+fun do_test():
+    b: Box = Box(tag=0)
+    r: i32 = b.make<Foo>()
+    print(r)
+
+do_test()

@@ -163,6 +163,8 @@ for %%f in (
     generic_stmt_call
     gen_method
     gen_inst
+    gen_t_static
+    gen_inst_zero
 ) do (
     echo [TEST] %%f
     if exist "tests\%%f.dlt" (
