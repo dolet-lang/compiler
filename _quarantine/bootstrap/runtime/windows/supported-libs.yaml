@@ -1,0 +1,85 @@
+# Supported External Libraries on Windows
+# This file lists which external libraries are available on Windows platform
+# and suggests alternatives for unavailable libraries.
+
+platform: windows
+architecture: x64
+
+# List of available external libraries
+available_libraries:
+  # Graphics Libraries
+  - name: "raylib"
+    available: true
+    path: "external-modules/raylib"
+    description: "Simple and easy-to-use game programming library"
+    link_libraries: ["raylib.lib"]
+    
+  - name: "glfw"
+    available: true
+    path: "external-modules/glfw"
+    description: "Multi-platform library for OpenGL, window and input"
+    link_libraries: ["glfw3.lib"]
+    
+  - name: "vulkan"
+    available: true
+    path: "external-modules/vulkan"
+    description: "Low-overhead, cross-platform 3D graphics API"
+    link_libraries: ["vulkan-1.lib"]
+    
+  - name: "imgui"
+    available: true
+    path: "external-modules/imgui"
+    description: "Immediate mode GUI library"
+    link_libraries: ["imgui.lib"]
+  
+  # Windows-specific Libraries
+  - name: "directx"
+    available: true
+    path: "external-modules/directx"
+    description: "Microsoft DirectX graphics API (Windows only)"
+    link_libraries: ["d3d11.lib", "dxgi.lib"]
+    platform_specific: true
+    
+  - name: "win32"
+    available: true
+    path: "external-modules/win32"
+    description: "Windows Win32 API"
+    link_libraries: ["kernel32.lib", "user32.lib", "gdi32.lib"]
+    platform_specific: true
+  
+  # Not available on Windows
+  - name: "metal"
+    available: false
+    description: "Apple's graphics API (macOS/iOS only)"
+    alternative: "directx"
+    alternative_reason: "Metal is not available on Windows. Use DirectX 11/12 instead."
+    
+  - name: "cocoa"
+    available: false
+    description: "Apple's application framework (macOS only)"
+    alternative: "win32"
+    alternative_reason: "Cocoa is not available on Windows. Use Win32 API instead."
+
+# C Standard Library
+c_standard_library:
+  name: "msvcrt"
+  available: true
+  path: "built-in-stdLibs/c"
+  description: "Microsoft Visual C Runtime"
+  link_libraries: ["msvcrt.lib"]
+
+# System libraries
+system_libraries:
+  - "kernel32.lib"    # Windows kernel functions
+  - "user32.lib"      # Windows user interface
+  - "gdi32.lib"       # Graphics Device Interface
+  - "shell32.lib"     # Shell functions
+  - "ole32.lib"       # OLE functions
+  - "advapi32.lib"    # Advanced Windows API
+  - "ws2_32.lib"      # Windows Sockets
+
+# Notes:
+# - All paths are relative to tools/dolet/lib/
+# - link_libraries are the actual .lib files to pass to linker
+# - platform_specific means library only works on this platform
+# - alternative suggests what to use when library is unavailable

@@ -300,7 +300,7 @@ fun infer_expr_type(node: i64) -> str:
         return "unknown"
 
     if ntype == NODE_STATIC_METHOD:
-        sname: str = Memory.read_i64(node + 8) as str
+        sname: str = normalize_type(Memory.read_i64(node + 8) as str)
         mname: str = Memory.read_i64(node + 16) as str
         full: str = Str.concat(Str.concat(sname, "_"), mname)
         rt2: str = get_fun_ret_type(full)
@@ -317,7 +317,7 @@ fun infer_expr_type(node: i64) -> str:
     # at MLIR translation. (gen_ns_static_method itself handles the
     # call correctly; only the type lookup needed teaching.)
     if ntype == NODE_NS_STATIC_METHOD:
-        nss_sname: str = Memory.read_i64(node + 16) as str
+        nss_sname: str = normalize_type(Memory.read_i64(node + 16) as str)
         nss_mname: str = Memory.read_i64(node + 24) as str
         nss_full: str = Str.concat(Str.concat(nss_sname, "_"), nss_mname)
         nss_rt: str = get_fun_ret_type(nss_full)
@@ -371,6 +371,7 @@ fun infer_expr_type(node: i64) -> str:
                     im_base = str_from_range(im_obj_type, 0, imb_i)
                     imb_i = imb_len
                 imb_i = imb_i + 1
+            im_base = normalize_type(im_base)
             im_mangled: str = Str.concat(Str.concat(im_base, "_"), im_mname)
             im_rt: str = get_fun_ret_type(im_mangled)
             if str_eq(im_rt, "unknown") == 0 and str_eq(im_rt, "") == 0:
@@ -383,6 +384,7 @@ fun infer_expr_type(node: i64) -> str:
         nfc_ns: str = Memory.read_i64(node + 8) as str
         nfc_fname: str = Memory.read_i64(node + 16) as str
         nfc_vt: str = get_var_type(nfc_ns)
+        nfc_vt = normalize_type(nfc_vt)
         if str_eq(nfc_vt, "unknown") == 0 and is_struct_type(nfc_vt) == 1:
             nfc_mangled: str = Str.concat(Str.concat(nfc_vt, "_"), nfc_fname)
             nfc_rt: str = get_fun_ret_type(nfc_mangled)

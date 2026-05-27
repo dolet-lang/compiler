@@ -1,0 +1,77 @@
+import std
+
+struct NativeSlot:
+    handle: i64
+    size: i32
+
+struct RuntimeState:
+    slot: NativeSlot
+    initialized: i32
+    capacity: i32
+    count: i32
+
+@heap struct HeapState:
+    slot: NativeSlot
+    count: i32
+
+attach RuntimeState:
+    static fun create(handle: i64, cap: i32) -> RuntimeState:
+        slot: NativeSlot = NativeSlot(handle=handle, size=cap * 8)
+        return RuntimeState(slot=slot, initialized=1, capacity=cap, count=0)
+
+    fun push(self):
+        self.count = self.count + 1
+
+    fun replace_slot(self, slot: NativeSlot):
+        self.slot = slot
+
+attach HeapState:
+    static fun create(slot: NativeSlot) -> HeapState:
+        return HeapState(slot=slot, count=9)
+
+    fun replace_slot(self, slot: NativeSlot):
+        self.slot = slot
+
+static g_state: RuntimeState = RuntimeState()
+
+fun expect_i32(actual: i32, expected: i32):
+    if actual != expected:
+        panic("i32 mismatch")
+
+fun expect_i64(actual: i64, expected: i64):
+    if actual != expected:
+        panic("i64 mismatch")
+
+fun install_state():
+    g_state = RuntimeState.create(9001 as i64, 128)
+    g_state.push()
+    g_state.push()
+
+fun mirror_state(src: RuntimeState) -> RuntimeState:
+    copy: RuntimeState = src
+    copy.count = copy.count + 3
+    return copy
+
+fun do_test():
+    install_state()
+    replacement: NativeSlot = NativeSlot(handle=7007 as i64, size=64)
+    g_state.replace_slot(replacement)
+    local: RuntimeState = mirror_state(g_state)
+    local_slot: NativeSlot = NativeSlot(handle=8080 as i64, size=32)
+    local.slot = local_slot
+    heap_state: HeapState = HeapState.create(replacement)
+    heap_state.replace_slot(local_slot)
+    expect_i32(g_state.initialized, 1)
+    expect_i32(g_state.capacity, 128)
+    expect_i32(g_state.count, 2)
+    expect_i64(g_state.slot.handle, 7007 as i64)
+    expect_i32(g_state.slot.size, 64)
+    expect_i32(local.count, 5)
+    expect_i64(local.slot.handle, 8080 as i64)
+    expect_i32(local.slot.size, 32)
+    expect_i32(heap_state.count, 9)
+    expect_i64(heap_state.slot.handle, 8080 as i64)
+    expect_i32(heap_state.slot.size, 32)
+    print("struct_nested_global ok")
+
+do_test()

@@ -567,21 +567,23 @@ fun register_struct(name: str, fields: i64):
     g_struct_count = g_struct_count + 1
 
 fun is_struct_type(name: str) -> i32:
+    lookup: str = normalize_type(name)
     i: i32 = 0
     while i < g_struct_count:
         off: i64 = (i as i64) * 8
         sn: str = Memory.read_i64(g_struct_names + off) as str
-        if str_eq(sn, name) == 1:
+        if str_eq(sn, lookup) == 1:
             return 1
         i = i + 1
     return 0
 
 fun get_struct_fields(name: str) -> i64:
+    lookup: str = normalize_type(name)
     i: i32 = 0
     while i < g_struct_count:
         off: i64 = (i as i64) * 8
         sn: str = Memory.read_i64(g_struct_names + off) as str
-        if str_eq(sn, name) == 1:
+        if str_eq(sn, lookup) == 1:
             return Memory.read_i64(g_struct_field_lists + off)
         i = i + 1
     return 0
@@ -1581,15 +1583,45 @@ fun init_overload_registry():
     g_ovl_count = 0
 
 fun normalize_type(t: str) -> str:
-    if str_eq(t, "string") == 1:
-        return "str"
-    if str_eq(t, "int") == 1:
-        return "i32"
-    if str_eq(t, "float") == 1:
-        return "f32"
-    if str_eq(t, "double") == 1:
-        return "f64"
-    return t
+    result: str = t
+    steps: i32 = 0
+    changed: i32 = 1
+    while changed == 1 and steps < 32:
+        changed = 0
+        if str_eq(result, "string") == 1:
+            result = "str"
+            changed = 1
+        elif str_eq(result, "int") == 1:
+            result = "i32"
+            changed = 1
+        elif str_eq(result, "float") == 1:
+            result = "f32"
+            changed = 1
+        elif str_eq(result, "double") == 1:
+            result = "f64"
+            changed = 1
+
+        if str_eq(result, "i8") == 1 or str_eq(result, "i16") == 1 or str_eq(result, "i32") == 1 or str_eq(result, "i64") == 1 or str_eq(result, "i128") == 1:
+            return result
+        if str_eq(result, "u8") == 1 or str_eq(result, "u16") == 1 or str_eq(result, "u32") == 1 or str_eq(result, "u64") == 1 or str_eq(result, "u128") == 1:
+            return result
+        if str_eq(result, "f32") == 1 or str_eq(result, "f64") == 1:
+            return result
+        if str_eq(result, "str") == 1 or str_eq(result, "bool") == 1 or str_eq(result, "char") == 1 or str_eq(result, "ptr") == 1:
+            return result
+        if str_eq(result, "list") == 1 or str_eq(result, "array") == 1 or str_eq(result, "map") == 1:
+            return result
+        if str_eq(result, "option") == 1 or str_eq(result, "result") == 1:
+            return result
+        if str_eq(result, "void") == 1 or str_eq(result, "null") == 1 or str_eq(result, "unknown") == 1:
+            return result
+
+        alias_target: str = resolve_alias(result)
+        if str_eq(alias_target, "") == 0:
+            result = alias_target
+            changed = 1
+        steps = steps + 1
+    return result
 
 fun build_param_types_str(params: i64) -> str:
     if params == 0:

@@ -1,0 +1,18 @@
+# ============================
+#  Math Module Entry Point
+# ============================
+module extra.math
+load extra/math/math
+
+# Exported symbols
+export add
+export subtract
+export multiply
+export divide
+export abs
+export min
+export max
+export clamp
+export sign
+export factorial
+export dsqrt

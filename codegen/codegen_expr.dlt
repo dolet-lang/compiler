@@ -958,10 +958,12 @@ fun gen_struct_instantiation(node: i64) -> str:
         # @heap annotation — allocate on the heap
         sz: str = emit_const_i64(ssize as i64)
         mem_p = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
+        zero_init_heap_struct_fields(mem_p, sname)
     else:
         # default (@stack or unmarked) — allocate on the stack
         struct_mtype: str = get_struct_mlir_type(sname)
         mem_p = emit_alloca(struct_mtype)
+        zero_init_struct_fields(mem_p, sname)
 
     # Count passed field_vals
     fvc: i32 = 0
@@ -998,7 +1000,11 @@ fun gen_struct_instantiation(node: i64) -> str:
             struct_mlir: str = get_struct_mlir_type(sname)
             fp: str = new_tmp()
             emit_ind(Str.concat(Str.concat(Str.concat(fp, " = llvm.getelementptr "), mem_p), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir))))
-            emit_store(fval, fp, mt)
+            if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+                nested_dest: str = emit_load(fp, mt)
+                copy_struct_into(nested_dest, fval, ftype)
+            else:
+                emit_store(fval, fp, mt)
         i = i + 1
 
     # Initialize un-passed fields with default values or zero
@@ -1038,17 +1044,22 @@ fun gen_struct_instantiation(node: i64) -> str:
                     def_actual: str = infer_expr_type(def_val_node)
                     if str_eq(def_actual, dftype) == 0 and str_eq(def_actual, "unknown") == 0:
                         dfval = implicit_cast(dfval, def_actual, dftype)
-                    emit_store(dfval, dfp, dft_mlir)
-                else:
-                    # No default — store zero
-                    dz: str = new_tmp()
-                    if is_float_type(dftype) == 1:
-                        emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0.0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
-                    elif str_eq(dftype, "str") == 1 or str_eq(dftype, "string") == 1 or str_eq(dft_mlir, "!llvm.ptr") == 1:
-                        emit_ind(Str.concat(dz, " = llvm.mlir.zero : !llvm.ptr"))
+                    if is_struct_type(dftype) == 1 and is_heap_struct(dftype) == 0:
+                        def_nested_dest: str = emit_load(dfp, dft_mlir)
+                        copy_struct_into(def_nested_dest, dfval, dftype)
                     else:
-                        emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
-                    emit_store(dz, dfp, dft_mlir)
+                        emit_store(dfval, dfp, dft_mlir)
+                else:
+                    # Nested stack-struct fields were already recursively zero-initialized.
+                    if is_struct_type(dftype) == 0 or is_heap_struct(dftype) == 1:
+                        dz: str = new_tmp()
+                        if is_float_type(dftype) == 1:
+                            emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0.0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
+                        elif str_eq(dftype, "str") == 1 or str_eq(dftype, "string") == 1 or str_eq(dft_mlir, "!llvm.ptr") == 1:
+                            emit_ind(Str.concat(dz, " = llvm.mlir.zero : !llvm.ptr"))
+                        else:
+                            emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
+                        emit_store(dz, dfp, dft_mlir)
             di = di + 1
 
     return mem_p

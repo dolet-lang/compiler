@@ -6134,21 +6134,23 @@ fun register_struct(name: str, fields: i64):
     g_struct_count = g_struct_count + 1
 
 fun is_struct_type(name: str) -> i32:
+    lookup: str = normalize_type(name)
     i: i32 = 0
     while i < g_struct_count:
         off: i64 = (i as i64) * 8
         sn: str = Memory.read_i64(g_struct_names + off) as str
-        if str_eq(sn, name) == 1:
+        if str_eq(sn, lookup) == 1:
             return 1
         i = i + 1
     return 0
 
 fun get_struct_fields(name: str) -> i64:
+    lookup: str = normalize_type(name)
     i: i32 = 0
     while i < g_struct_count:
         off: i64 = (i as i64) * 8
         sn: str = Memory.read_i64(g_struct_names + off) as str
-        if str_eq(sn, name) == 1:
+        if str_eq(sn, lookup) == 1:
             return Memory.read_i64(g_struct_field_lists + off)
         i = i + 1
     return 0
@@ -7148,15 +7150,45 @@ fun init_overload_registry():
     g_ovl_count = 0
 
 fun normalize_type(t: str) -> str:
-    if str_eq(t, "string") == 1:
-        return "str"
-    if str_eq(t, "int") == 1:
-        return "i32"
-    if str_eq(t, "float") == 1:
-        return "f32"
-    if str_eq(t, "double") == 1:
-        return "f64"
-    return t
+    result: str = t
+    steps: i32 = 0
+    changed: i32 = 1
+    while changed == 1 and steps < 32:
+        changed = 0
+        if str_eq(result, "string") == 1:
+            result = "str"
+            changed = 1
+        elif str_eq(result, "int") == 1:
+            result = "i32"
+            changed = 1
+        elif str_eq(result, "float") == 1:
+            result = "f32"
+            changed = 1
+        elif str_eq(result, "double") == 1:
+            result = "f64"
+            changed = 1
+
+        if str_eq(result, "i8") == 1 or str_eq(result, "i16") == 1 or str_eq(result, "i32") == 1 or str_eq(result, "i64") == 1 or str_eq(result, "i128") == 1:
+            return result
+        if str_eq(result, "u8") == 1 or str_eq(result, "u16") == 1 or str_eq(result, "u32") == 1 or str_eq(result, "u64") == 1 or str_eq(result, "u128") == 1:
+            return result
+        if str_eq(result, "f32") == 1 or str_eq(result, "f64") == 1:
+            return result
+        if str_eq(result, "str") == 1 or str_eq(result, "bool") == 1 or str_eq(result, "char") == 1 or str_eq(result, "ptr") == 1:
+            return result
+        if str_eq(result, "list") == 1 or str_eq(result, "array") == 1 or str_eq(result, "map") == 1:
+            return result
+        if str_eq(result, "option") == 1 or str_eq(result, "result") == 1:
+            return result
+        if str_eq(result, "void") == 1 or str_eq(result, "null") == 1 or str_eq(result, "unknown") == 1:
+            return result
+
+        alias_target: str = resolve_alias(result)
+        if str_eq(alias_target, "") == 0:
+            result = alias_target
+            changed = 1
+        steps = steps + 1
+    return result
 
 fun build_param_types_str(params: i64) -> str:
     if params == 0:
@@ -7709,7 +7741,7 @@ fun infer_expr_type(node: i64) -> str:
         return "unknown"
 
     if ntype == NODE_STATIC_METHOD:
-        sname: str = Memory.read_i64(node + 8) as str
+        sname: str = normalize_type(Memory.read_i64(node + 8) as str)
         mname: str = Memory.read_i64(node + 16) as str
         full: str = Str.concat(Str.concat(sname, "_"), mname)
         rt2: str = get_fun_ret_type(full)
@@ -7726,7 +7758,7 @@ fun infer_expr_type(node: i64) -> str:
     # at MLIR translation. (gen_ns_static_method itself handles the
     # call correctly; only the type lookup needed teaching.)
     if ntype == NODE_NS_STATIC_METHOD:
-        nss_sname: str = Memory.read_i64(node + 16) as str
+        nss_sname: str = normalize_type(Memory.read_i64(node + 16) as str)
         nss_mname: str = Memory.read_i64(node + 24) as str
         nss_full: str = Str.concat(Str.concat(nss_sname, "_"), nss_mname)
         nss_rt: str = get_fun_ret_type(nss_full)
@@ -7780,6 +7812,7 @@ fun infer_expr_type(node: i64) -> str:
                     im_base = str_from_range(im_obj_type, 0, imb_i)
                     imb_i = imb_len
                 imb_i = imb_i + 1
+            im_base = normalize_type(im_base)
             im_mangled: str = Str.concat(Str.concat(im_base, "_"), im_mname)
             im_rt: str = get_fun_ret_type(im_mangled)
             if str_eq(im_rt, "unknown") == 0 and str_eq(im_rt, "") == 0:
@@ -7792,6 +7825,7 @@ fun infer_expr_type(node: i64) -> str:
         nfc_ns: str = Memory.read_i64(node + 8) as str
         nfc_fname: str = Memory.read_i64(node + 16) as str
         nfc_vt: str = get_var_type(nfc_ns)
+        nfc_vt = normalize_type(nfc_vt)
         if str_eq(nfc_vt, "unknown") == 0 and is_struct_type(nfc_vt) == 1:
             nfc_mangled: str = Str.concat(Str.concat(nfc_vt, "_"), nfc_fname)
             nfc_rt: str = get_fun_ret_type(nfc_mangled)
@@ -8987,10 +9021,12 @@ fun gen_struct_instantiation(node: i64) -> str:
         # @heap annotation — allocate on the heap
         sz: str = emit_const_i64(ssize as i64)
         mem_p = emit_call("Memory_malloc", sz, "i64", "!llvm.ptr")
+        zero_init_heap_struct_fields(mem_p, sname)
     else:
         # default (@stack or unmarked) — allocate on the stack
         struct_mtype: str = get_struct_mlir_type(sname)
         mem_p = emit_alloca(struct_mtype)
+        zero_init_struct_fields(mem_p, sname)
 
     # Count passed field_vals
     fvc: i32 = 0
@@ -9027,7 +9063,11 @@ fun gen_struct_instantiation(node: i64) -> str:
             struct_mlir: str = get_struct_mlir_type(sname)
             fp: str = new_tmp()
             emit_ind(Str.concat(Str.concat(Str.concat(fp, " = llvm.getelementptr "), mem_p), Str.concat(Str.concat("[0, ", Str.concat(Convert.i64_to_str(fidx as i64), "]")), Str.concat(" : (!llvm.ptr) -> !llvm.ptr, ", struct_mlir))))
-            emit_store(fval, fp, mt)
+            if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+                nested_dest: str = emit_load(fp, mt)
+                copy_struct_into(nested_dest, fval, ftype)
+            else:
+                emit_store(fval, fp, mt)
         i = i + 1
 
     # Initialize un-passed fields with default values or zero
@@ -9067,17 +9107,22 @@ fun gen_struct_instantiation(node: i64) -> str:
                     def_actual: str = infer_expr_type(def_val_node)
                     if str_eq(def_actual, dftype) == 0 and str_eq(def_actual, "unknown") == 0:
                         dfval = implicit_cast(dfval, def_actual, dftype)
-                    emit_store(dfval, dfp, dft_mlir)
-                else:
-                    # No default — store zero
-                    dz: str = new_tmp()
-                    if is_float_type(dftype) == 1:
-                        emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0.0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
-                    elif str_eq(dftype, "str") == 1 or str_eq(dftype, "string") == 1 or str_eq(dft_mlir, "!llvm.ptr") == 1:
-                        emit_ind(Str.concat(dz, " = llvm.mlir.zero : !llvm.ptr"))
+                    if is_struct_type(dftype) == 1 and is_heap_struct(dftype) == 0:
+                        def_nested_dest: str = emit_load(dfp, dft_mlir)
+                        copy_struct_into(def_nested_dest, dfval, dftype)
                     else:
-                        emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
-                    emit_store(dz, dfp, dft_mlir)
+                        emit_store(dfval, dfp, dft_mlir)
+                else:
+                    # Nested stack-struct fields were already recursively zero-initialized.
+                    if is_struct_type(dftype) == 0 or is_heap_struct(dftype) == 1:
+                        dz: str = new_tmp()
+                        if is_float_type(dftype) == 1:
+                            emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0.0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
+                        elif str_eq(dftype, "str") == 1 or str_eq(dftype, "string") == 1 or str_eq(dft_mlir, "!llvm.ptr") == 1:
+                            emit_ind(Str.concat(dz, " = llvm.mlir.zero : !llvm.ptr"))
+                        else:
+                            emit_ind(Str.concat(Str.concat(Str.concat(dz, " = llvm.mlir.constant(0 : "), Str.concat(dft_mlir, ") : ")), dft_mlir))
+                        emit_store(dz, dfp, dft_mlir)
             di = di + 1
 
     return mem_p
@@ -9259,6 +9304,16 @@ fun gen_assignment(node: i64):
                 vi = -1
             vi = vi - 1
 
+    if is_struct_type(vt2) == 1 and is_heap_struct(vt2) == 0:
+        if is_global_var(name) == 1 and is_local_shadow == 0:
+            ga_struct: str = emit_addr_of(mn)
+            dest_global: str = emit_load(ga_struct, mt2)
+            copy_struct_into(dest_global, value_result, vt2)
+        else:
+            dest_local: str = emit_load(Str.concat("%", mn), mt2)
+            copy_struct_into(dest_local, value_result, vt2)
+        return
+
     if is_global_var(name) == 1 and is_local_shadow == 0:
         ga: str = emit_addr_of(mn)
         emit_store(value_result, ga, mt2)
@@ -9286,7 +9341,11 @@ fun gen_field_assignment(node: i64):
         actual_type: str = infer_expr_type(val_node)
         if str_eq(actual_type, ftype) == 0:
             val = implicit_cast(val, actual_type, ftype)
-        emit_store(val, fp, mt)
+        if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+            nested_dest: str = emit_load(fp, mt)
+            copy_struct_into(nested_dest, val, ftype)
+        else:
+            emit_store(val, fp, mt)
         return
 
     # Get struct type of object
@@ -9344,7 +9403,11 @@ fun gen_field_assignment(node: i64):
     actual_type3: str = infer_expr_type(val_node)
     if str_eq(actual_type3, ftype2) == 0:
         val3 = implicit_cast(val3, actual_type3, ftype2)
-    emit_store(val3, fp2, mt2)
+    if is_struct_type(ftype2) == 1 and is_heap_struct(ftype2) == 0:
+        nested_dest2: str = emit_load(fp2, mt2)
+        copy_struct_into(nested_dest2, val3, ftype2)
+    else:
+        emit_store(val3, fp2, mt2)
 
 # ==========================================
 # Static Field Assignment (Struct.field = value)
@@ -10001,13 +10064,58 @@ fun gen_match_expr(node: i64, expected: str) -> str:
 # Variable Declaration
 # (moved here from codegen_decl.dlt to avoid forward-ref bug)
 # ==========================================
-# Deep-copy a struct from src ptr to a new local alloca, returns dest ptr
-fun copy_struct_local(src_ptr: str, sname: str) -> str:
+# Zero-initialize struct storage, recursively allocating storage for nested
+# stack-struct fields so later assignments can copy into stable destinations.
+fun zero_init_struct_fields_mode(dest: str, sname: str, nested_heap: i32):
     smtype: str = get_struct_mlir_type(sname)
-    dest: str = emit_alloca(smtype)
     fields: i64 = get_struct_fields(sname)
     if fields == 0:
-        return dest
+        return
+    fc: i32 = nl_count(fields)
+    fi: i32 = 0
+    while fi < fc:
+        fnode: i64 = nl_get(fields, fi)
+        ftype: str = Memory.read_i64(fnode + 16) as str
+        fmt: str = mlir_type(ftype)
+        idx_str: str = Convert.i64_to_str(fi as i64)
+        dgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(dgep, " = llvm.getelementptr "), dest), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+        if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+            nested_dest: str = ""
+            if nested_heap == 1:
+                nested_size: i32 = calculate_struct_size(ftype)
+                nested_sz: str = emit_const_i64(nested_size as i64)
+                nested_dest = emit_call("Memory_malloc", nested_sz, "i64", "!llvm.ptr")
+            else:
+                nested_mt: str = get_struct_mlir_type(ftype)
+                nested_dest = emit_alloca(nested_mt)
+            emit_store(nested_dest, dgep, fmt)
+            zero_init_struct_fields_mode(nested_dest, ftype, nested_heap)
+        elif is_float_type(ftype) == 1:
+            zf: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(zf, " = llvm.mlir.constant(0.0 : "), fmt), Str.concat(") : ", fmt)))
+            emit_store(zf, dgep, fmt)
+        elif str_eq(ftype, "str") == 1 or str_eq(ftype, "string") == 1 or str_eq(fmt, "!llvm.ptr") == 1:
+            zp: str = emit_zero_ptr()
+            emit_store(zp, dgep, fmt)
+        else:
+            zi: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(zi, " = llvm.mlir.constant(0 : "), fmt), Str.concat(") : ", fmt)))
+            emit_store(zi, dgep, fmt)
+        fi = fi + 1
+
+fun zero_init_struct_fields(dest: str, sname: str):
+    zero_init_struct_fields_mode(dest, sname, 0)
+
+fun zero_init_heap_struct_fields(dest: str, sname: str):
+    zero_init_struct_fields_mode(dest, sname, 1)
+
+# Deep-copy struct fields from src ptr into an existing dest ptr.
+fun copy_struct_into(dest: str, src_ptr: str, sname: str):
+    smtype: str = get_struct_mlir_type(sname)
+    fields: i64 = get_struct_fields(sname)
+    if fields == 0:
+        return
     fc: i32 = nl_count(fields)
     fi: i32 = 0
     while fi < fc:
@@ -10018,12 +10126,23 @@ fun copy_struct_local(src_ptr: str, sname: str) -> str:
         # Load from source
         sgep: str = new_tmp()
         emit_ind(Str.concat(Str.concat(Str.concat(sgep, " = llvm.getelementptr "), src_ptr), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
-        sval: str = emit_load(sgep, fmt)
-        # Store to dest
         dgep: str = new_tmp()
         emit_ind(Str.concat(Str.concat(Str.concat(dgep, " = llvm.getelementptr "), dest), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
-        emit_store(sval, dgep, fmt)
+        if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+            src_nested: str = emit_load(sgep, fmt)
+            dest_nested: str = emit_load(dgep, fmt)
+            copy_struct_into(dest_nested, src_nested, ftype)
+        else:
+            sval: str = emit_load(sgep, fmt)
+            emit_store(sval, dgep, fmt)
         fi = fi + 1
+
+# Deep-copy a struct from src ptr to a new local alloca, returns dest ptr
+fun copy_struct_local(src_ptr: str, sname: str) -> str:
+    smtype: str = get_struct_mlir_type(sname)
+    dest: str = emit_alloca(smtype)
+    zero_init_struct_fields(dest, sname)
+    copy_struct_into(dest, src_ptr, sname)
     return dest
 
 fun gen_var_decl(node: i64):
@@ -10913,6 +11032,8 @@ fun gen_nested_field_access(node: i64, expected: str) -> str:
 
     # Get type of the base expression
     base_type: str = infer_expr_type(base_node)
+    if is_struct_type(base_type) == 1 or is_string_type(base_type) == 1:
+        base_ptr = emit_load(base_ptr, mlir_type(base_type))
 
     # GEP into the sub-struct for the nested field
     fidx2: i32 = get_field_index(base_type, field_name)
@@ -10946,6 +11067,8 @@ fun gen_nested_field_ptr(node: i64) -> str:
         inner_field: str = Memory.read_i64(node + 16) as str
         inner_ptr: str = gen_nested_field_ptr(inner_base)
         inner_type: str = infer_expr_type(inner_base)
+        if is_struct_type(inner_type) == 1 or is_string_type(inner_type) == 1:
+            inner_ptr = emit_load(inner_ptr, mlir_type(inner_type))
         fidx4: i32 = get_field_index(inner_type, inner_field)
         struct_mlir4: str = get_struct_mlir_type(inner_type)
         fp4: str = new_tmp()
@@ -11451,7 +11574,7 @@ fun gen_fun_call_typed(node: i64, expected: str) -> str:
 # Static Method Call (Struct.method(...))
 # ==========================================
 fun gen_static_method_call(node: i64) -> str:
-    sname: str = Memory.read_i64(node + 8) as str
+    sname: str = normalize_type(Memory.read_i64(node + 8) as str)
     mname: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
 
@@ -11627,6 +11750,7 @@ fun gen_instance_method_call(node: i64) -> str:
             base_type = str_from_range(obj_type, 0, bt_i)
             bt_i = bt_len
         bt_i = bt_i + 1
+    base_type = normalize_type(base_type)
 
     # Method visibility enforcement (private/protected) — hard failure.
     # `self.method()` from inside the struct's own method is always

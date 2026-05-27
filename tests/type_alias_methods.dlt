@@ -1,0 +1,28 @@
+import std
+
+struct RenderCore:
+    value: i32
+
+attach RenderCore:
+    static fun make(v: i32) -> RenderCore:
+        return RenderCore(value=v)
+
+    static fun default_value() -> i32:
+        return 77
+
+    fun get(self) -> i32:
+        return self.value
+
+    fun add(self, n: i32) -> i32:
+        return self.value + n
+
+type Renderer = RenderCore
+
+fun do_test():
+    renderer: Renderer = Renderer.make(40)
+    print(renderer.value)
+    print(renderer.get())
+    print(renderer.add(2))
+    print(Renderer.default_value())
+
+do_test()

@@ -1,0 +1,14 @@
+import std
+
+struct Box:
+    tag: i32
+
+attach Box:
+    fun emit<T>(self, item: T):
+        print(self.tag)
+
+fun do_test():
+    b: Box = Box(tag=5)
+    b.emit<i32>(7)        # generic instance method — must fail with clear msg
+
+do_test()

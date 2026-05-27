@@ -100,6 +100,8 @@ fun gen_nested_field_access(node: i64, expected: str) -> str:
 
     # Get type of the base expression
     base_type: str = infer_expr_type(base_node)
+    if is_struct_type(base_type) == 1 or is_string_type(base_type) == 1:
+        base_ptr = emit_load(base_ptr, mlir_type(base_type))
 
     # GEP into the sub-struct for the nested field
     fidx2: i32 = get_field_index(base_type, field_name)
@@ -133,6 +135,8 @@ fun gen_nested_field_ptr(node: i64) -> str:
         inner_field: str = Memory.read_i64(node + 16) as str
         inner_ptr: str = gen_nested_field_ptr(inner_base)
         inner_type: str = infer_expr_type(inner_base)
+        if is_struct_type(inner_type) == 1 or is_string_type(inner_type) == 1:
+            inner_ptr = emit_load(inner_ptr, mlir_type(inner_type))
         fidx4: i32 = get_field_index(inner_type, inner_field)
         struct_mlir4: str = get_struct_mlir_type(inner_type)
         fp4: str = new_tmp()
@@ -638,7 +642,7 @@ fun gen_fun_call_typed(node: i64, expected: str) -> str:
 # Static Method Call (Struct.method(...))
 # ==========================================
 fun gen_static_method_call(node: i64) -> str:
-    sname: str = Memory.read_i64(node + 8) as str
+    sname: str = normalize_type(Memory.read_i64(node + 8) as str)
     mname: str = Memory.read_i64(node + 16) as str
     args_list: i64 = Memory.read_i64(node + 24)
 
@@ -814,6 +818,7 @@ fun gen_instance_method_call(node: i64) -> str:
             base_type = str_from_range(obj_type, 0, bt_i)
             bt_i = bt_len
         bt_i = bt_i + 1
+    base_type = normalize_type(base_type)
 
     # Method visibility enforcement (private/protected) — hard failure.
     # `self.method()` from inside the struct's own method is always

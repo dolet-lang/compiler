@@ -56,6 +56,16 @@ fun gen_assignment(node: i64):
                 vi = -1
             vi = vi - 1
 
+    if is_struct_type(vt2) == 1 and is_heap_struct(vt2) == 0:
+        if is_global_var(name) == 1 and is_local_shadow == 0:
+            ga_struct: str = emit_addr_of(mn)
+            dest_global: str = emit_load(ga_struct, mt2)
+            copy_struct_into(dest_global, value_result, vt2)
+        else:
+            dest_local: str = emit_load(Str.concat("%", mn), mt2)
+            copy_struct_into(dest_local, value_result, vt2)
+        return
+
     if is_global_var(name) == 1 and is_local_shadow == 0:
         ga: str = emit_addr_of(mn)
         emit_store(value_result, ga, mt2)
@@ -83,7 +93,11 @@ fun gen_field_assignment(node: i64):
         actual_type: str = infer_expr_type(val_node)
         if str_eq(actual_type, ftype) == 0:
             val = implicit_cast(val, actual_type, ftype)
-        emit_store(val, fp, mt)
+        if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+            nested_dest: str = emit_load(fp, mt)
+            copy_struct_into(nested_dest, val, ftype)
+        else:
+            emit_store(val, fp, mt)
         return
 
     # Get struct type of object
@@ -141,7 +155,11 @@ fun gen_field_assignment(node: i64):
     actual_type3: str = infer_expr_type(val_node)
     if str_eq(actual_type3, ftype2) == 0:
         val3 = implicit_cast(val3, actual_type3, ftype2)
-    emit_store(val3, fp2, mt2)
+    if is_struct_type(ftype2) == 1 and is_heap_struct(ftype2) == 0:
+        nested_dest2: str = emit_load(fp2, mt2)
+        copy_struct_into(nested_dest2, val3, ftype2)
+    else:
+        emit_store(val3, fp2, mt2)
 
 # ==========================================
 # Static Field Assignment (Struct.field = value)
@@ -798,13 +816,58 @@ fun gen_match_expr(node: i64, expected: str) -> str:
 # Variable Declaration
 # (moved here from codegen_decl.dlt to avoid forward-ref bug)
 # ==========================================
-# Deep-copy a struct from src ptr to a new local alloca, returns dest ptr
-fun copy_struct_local(src_ptr: str, sname: str) -> str:
+# Zero-initialize struct storage, recursively allocating storage for nested
+# stack-struct fields so later assignments can copy into stable destinations.
+fun zero_init_struct_fields_mode(dest: str, sname: str, nested_heap: i32):
     smtype: str = get_struct_mlir_type(sname)
-    dest: str = emit_alloca(smtype)
     fields: i64 = get_struct_fields(sname)
     if fields == 0:
-        return dest
+        return
+    fc: i32 = nl_count(fields)
+    fi: i32 = 0
+    while fi < fc:
+        fnode: i64 = nl_get(fields, fi)
+        ftype: str = Memory.read_i64(fnode + 16) as str
+        fmt: str = mlir_type(ftype)
+        idx_str: str = Convert.i64_to_str(fi as i64)
+        dgep: str = new_tmp()
+        emit_ind(Str.concat(Str.concat(Str.concat(dgep, " = llvm.getelementptr "), dest), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
+        if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+            nested_dest: str = ""
+            if nested_heap == 1:
+                nested_size: i32 = calculate_struct_size(ftype)
+                nested_sz: str = emit_const_i64(nested_size as i64)
+                nested_dest = emit_call("Memory_malloc", nested_sz, "i64", "!llvm.ptr")
+            else:
+                nested_mt: str = get_struct_mlir_type(ftype)
+                nested_dest = emit_alloca(nested_mt)
+            emit_store(nested_dest, dgep, fmt)
+            zero_init_struct_fields_mode(nested_dest, ftype, nested_heap)
+        elif is_float_type(ftype) == 1:
+            zf: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(zf, " = llvm.mlir.constant(0.0 : "), fmt), Str.concat(") : ", fmt)))
+            emit_store(zf, dgep, fmt)
+        elif str_eq(ftype, "str") == 1 or str_eq(ftype, "string") == 1 or str_eq(fmt, "!llvm.ptr") == 1:
+            zp: str = emit_zero_ptr()
+            emit_store(zp, dgep, fmt)
+        else:
+            zi: str = new_tmp()
+            emit_ind(Str.concat(Str.concat(Str.concat(zi, " = llvm.mlir.constant(0 : "), fmt), Str.concat(") : ", fmt)))
+            emit_store(zi, dgep, fmt)
+        fi = fi + 1
+
+fun zero_init_struct_fields(dest: str, sname: str):
+    zero_init_struct_fields_mode(dest, sname, 0)
+
+fun zero_init_heap_struct_fields(dest: str, sname: str):
+    zero_init_struct_fields_mode(dest, sname, 1)
+
+# Deep-copy struct fields from src ptr into an existing dest ptr.
+fun copy_struct_into(dest: str, src_ptr: str, sname: str):
+    smtype: str = get_struct_mlir_type(sname)
+    fields: i64 = get_struct_fields(sname)
+    if fields == 0:
+        return
     fc: i32 = nl_count(fields)
     fi: i32 = 0
     while fi < fc:
@@ -815,12 +878,23 @@ fun copy_struct_local(src_ptr: str, sname: str) -> str:
         # Load from source
         sgep: str = new_tmp()
         emit_ind(Str.concat(Str.concat(Str.concat(sgep, " = llvm.getelementptr "), src_ptr), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
-        sval: str = emit_load(sgep, fmt)
-        # Store to dest
         dgep: str = new_tmp()
         emit_ind(Str.concat(Str.concat(Str.concat(dgep, " = llvm.getelementptr "), dest), Str.concat(Str.concat("[0, ", Str.concat(idx_str, "] : (!llvm.ptr) -> !llvm.ptr, ")), smtype)))
-        emit_store(sval, dgep, fmt)
+        if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+            src_nested: str = emit_load(sgep, fmt)
+            dest_nested: str = emit_load(dgep, fmt)
+            copy_struct_into(dest_nested, src_nested, ftype)
+        else:
+            sval: str = emit_load(sgep, fmt)
+            emit_store(sval, dgep, fmt)
         fi = fi + 1
+
+# Deep-copy a struct from src ptr to a new local alloca, returns dest ptr
+fun copy_struct_local(src_ptr: str, sname: str) -> str:
+    smtype: str = get_struct_mlir_type(sname)
+    dest: str = emit_alloca(smtype)
+    zero_init_struct_fields(dest, sname)
+    copy_struct_into(dest, src_ptr, sname)
     return dest
 
 fun gen_var_decl(node: i64):

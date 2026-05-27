@@ -1,0 +1,69 @@
+# Dolet System Calls for Windows
+# Uses standard C library (portable)
+
+extern lib "c":
+    # Memory management - DEPRECATED: Use NativeCall.malloc/free/realloc from runtime.dlt instead
+    # These are kept for backward compatibility but should not be used in new code
+    # fun malloc(size: i64) -> i64
+    # fun free(ptr: i64) -> void
+    # fun realloc(ptr: i64, size: i64) -> i64
+    
+    # String operations
+    fun strlen(str: i64) -> i64
+    fun strcpy(dest: i64, src: i64) -> i64
+    fun strcat(dest: i64, src: i64) -> i64
+    fun strcmp(s1: i64, s2: i64) -> i32
+    fun memset(ptr: i64, value: i32, size: i64) -> i64
+    fun memcpy(dest: i64, src: i64, size: i64) -> i64
+    
+    # Type conversions (from runtime.c)
+    fun dsl_i8_to_string(value: i32) -> i64
+    fun dsl_i16_to_string(value: i32) -> i64
+    fun dsl_i32_to_string(value: i32) -> i64
+    fun dsl_i64_to_string(value: i64) -> i64
+    fun dsl_u8_to_string(value: i32) -> i64
+    fun dsl_u16_to_string(value: i32) -> i64
+    fun dsl_u32_to_string(value: i32) -> i64
+    fun dsl_u64_to_string(value: i64) -> i64
+    fun dsl_f32_to_string(value: f32) -> i64
+    fun dsl_f64_to_string(value: f64) -> i64
+    fun dsl_int64_to_string(value: i64) -> i64
+    
+    # Memory write helpers for struct initialization
+    fun dsl_write_i32(addr: i64, value: i32) -> void
+    fun dsl_write_i64(addr: i64, value: i64) -> void
+    fun dsl_write_f32(addr: i64, value: f32) -> void
+    fun dsl_write_f64(addr: i64, value: f64) -> void
+    fun dsl_write_ptr(addr: i64, value: i64) -> void
+    fun dsl_write_i8(addr: i64, value: i32) -> void
+    fun dsl_write_i16(addr: i64, value: i32) -> void
+    
+    # Memory read helpers
+    fun dsl_read_i32(addr: i64) -> i32
+    fun dsl_read_i64(addr: i64) -> i64
+    fun dsl_read_ptr(addr: i64) -> i64
+    
+    # I/O operations
+    fun dcl_print(str: i64) -> void
+    fun dcl_println(str: i64) -> void
+    fun dcl_input(prompt: i64) -> i64
+    
+    # File operations
+    fun fopen(path: i64, mode: i64) -> i64
+    fun fclose(file: i64) -> i32
+    fun fread(buffer: i64, size: i64, count: i64, file: i64) -> i64
+    fun fwrite(buffer: i64, size: i64, count: i64, file: i64) -> i64
+    fun fseek(file: i64, offset: i64, origin: i32) -> i32
+    fun ftell(file: i64) -> i64
+    
+    # Utilities
+    fun dsl_exit(code: i32) -> void
+    fun dsl_console_clear() -> void
+
+
+# High-level wrappers
+fun exit(code: i32):
+    dsl_exit(code)
+
+fun clear_console():
+    dsl_console_clear()

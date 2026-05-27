@@ -158,6 +158,8 @@ for %%f in (
     atomic_cas
     mutex_basic
     random_basic
+    struct_nested_global
+    type_alias_methods
     nested_namespace
     trait_impl
     generic_stmt_call
