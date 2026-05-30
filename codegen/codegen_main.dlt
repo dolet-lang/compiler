@@ -516,6 +516,54 @@ fun collect_all_strings(ast: i64):
         i = i + 1
 
 # ==========================================
+# Compile-time literal value for a global initializer
+# ==========================================
+# Returns the MLIR constant value string for a global's initializer node
+# (e.g. "4", "-7", "3.5", "1"), or "" when the initializer is not a
+# compile-time literal (expression, call, etc.) and therefore still needs
+# the runtime-store init path. Mirrors gen_static_field_decls so globals
+# are correctly initialized even when the program defines its own main()
+# (the synthetic-main runtime stores only run when there is no user main).
+fun global_init_const_value(init_node: i64, vtype: str) -> str:
+    if init_node == 0:
+        return ""
+    nt: i32 = nd_type(init_node)
+
+    # Unwrap unary minus on a numeric literal: -7, -2.25
+    if nt == NODE_UNARY_OP:
+        op_str: str = Memory.read_i64(init_node + 8) as str
+        if str_eq(op_str, "-") == 1:
+            operand: i64 = Memory.read_i64(init_node + 16)
+            ont: i32 = nd_type(operand)
+            if ont == NODE_INT_LIT:
+                v: i64 = Memory.read_i64(operand + 8)
+                if is_float_type(vtype) == 1:
+                    return Str.concat(Convert.i64_to_str(0 - v), ".0")
+                return Convert.i64_to_str(0 - v)
+            if ont == NODE_FLOAT_LIT:
+                fs: str = Memory.read_i64(operand + 8) as str
+                return Str.concat("-", fs)
+        return ""
+
+    if nt == NODE_INT_LIT:
+        v2: i64 = Memory.read_i64(init_node + 8)
+        # int literal assigned to a float-typed global (e.g. X: f64 = 5)
+        if is_float_type(vtype) == 1:
+            return Str.concat(Convert.i64_to_str(v2), ".0")
+        return Convert.i64_to_str(v2)
+
+    if nt == NODE_FLOAT_LIT:
+        return Memory.read_i64(init_node + 8) as str
+
+    if nt == NODE_BOOL_LIT:
+        bv: i64 = Memory.read_i64(init_node + 8)
+        if bv != 0:
+            return "1"
+        return "0"
+
+    return ""
+
+# ==========================================
 # Generate Global Variable Declarations
 # ==========================================
 fun gen_global_var_decls():
@@ -545,17 +593,34 @@ fun gen_global_var_decls():
         g_is_const: i32 = Memory.read_i64(gnode + 48) as i32
         add_variable(gname, mname, vtype, 2, g_is_const)
 
+        # Compile-time literal initializer baked directly into the global so
+        # it is correct regardless of whether the program defines main().
+        ginit_node: i64 = Memory.read_i64(gnode + 24)
+        glit: str = global_init_const_value(ginit_node, vtype)
+
         # Emit global declaration
         emit_ind(Str.concat(Str.concat(Str.concat("llvm.mlir.global internal @", mname), " () {addr_space = 0 : i32} : "), Str.concat(mt, " {")))
         if is_string_type(vtype) == 1:
             emit_ind("  %0 = llvm.mlir.zero : !llvm.ptr")
             emit_ind("  llvm.return %0 : !llvm.ptr")
         elif is_int_type(vtype) == 1:
-            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(0 : ", mt), Str.concat(") : ", mt)))
+            iv: str = "0"
+            if str_eq(glit, "") == 0:
+                iv = glit
+            emit_ind(Str.concat(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", iv), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
             emit_ind(Str.concat(Str.concat("  llvm.return %0 : ", mt), ""))
         elif is_float_type(vtype) == 1:
-            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(0.0 : ", mt), Str.concat(") : ", mt)))
+            fv: str = "0.0"
+            if str_eq(glit, "") == 0:
+                fv = glit
+            emit_ind(Str.concat(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", fv), Str.concat(" : ", mt)), Str.concat(") : ", mt)))
             emit_ind(Str.concat(Str.concat("  llvm.return %0 : ", mt), ""))
+        elif str_eq(mt, "i1") == 1:
+            bvs: str = "0"
+            if str_eq(glit, "") == 0:
+                bvs = glit
+            emit_ind(Str.concat(Str.concat("  %0 = llvm.mlir.constant(", bvs), " : i1) : i1"))
+            emit_ind("  llvm.return %0 : i1")
         else:
             emit_ind(Str.concat("  %0 = llvm.mlir.zero : ", mt))
             emit_ind(Str.concat("  llvm.return %0 : ", mt))
