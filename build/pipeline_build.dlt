@@ -17137,11 +17137,12 @@ fun main() -> i32:
     argc: i32 = Args.count()
     if argc < 2:
         IOOps.io_println("Dolet Compiler v1.5.0-beta")
-        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--target <name>]")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [-O0|-O1|-O2|-O3] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--target <name>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
         IOOps.io_println("  -o <path>          Output executable path")
         IOOps.io_println("  --target <name>    Target platform (reads platform/<name>/platform.conf)")
+        IOOps.io_println("  -O0|-O1|-O2|-O3    Optimization level (default -O0)")
         IOOps.io_println("  --keep-mlir        Keep intermediate .mlir file")
         IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
         IOOps.io_println("  --no-runtime       Don't auto-import runtime libraries")
@@ -17158,6 +17159,8 @@ fun main() -> i32:
     input_path: str = ""
     output_exe: str = ""
     target_platform: str = ""
+    # Optimization level passed to clang (-O0..-O3). Default -O0 (fast builds).
+    opt_level: str = "0"
 
     # Init validator default ON (file-scope non-zero initializers
     # don't take effect at startup in Dolet; assignment here does).
@@ -17193,6 +17196,14 @@ fun main() -> i32:
             # default: release builds compile to identical code as before
             # this flag was introduced.
             g_debug_mode = 1
+        elif str_eq(arg, "-O0") == 1:
+            opt_level = "0"
+        elif str_eq(arg, "-O1") == 1:
+            opt_level = "1"
+        elif str_eq(arg, "-O2") == 1:
+            opt_level = "2"
+        elif str_eq(arg, "-O3") == 1:
+            opt_level = "3"
         elif str_eq(arg, "-o") == 1:
             ai = ai + 1
             if ai < argc:
@@ -17376,7 +17387,8 @@ fun main() -> i32:
     target_flag: str = ""
     if Memory.strlen(g_plat_target_triple) > 0:
         target_flag = Str.concat(" --target=", g_plat_target_triple)
-    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_compile, "\"")), Str.concat(target_flag, Str.concat(" -c \"", ll_path))), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
+    opt_flag: str = Str.concat(" -O", opt_level)
+    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_compile, "\"")), Str.concat(target_flag, Str.concat(opt_flag, Str.concat(" -c \"", ll_path)))), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
     rc2: i32 = Process.run(cmd2)
     if rc2 != 0:
         IOOps.io_println("Error: Compilation to object failed")
