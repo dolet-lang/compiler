@@ -7484,6 +7484,19 @@ fun is_int_type(t: str) -> i32:
         return 1
     return 0
 
+fun is_unsigned_int_type(t: str) -> i32:
+    if str_eq(t, "u8") == 1:
+        return 1
+    if str_eq(t, "u16") == 1:
+        return 1
+    if str_eq(t, "u32") == 1:
+        return 1
+    if str_eq(t, "u64") == 1:
+        return 1
+    if str_eq(t, "u128") == 1:
+        return 1
+    return 0
+
 fun is_float_type(t: str) -> i32:
     if str_eq(t, "f32") == 1:
         return 1
@@ -7593,9 +7606,12 @@ fun implicit_cast(value: str, from_type: str, to_type: str) -> str:
     tw: i32 = int_type_width(to_type)
     if fw > 0 and tw > 0:
         if tw > fw:
-            # Widen (sign extend)
+            # Widen. Unsigned sources must zero-extend.
             tmp3: str = new_tmp()
-            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp3, " = llvm.sext "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+            ext_op: str = "llvm.sext "
+            if is_unsigned_int_type(from_type) == 1:
+                ext_op = "llvm.zext "
+            emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp3, " = "), ext_op), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))))
             return tmp3
         elif tw < fw:
             # Narrow (truncate)
@@ -7616,13 +7632,19 @@ fun implicit_cast(value: str, from_type: str, to_type: str) -> str:
     # Int to float
     if fw > 0 and is_float_type(to_type) == 1:
         tmp7: str = new_tmp()
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp7, " = llvm.sitofp "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+        fp_op: str = "llvm.sitofp "
+        if is_unsigned_int_type(from_type) == 1:
+            fp_op = "llvm.uitofp "
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp7, " = "), fp_op), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))))
         return tmp7
 
     # Float to int
     if is_float_type(from_type) == 1 and tw > 0:
         tmp8: str = new_tmp()
-        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp8, " = llvm.fptosi "), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))), ""))
+        fi_op: str = "llvm.fptosi "
+        if is_unsigned_int_type(to_type) == 1:
+            fi_op = "llvm.fptoui "
+        emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp8, " = "), fi_op), value), Str.concat(Str.concat(" : ", from_m), Str.concat(" to ", to_m))))
         return tmp8
 
     # Pointer to i64

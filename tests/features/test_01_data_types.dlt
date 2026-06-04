@@ -29,6 +29,8 @@ print(u16v)
 print(u32v)
 print(u64v)
 print(u128v)
+print(u8v as i32)
+print(u16v as i32)
 
 # Floating point
 f32v: f32 = 3.14

@@ -1,0 +1,102 @@
+import std
+
+# Voxel-style smoke test for loops, lists, arrays, and memory-backed block data.
+
+fun block_index(x: i32, y: i32, z: i32, size: i32) -> i32:
+    return y * size * size + z * size + x
+
+fun block_offset(idx: i32) -> i64:
+    return (idx as i64) * 4
+
+fun set_block(blocks: i64, idx: i32, value: i32):
+    Memory.write_i32(blocks + block_offset(idx), value)
+
+fun get_block(blocks: i64, idx: i32) -> i32:
+    return Memory.read_i32(blocks + block_offset(idx))
+
+fun terrain_height(x: i32, z: i32, size: i32) -> i32:
+    return (x * 3 + z * 5) % size
+
+size: i32 = 8
+total_blocks: i32 = size * size * size
+blocks: i64 = Memory.malloc_zeroed((total_blocks as i64) * 4)
+
+solid_count: i32 = 0
+air_count: i32 = 0
+
+for y in 0 to size - 1:
+    for z in 0 to size - 1:
+        for x in 0 to size - 1:
+            idx: i32 = block_index(x, y, z, size)
+            h: i32 = terrain_height(x, z, size)
+            if y <= h:
+                set_block(blocks, idx, 1)
+                solid_count = solid_count + 1
+            else:
+                set_block(blocks, idx, 0)
+                air_count = air_count + 1
+
+visible_blocks: list<i32> = []
+column_tops: list<i32> = []
+
+for z2 in 0 to size - 1:
+    for x2 in 0 to size - 1:
+        top_y: i32 = terrain_height(x2, z2, size)
+        top_idx: i32 = block_index(x2, top_y, z2, size)
+        column_tops.append(top_idx)
+
+for y2 in 0 to size - 1:
+    for z3 in 0 to size - 1:
+        for x3 in 0 to size - 1:
+            check_idx: i32 = block_index(x3, y2, z3, size)
+            if get_block(blocks, check_idx) == 1:
+                exposed: i32 = 0
+
+                if y2 == size - 1:
+                    exposed = 1
+                else:
+                    above_idx: i32 = block_index(x3, y2 + 1, z3, size)
+                    if get_block(blocks, above_idx) == 0:
+                        exposed = 1
+
+                if x3 == 0:
+                    exposed = 1
+                if x3 == size - 1:
+                    exposed = 1
+                if z3 == 0:
+                    exposed = 1
+                if z3 == size - 1:
+                    exposed = 1
+
+                if exposed == 1:
+                    visible_blocks.append(check_idx)
+
+sample_steps: array<i32> = [1, 3, 5, 7]
+step_sum: i32 = 0
+for stride in sample_steps:
+    step_sum = step_sum + stride
+
+stride_probe: i32 = 0
+cursor: i32 = 0
+while cursor < total_blocks:
+    stride_probe = stride_probe + get_block(blocks, cursor)
+    cursor = cursor + 37
+
+print("VOXEL LOOP COLLECTION SMOKE")
+top_count: i64 = column_tops.size()
+visible_count: i64 = visible_blocks.size()
+first_top: i32 = column_tops.get_i32(0 as i64)
+first_visible: i32 = visible_blocks.get_i32(0 as i64)
+print("chunk_size=" + Convert.i32_to_str(size))
+print("total_blocks=" + Convert.i32_to_str(total_blocks))
+print("solid_count=" + Convert.i32_to_str(solid_count))
+print("air_count=" + Convert.i32_to_str(air_count))
+print("column_tops=" + Convert.i64_to_str(top_count))
+print("first_top=" + Convert.i32_to_str(first_top))
+print("visible_blocks=" + Convert.i64_to_str(visible_count))
+print("first_visible=" + Convert.i32_to_str(first_visible))
+print("array_step_sum=" + Convert.i32_to_str(step_sum))
+print("stride_probe=" + Convert.i32_to_str(stride_probe))
+
+Memory.free(blocks)
+print("DONE")
