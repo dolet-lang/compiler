@@ -496,12 +496,12 @@ Arena allocation never recurses into these.
 - Holds static helpers: `Str.to_upper(s)`, `Str.trim(s)`, `Str.parse_i64(s)`, `Str.equals(a, b)`, `Str.concat(a, b)`, etc.
 - Each method takes `s: str` as first arg (NOT `self`).
 
-### `group str:` — extension methods
+### `attach str:` — extension methods
 
 Same file `core/string.dlt`. Wraps every static `Str.X(s)` as `s.X()`:
 
 ```dolet
-group str:
+attach str:
     fun length(self) -> i64:
         return Memory.strlen(self)
     fun to_upper(self) -> str:
@@ -634,7 +634,7 @@ struct Box<T>:
     value: T
 
 # Method block on generic struct
-group Box:
+attach Box:
     fun get(self) -> T:
         return self.value
 
@@ -918,7 +918,7 @@ library/
 │   ├── memory.dlt                    # Memory struct (read/write helpers)
 │   ├── arena.dlt                     # _scope_arena_* helpers
 │   ├── str.dlt                       # _str_* compiler runtime
-│   ├── string.dlt                    # struct Str + group str (user-facing)
+│   ├── string.dlt                    # struct Str + attach str (user-facing)
 │   ├── atomic.dlt                    # AtomicI32, AtomicI64
 │   ├── option.dlt                    # option<T> built-in generic
 │   ├── result.dlt                    # result<T, E> built-in generic
@@ -1042,12 +1042,16 @@ Step 2 — Migrate stdlib to use the new feature:
   - Stage 2/3 byte-stable. ✓
 ```
 
-**Real example from this session — `extend` → `group` rename:**
+**Real example — the `extend`/`group` → `attach` migration:**
 
-1. Lexer added: `if str_eq(name, "group") == 1: return TK_EXTEND`.
-2. Built once. Now `bin/doletc.exe` recognizes both `extend` and `group`.
-3. Mass-renamed `^extend ` → `^group ` in 25 files.
+1. Lexer added: `if str_eq(name, "attach") == 1: return TK_IMPL`
+   alongside the existing `extend`/`group` recognition.
+2. Built once. Now `bin/doletc.exe` recognizes `attach` too.
+3. Mass-renamed `^extend ` / `^group ` → `^attach ` across the stdlib.
 4. Built again. Stage 1→2→3 byte-stable.
+5. Dropped `extend`/`group` recognition from the lexer entirely;
+   `attach` is now the only method-block keyword. Built a final time
+   to confirm nothing still depended on the old spellings.
 
 ### Bootstrap stages (`build.bat`)
 
@@ -1153,7 +1157,7 @@ Compiler emits explicit error message pointing at the fix.
 s: str = Str.concat(a, b)    # ❌ s is a heap pointer
                               #    Memory.free(s as i64) required eventually
 s: str = a + b               # ✓ arena-allocated, freed automatically on scope exit
-s: str = a.concat(b)         # ✓ same as above (group str method delegates to + via _str_plus)
+s: str = a.concat(b)         # ✓ same as above (attach str method delegates to + via _str_plus)
 ```
 
 ### Lambda capture analyzer doesn't see locals declared inside lambda body
@@ -1218,12 +1222,12 @@ From `lexer/tokenizer.dlt:380-501`:
 
 ```
 if elif else while for break continue
-fun return struct enum trait impl extends
+fun return struct enum trait attach extends
 self super import from extern use
 match case in to step as is
 const static mut imm
 public private protect abstract
-async await pass extend group
+async await pass
 module export requires type
 true false null
 and or not stack annot
@@ -1235,8 +1239,10 @@ str char ptr
 list array map
 ```
 
-Legacy alias: `imple` → `TK_IMPL`, `extend` → `TK_EXTEND` (preferred:
-`group`).
+`attach` is the single method-block keyword (lexes to `TK_IMPL`).
+`impl`, `imple`, `extend`, and `group` are NOT keywords — they are
+plain identifiers, free for use as variable/field/param names. Legacy
+code using them as method-block keywords must migrate to `attach`.
 
 ---
 

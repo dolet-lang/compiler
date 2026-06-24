@@ -925,6 +925,18 @@ fun gen_instance_method_call(node: i64) -> str:
     # Look up method node — overload-aware so the param types we
     # use to render the call match the function we'll resolve to.
     method_node2: i64 = find_impl_method_overload(base_type, mname, pre_arg_types)
+    # Inheritance: if the method isn't defined on the receiver's own
+    # type, walk up the parent chain so we still recover the declared
+    # param types. Without this, a parent method (e.g. Node3D.position
+    # called on a PointLight3D) is found with no param info, so every
+    # arg keeps its inferred type and a bare float literal stays f64 —
+    # producing an `f64 != f32` MLIR mismatch at the call boundary.
+    inh_lookup_type: str = base_type
+    while method_node2 == 0:
+        inh_lookup_type = get_parent_struct(inh_lookup_type)
+        if str_eq(inh_lookup_type, "") == 1:
+            break
+        method_node2 = find_impl_method_overload(inh_lookup_type, mname, pre_arg_types)
     method_params2: i64 = 0
     if method_node2 != 0:
         method_params2 = Memory.read_i64(method_node2 + 16)
