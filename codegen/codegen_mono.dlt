@@ -1348,7 +1348,7 @@ fun rewrite_captures_in_list(lst: i64, captures: i64, cap_types: i64):
         item: i64 = nl_get(lst, i)
         new_item: i64 = rewrite_captures_in(item, captures, cap_types)
         if new_item != item:
-            Memory.write_i64(lst + 8 + (i as i64) * 8, new_item)
+            nl_set(lst, i, new_item)
         i = i + 1
 
 # Scope tracking — enclosing fn's body+params, used by capture analysis
@@ -1748,7 +1748,7 @@ fun lift_lambdas_in_list(ast: i64, lst: i64):
         if old != 0:
             new: i64 = lift_lambdas_in(ast, old)
             if new != old:
-                Memory.write_i64(lst + 8 + ((i as i64) * 8), new)
+                nl_set(lst, i, new)
         i = i + 1
 
 # Quick scan: does the AST contain ANY NODE_LAMBDA anywhere?

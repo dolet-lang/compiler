@@ -319,7 +319,7 @@ fun parse_statement() -> i64:
                     ec: i32 = Memory.read_i32(annot_nodes)
                     ei: i32 = 0
                     while ei < ec:
-                        en: i64 = Memory.read_i64(annot_nodes + 8 + (ei * 8) as i64)
+                        en: i64 = nl_get(annot_nodes, ei)
                         ename: str = Memory.read_i64(en + 8) as str
                         if str_eq(ename, excl) == 1:
                             IOOps.io_println(Str.concat("[ERROR] @", Str.concat(ann_name, Str.concat(" is mutually exclusive with @", excl))))
@@ -332,7 +332,7 @@ fun parse_statement() -> i64:
         ann_count: i32 = Memory.read_i32(annot_nodes)
         first_ann_name: str = ""
         if ann_count > 0:
-            first_ann: i64 = Memory.read_i64(annot_nodes + 8)
+            first_ann: i64 = nl_get(annot_nodes, 0)
             first_ann_name = Memory.read_i64(first_ann + 8) as str
 
         if cur_kind() == TK_STRUCT:

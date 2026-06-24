@@ -158,25 +158,70 @@ fun nd_type(n: i64) -> i32:
     return Memory.read_i32(n)
 
 # ==========================================
-# Node List (dynamic array of i64 pointers)
-# Layout: [0..3] count, [4..7] capacity, [8..] items
+# Node List (TRULY dynamic array of i64 pointers)
+#
+# The handle is a small FIXED-ADDRESS header so callers can hold the
+# same pointer forever; only the data buffer it points at is realloc'd
+# when the list grows. This kills the silent buffer-overflow class of
+# bug (nl_add used to write past a fixed-capacity buffer with no bounds
+# check, corrupting adjacent heap memory → random 0xC0000005 crashes on
+# large programs).
+#
+# Handle layout (24 bytes, address never changes):
+#   [0..3]  count     (i32)
+#   [4..7]  capacity  (i32)
+#   [8..15] data_ptr  (i64) — array of `capacity` i64 slots; grows in place
+#
+# NOTE: items live in the SEPARATE data buffer, NOT inline after the
+# header. Any code that read `list + 8 + i*8` directly must use nl_get.
 # ==========================================
 
 fun mk_node_list(cap: i32) -> i64:
-    size: i64 = 8 + ((cap as i64) * 8)
-    buf: i64 = Memory.malloc_zeroed(size)
-    Memory.write_i32(buf + 4, cap)
-    return buf
+    real_cap: i32 = cap
+    if real_cap < 4:
+        real_cap = 4
+    hdr: i64 = Memory.malloc_zeroed(24)
+    data: i64 = Memory.malloc_zeroed((real_cap as i64) * 8)
+    Memory.write_i32(hdr, 0)
+    Memory.write_i32(hdr + 4, real_cap)
+    Memory.write_i64(hdr + 8, data)
+    return hdr
+
+fun nl_grow(nl: i64, needed: i32):
+    cap: i32 = Memory.read_i32(nl + 4)
+    if needed <= cap:
+        return
+    new_cap: i32 = cap
+    if new_cap < 4:
+        new_cap = 4
+    while new_cap < needed:
+        new_cap = new_cap * 2
+    old_data: i64 = Memory.read_i64(nl + 8)
+    new_data: i64 = Memory.malloc_zeroed((new_cap as i64) * 8)
+    count: i32 = Memory.read_i32(nl)
+    Memory.copy(new_data, old_data, (count as i64) * 8)
+    Memory.write_i64(nl + 8, new_data)
+    Memory.write_i32(nl + 4, new_cap)
 
 fun nl_add(nl: i64, item: i64):
     count: i32 = Memory.read_i32(nl)
-    off: i64 = 8 + ((count as i64) * 8)
-    Memory.write_i64(nl + off, item)
+    nl_grow(nl, count + 1)
+    data: i64 = Memory.read_i64(nl + 8)
+    off: i64 = (count as i64) * 8
+    Memory.write_i64(data + off, item)
     Memory.write_i32(nl, count + 1)
 
 fun nl_get(nl: i64, idx: i32) -> i64:
-    off: i64 = 8 + ((idx as i64) * 8)
-    return Memory.read_i64(nl + off)
+    data: i64 = Memory.read_i64(nl + 8)
+    off: i64 = (idx as i64) * 8
+    return Memory.read_i64(data + off)
+
+# In-place overwrite of an existing slot (idx must be < count).
+# Used by the monomorphizer to rewrite list items after lifting.
+fun nl_set(nl: i64, idx: i32, item: i64):
+    data: i64 = Memory.read_i64(nl + 8)
+    off: i64 = (idx as i64) * 8
+    Memory.write_i64(data + off, item)
 
 fun nl_count(nl: i64) -> i32:
     return Memory.read_i32(nl)

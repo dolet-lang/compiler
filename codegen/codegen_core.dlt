@@ -1150,7 +1150,7 @@ fun node_has_annot(node: i64, annot_name: str) -> i32:
     count: i32 = Memory.read_i32(annot_list)
     i: i32 = 0
     while i < count:
-        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        anode: i64 = nl_get(annot_list, i)
         aname: str = Memory.read_i64(anode + 8) as str
         if str_eq(aname, annot_name) == 1:
             return 1
@@ -1165,7 +1165,7 @@ fun get_annot_use(node: i64, annot_name: str) -> i64:
     count: i32 = Memory.read_i32(annot_list)
     i: i32 = 0
     while i < count:
-        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        anode: i64 = nl_get(annot_list, i)
         aname: str = Memory.read_i64(anode + 8) as str
         if str_eq(aname, annot_name) == 1:
             return anode
@@ -1277,7 +1277,7 @@ fun collect_llvm_attrs_from_list(annot_list: i64) -> str:
     ac: i32 = Memory.read_i32(annot_list)
     ai: i32 = 0
     while ai < ac:
-        an: i64 = Memory.read_i64(annot_list + 8 + (ai * 8) as i64)
+        an: i64 = nl_get(annot_list, ai)
         aname: str = Memory.read_i64(an + 8) as str
         acc2 = collect_llvm_attrs_for_annot(aname, acc2)
         ai = ai + 1

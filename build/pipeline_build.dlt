@@ -1113,25 +1113,70 @@ fun nd_type(n: i64) -> i32:
     return Memory.read_i32(n)
 
 # ==========================================
-# Node List (dynamic array of i64 pointers)
-# Layout: [0..3] count, [4..7] capacity, [8..] items
+# Node List (TRULY dynamic array of i64 pointers)
+#
+# The handle is a small FIXED-ADDRESS header so callers can hold the
+# same pointer forever; only the data buffer it points at is realloc'd
+# when the list grows. This kills the silent buffer-overflow class of
+# bug (nl_add used to write past a fixed-capacity buffer with no bounds
+# check, corrupting adjacent heap memory → random 0xC0000005 crashes on
+# large programs).
+#
+# Handle layout (24 bytes, address never changes):
+#   [0..3]  count     (i32)
+#   [4..7]  capacity  (i32)
+#   [8..15] data_ptr  (i64) — array of `capacity` i64 slots; grows in place
+#
+# NOTE: items live in the SEPARATE data buffer, NOT inline after the
+# header. Any code that read `list + 8 + i*8` directly must use nl_get.
 # ==========================================
 
 fun mk_node_list(cap: i32) -> i64:
-    size: i64 = 8 + ((cap as i64) * 8)
-    buf: i64 = Memory.malloc_zeroed(size)
-    Memory.write_i32(buf + 4, cap)
-    return buf
+    real_cap: i32 = cap
+    if real_cap < 4:
+        real_cap = 4
+    hdr: i64 = Memory.malloc_zeroed(24)
+    data: i64 = Memory.malloc_zeroed((real_cap as i64) * 8)
+    Memory.write_i32(hdr, 0)
+    Memory.write_i32(hdr + 4, real_cap)
+    Memory.write_i64(hdr + 8, data)
+    return hdr
+
+fun nl_grow(nl: i64, needed: i32):
+    cap: i32 = Memory.read_i32(nl + 4)
+    if needed <= cap:
+        return
+    new_cap: i32 = cap
+    if new_cap < 4:
+        new_cap = 4
+    while new_cap < needed:
+        new_cap = new_cap * 2
+    old_data: i64 = Memory.read_i64(nl + 8)
+    new_data: i64 = Memory.malloc_zeroed((new_cap as i64) * 8)
+    count: i32 = Memory.read_i32(nl)
+    Memory.copy(new_data, old_data, (count as i64) * 8)
+    Memory.write_i64(nl + 8, new_data)
+    Memory.write_i32(nl + 4, new_cap)
 
 fun nl_add(nl: i64, item: i64):
     count: i32 = Memory.read_i32(nl)
-    off: i64 = 8 + ((count as i64) * 8)
-    Memory.write_i64(nl + off, item)
+    nl_grow(nl, count + 1)
+    data: i64 = Memory.read_i64(nl + 8)
+    off: i64 = (count as i64) * 8
+    Memory.write_i64(data + off, item)
     Memory.write_i32(nl, count + 1)
 
 fun nl_get(nl: i64, idx: i32) -> i64:
-    off: i64 = 8 + ((idx as i64) * 8)
-    return Memory.read_i64(nl + off)
+    data: i64 = Memory.read_i64(nl + 8)
+    off: i64 = (idx as i64) * 8
+    return Memory.read_i64(data + off)
+
+# In-place overwrite of an existing slot (idx must be < count).
+# Used by the monomorphizer to rewrite list items after lifting.
+fun nl_set(nl: i64, idx: i32, item: i64):
+    data: i64 = Memory.read_i64(nl + 8)
+    off: i64 = (idx as i64) * 8
+    Memory.write_i64(data + off, item)
 
 fun nl_count(nl: i64) -> i32:
     return Memory.read_i32(nl)
@@ -5461,7 +5506,7 @@ fun parse_statement() -> i64:
                     ec: i32 = Memory.read_i32(annot_nodes)
                     ei: i32 = 0
                     while ei < ec:
-                        en: i64 = Memory.read_i64(annot_nodes + 8 + (ei * 8) as i64)
+                        en: i64 = nl_get(annot_nodes, ei)
                         ename: str = Memory.read_i64(en + 8) as str
                         if str_eq(ename, excl) == 1:
                             IOOps.io_println(Str.concat("[ERROR] @", Str.concat(ann_name, Str.concat(" is mutually exclusive with @", excl))))
@@ -5474,7 +5519,7 @@ fun parse_statement() -> i64:
         ann_count: i32 = Memory.read_i32(annot_nodes)
         first_ann_name: str = ""
         if ann_count > 0:
-            first_ann: i64 = Memory.read_i64(annot_nodes + 8)
+            first_ann: i64 = nl_get(annot_nodes, 0)
             first_ann_name = Memory.read_i64(first_ann + 8) as str
 
         if cur_kind() == TK_STRUCT:
@@ -6717,7 +6762,7 @@ fun node_has_annot(node: i64, annot_name: str) -> i32:
     count: i32 = Memory.read_i32(annot_list)
     i: i32 = 0
     while i < count:
-        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        anode: i64 = nl_get(annot_list, i)
         aname: str = Memory.read_i64(anode + 8) as str
         if str_eq(aname, annot_name) == 1:
             return 1
@@ -6732,7 +6777,7 @@ fun get_annot_use(node: i64, annot_name: str) -> i64:
     count: i32 = Memory.read_i32(annot_list)
     i: i32 = 0
     while i < count:
-        anode: i64 = Memory.read_i64(annot_list + 8 + (i * 8) as i64)
+        anode: i64 = nl_get(annot_list, i)
         aname: str = Memory.read_i64(anode + 8) as str
         if str_eq(aname, annot_name) == 1:
             return anode
@@ -6844,7 +6889,7 @@ fun collect_llvm_attrs_from_list(annot_list: i64) -> str:
     ac: i32 = Memory.read_i32(annot_list)
     ai: i32 = 0
     while ai < ac:
-        an: i64 = Memory.read_i64(annot_list + 8 + (ai * 8) as i64)
+        an: i64 = nl_get(annot_list, ai)
         aname: str = Memory.read_i64(an + 8) as str
         acc2 = collect_llvm_attrs_for_annot(aname, acc2)
         ai = ai + 1
@@ -10432,7 +10477,7 @@ fun gen_fun_def(node: i64):
         fn_ac: i32 = Memory.read_i32(fn_annot_list)
         fn_ai: i32 = 0
         while fn_ai < fn_ac:
-            fn_an: i64 = Memory.read_i64(fn_annot_list + 8 + (fn_ai * 8) as i64)
+            fn_an: i64 = nl_get(fn_annot_list, fn_ai)
             fn_aname: str = Memory.read_i64(fn_an + 8) as str
             fn_aidx: i32 = find_annot(fn_aname)
             if fn_aidx >= 0:
@@ -10655,7 +10700,7 @@ fun gen_method_def(struct_name: str, node: i64):
         mt_ac: i32 = Memory.read_i32(mt_annot_list)
         mt_ai: i32 = 0
         while mt_ai < mt_ac:
-            mt_an: i64 = Memory.read_i64(mt_annot_list + 8 + (mt_ai * 8) as i64)
+            mt_an: i64 = nl_get(mt_annot_list, mt_ai)
             mt_aname: str = Memory.read_i64(mt_an + 8) as str
             mt_aidx: i32 = find_annot(mt_aname)
             if mt_aidx >= 0:
@@ -14016,7 +14061,7 @@ fun rewrite_captures_in_list(lst: i64, captures: i64, cap_types: i64):
         item: i64 = nl_get(lst, i)
         new_item: i64 = rewrite_captures_in(item, captures, cap_types)
         if new_item != item:
-            Memory.write_i64(lst + 8 + (i as i64) * 8, new_item)
+            nl_set(lst, i, new_item)
         i = i + 1
 
 # Scope tracking — enclosing fn's body+params, used by capture analysis
@@ -14416,7 +14461,7 @@ fun lift_lambdas_in_list(ast: i64, lst: i64):
         if old != 0:
             new: i64 = lift_lambdas_in(ast, old)
             if new != old:
-                Memory.write_i64(lst + 8 + ((i as i64) * 8), new)
+                nl_set(lst, i, new)
         i = i + 1
 
 # Quick scan: does the AST contain ANY NODE_LAMBDA anywhere?

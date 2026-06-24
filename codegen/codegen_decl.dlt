@@ -31,7 +31,7 @@ fun gen_fun_def(node: i64):
         fn_ac: i32 = Memory.read_i32(fn_annot_list)
         fn_ai: i32 = 0
         while fn_ai < fn_ac:
-            fn_an: i64 = Memory.read_i64(fn_annot_list + 8 + (fn_ai * 8) as i64)
+            fn_an: i64 = nl_get(fn_annot_list, fn_ai)
             fn_aname: str = Memory.read_i64(fn_an + 8) as str
             fn_aidx: i32 = find_annot(fn_aname)
             if fn_aidx >= 0:
@@ -254,7 +254,7 @@ fun gen_method_def(struct_name: str, node: i64):
         mt_ac: i32 = Memory.read_i32(mt_annot_list)
         mt_ai: i32 = 0
         while mt_ai < mt_ac:
-            mt_an: i64 = Memory.read_i64(mt_annot_list + 8 + (mt_ai * 8) as i64)
+            mt_an: i64 = nl_get(mt_annot_list, mt_ai)
             mt_aname: str = Memory.read_i64(mt_an + 8) as str
             mt_aidx: i32 = find_annot(mt_aname)
             if mt_aidx >= 0:
