@@ -158,6 +158,14 @@ fun gen_fun_def(node: i64):
     if g_debug_emit == 1:
         emit_frame_push(fname)
 
+    # Run global initializers once, first thing in user main. The compiler
+    # emits @__dolet_global_init (top-level statements + non-constant global
+    # initializers) only when the program defines its own main; calling it
+    # here makes globals like `g: AtomicI64 = AtomicI64.new(0)` actually run
+    # before any user code touches them.
+    if str_eq(fname, "main") == 1:
+        emit_ind("llvm.call @__dolet_global_init() : () -> ()")
+
     if body != 0:
         gen_block(body)
 

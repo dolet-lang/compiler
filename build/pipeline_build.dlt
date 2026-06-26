@@ -10604,6 +10604,14 @@ fun gen_fun_def(node: i64):
     if g_debug_emit == 1:
         emit_frame_push(fname)
 
+    # Run global initializers once, first thing in user main. The compiler
+    # emits @__dolet_global_init (top-level statements + non-constant global
+    # initializers) only when the program defines its own main; calling it
+    # here makes globals like `g: AtomicI64 = AtomicI64.new(0)` actually run
+    # before any user code touches them.
+    if str_eq(fname, "main") == 1:
+        emit_ind("llvm.call @__dolet_global_init() : () -> ()")
+
     if body != 0:
         gen_block(body)
 
@@ -15305,6 +15313,52 @@ fun has_user_main(ast: i64) -> i32:
     return 0
 
 # ==========================================
+# Generate the global-initializer function (@__dolet_global_init)
+# ==========================================
+# When the program defines its own main(), the synthetic-main block below
+# is skipped — and with it, the top-level statements that run non-constant
+# global initializers (e.g. `g: AtomicI64 = AtomicI64.new(0)`, or any
+# `g = some_call()`). Those globals would stay zero-initialized and crash
+# at first use. To fix this we emit the top-level statements into a
+# dedicated void function `@__dolet_global_init` and inject a call to it at
+# the start of user main (see gen_fun_def). Literal-valued globals are still
+# baked as MLIR constants in gen_global_var_decls; this function runs the
+# remaining runtime initializers + any other top-level code, once, in order.
+fun gen_global_init_fn(ast: i64):
+    g_tmp_counter = 0
+    emit_ind("llvm.func @__dolet_global_init() {")
+    indent_inc()
+
+    # Mirror the synthetic-main prologue: hoist allocas to entry, bracket
+    # with an arena frame so top-level `+`/formatters are auto-freed.
+    old_entry_active_g:     i32 = g_entry_active
+    old_entry_count_g:      i32 = g_entry_count
+    old_entry_insert_pos_g: i32 = g_entry_insert_pos
+    g_entry_active     = 1
+    g_entry_count      = 0
+    g_entry_insert_pos = g_out_count
+
+    old_arena_g: i32 = g_arena_emit
+    g_arena_emit = 1
+    emit_ind("%__arena_frame = llvm.call @_scope_arena_push() : () -> i64")
+
+    # Top-level statements in source order (global var-decls with runtime
+    # initializers are emitted inline here, preserving execution order).
+    gen_main_body(ast)
+
+    flush_entry_allocas()
+    g_entry_active     = old_entry_active_g
+    g_entry_count      = old_entry_count_g
+    g_entry_insert_pos = old_entry_insert_pos_g
+
+    emit_ind("llvm.call @_scope_arena_pop(%__arena_frame) : (i64) -> ()")
+    emit_ind("llvm.return")
+    g_arena_emit = old_arena_g
+
+    indent_dec()
+    emit_ind("}")
+
+# ==========================================
 # Main Generate Function
 # ==========================================
 fun generate(ast: i64) -> str:
@@ -15414,6 +15468,11 @@ fun generate(ast: i64) -> str:
 
         indent_dec()
         emit_ind("}")
+    else:
+        # The program defines its own main(). Emit a dedicated init function
+        # for the top-level statements (non-constant global initializers) and
+        # inject a call to it at the start of user main (gen_fun_def).
+        gen_global_init_fn(ast)
 
     # Emit any late string constants added during function generation
     if g_str_emitted < g_str_count:
