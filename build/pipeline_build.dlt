@@ -13801,19 +13801,53 @@ fun find_capture_type(scope_body: i64, scope_params: i64, name: str) -> str:
             if str_eq(pn, name) == 1:
                 return Memory.read_i64(p + 16) as str
             pi = pi + 1
-    # Check for a var_decl with this name in scope_body
+    # Check for a var_decl with this name in scope_body. Search
+    # recursively so locals declared inside nested blocks (if / while /
+    # block bodies) are found too — otherwise their type defaults to
+    # i64 and a captured f32/f64 gets written/read at the wrong width,
+    # silently corrupting the captured value.
     if scope_body != 0:
-        bc: i32 = nl_count(scope_body)
-        bi: i32 = 0
-        while bi < bc:
-            stmt: i64 = nl_get(scope_body, bi)
-            if stmt != 0:
-                if nd_type(stmt) == NODE_VAR_DECL:
-                    vname: str = Memory.read_i64(stmt + 16) as str
-                    if str_eq(vname, name) == 1:
-                        return Memory.read_i64(stmt + 8) as str
-            bi = bi + 1
+        found: str = find_vardecl_type_in_list(scope_body, name)
+        if str_eq(found, "") == 0:
+            return found
     return "i64"
+
+# Recursively search a statement list for a var_decl named `name`,
+# descending into if/while/block bodies. Returns the declared type, or
+# "" if not found.
+fun find_vardecl_type_in_list(lst: i64, name: str) -> str:
+    if lst == 0:
+        return ""
+    bc: i32 = nl_count(lst)
+    bi: i32 = 0
+    while bi < bc:
+        stmt: i64 = nl_get(lst, bi)
+        if stmt != 0:
+            r: str = find_vardecl_type_in_node(stmt, name)
+            if str_eq(r, "") == 0:
+                return r
+        bi = bi + 1
+    return ""
+
+fun find_vardecl_type_in_node(stmt: i64, name: str) -> str:
+    if stmt < 4096 as i64:
+        return ""
+    nt: i32 = nd_type(stmt)
+    if nt == NODE_VAR_DECL:
+        vname: str = Memory.read_i64(stmt + 16) as str
+        if str_eq(vname, name) == 1:
+            return Memory.read_i64(stmt + 8) as str
+        return ""
+    if nt == NODE_IF:
+        r1: str = find_vardecl_type_in_list(Memory.read_i64(stmt + 16), name)
+        if str_eq(r1, "") == 0:
+            return r1
+        return find_vardecl_type_in_list(Memory.read_i64(stmt + 24), name)
+    if nt == NODE_WHILE:
+        return find_vardecl_type_in_list(Memory.read_i64(stmt + 16), name)
+    if nt == NODE_BLOCK:
+        return find_vardecl_type_in_list(Memory.read_i64(stmt + 8), name)
+    return ""
 
 # Pick the right Memory.read_X method for a capture's type.
 fun mem_read_for_type(t: str) -> str:
@@ -14513,6 +14547,21 @@ fun scan_for_lambda_node(node: i64):
     if nt == NODE_FUN_DEF:
         if Memory.read_i64(node + 40) == 0:
             scan_for_lambda_list(Memory.read_i64(node + 32))
+        return
+    # Control-flow blocks — a lambda nested inside an if/while/block body
+    # must still be discovered, otherwise the whole lift pass is skipped
+    # and the lambda compiles to a null closure (segfault on call).
+    if nt == NODE_IF:
+        scan_for_lambda_node(Memory.read_i64(node + 8))
+        scan_for_lambda_list(Memory.read_i64(node + 16))
+        scan_for_lambda_list(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_WHILE:
+        scan_for_lambda_node(Memory.read_i64(node + 8))
+        scan_for_lambda_list(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_BLOCK:
+        scan_for_lambda_list(Memory.read_i64(node + 8))
         return
     # Methods inside extend/impl blocks — same NODE_FUN_DEF body, just
     # nested one level deeper. Without these, a lambda inside a method

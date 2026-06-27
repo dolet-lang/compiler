@@ -1,0 +1,65 @@
+import std
+
+# Regression test: @heap closures created INSIDE control-flow blocks
+# (if / while / for) must be lifted and called correctly. Previously the
+# lambda-lifting scan did not descend into if/while/block bodies, so a
+# closure whose ONLY occurrence was inside a loop compiled to a null
+# closure -> segfault on call. Also: a captured local declared inside a
+# loop (e.g. an f32) had its type defaulted to i64, corrupting the value.
+#
+# This test verifies:
+#   1. A closure created inside a while loop is callable (no null deref).
+#   2. A closure created inside an if block is callable.
+#   3. A captured f32 declared inside the loop round-trips correctly.
+
+g_fail: i32 = 0
+
+fun check(label: str, got: i32, want: i32):
+    if got != want:
+        g_fail = g_fail + 1
+        print("FAIL")
+        print(label)
+
+fun add_base(base: i32, x: i32) -> i32:
+    return base + x
+
+fun do_test():
+    out: i64 = Memory.malloc(64)
+
+    # 1. closure inside while loop, captures `base` (declared outside).
+    base: i32 = 100
+    f: i32 = 0
+    while f < 3:
+        body: @heap fun(i32) = fun(idx: i32) Memory.write_i32(out + (idx as i64) * 4, add_base(base, idx))
+        body(f)
+        f = f + 1
+    check("while-closure[0]", Memory.read_i32(out + 0), 100)
+    check("while-closure[1]", Memory.read_i32(out + 4), 101)
+    check("while-closure[2]", Memory.read_i32(out + 8), 102)
+
+    # 2. closure inside if block.
+    cond: i32 = 1
+    if cond == 1:
+        ib: @heap fun(i32) = fun(idx: i32) Memory.write_i32(out + 12, idx + 7)
+        ib(5)
+    check("if-closure", Memory.read_i32(out + 12), 12)
+
+    # 3. captured f32 declared INSIDE the loop must keep f32 width.
+    fout: i64 = Memory.malloc(64)
+    k: i32 = 0
+    while k < 1:
+        scale: f32 = 2.5
+        fb: @heap fun(i32) = fun(idx: i32) Memory.write_f32(fout + (idx as i64) * 4, (idx as f32) * scale)
+        fb(4)
+        k = k + 1
+    # fb(4) wrote slot 4 -> 4 * 2.5 = 10.0
+    got_f: f32 = Memory.read_f32(fout + 16)
+    check("f32-capture-in-loop", (got_f * 10.0) as i32, 100)
+
+    if g_fail == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    Process.exit(0)
+
+do_test()

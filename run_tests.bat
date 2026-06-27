@@ -152,6 +152,7 @@ for %%f in (
     closures_self_workaround
     closures_self_capture
     closures_locals_in_body
+    closure_in_loop
     thread_basic
     thread_parallel_sum
     cpu_count_basic
