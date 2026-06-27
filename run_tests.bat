@@ -172,6 +172,7 @@ for %%f in (
     parallel_leak_free
     frog_cull_equiv
     parallel_perf_smoke
+    parallel_transform_bench
     mutex_basic
     random_basic
     struct_nested_global

@@ -1,0 +1,120 @@
+import std
+import frog
+
+# Feature: dolet-parallel, Property: perf (informational) — REAL engine
+# workload: recompute N moving objects' TRS model matrices every frame.
+#
+# This mirrors what a retained-mode engine does for thousands of moving
+# objects: each frame, build each object's transform (6 trig + matrix)
+# and write it to that object's own slot. Pure_Mapping => parallel and
+# serial MUST produce identical buffers (the only PASS/FAIL gate); the
+# printed speedup is informational.
+#
+# SAFE CLOSURE PATTERN: the body closure is created ONCE outside the
+# frame loop and reads the changing per-frame value (the time `t`) from a
+# global. Creating a fresh @heap closure every loop iteration would leak
+# one env per frame (no free) and is the pattern to avoid in hot loops.
+
+const N:      i32 = 20000
+const FRAMES: i32 = 60
+
+g_params:  i64 = 0
+g_out:     i64 = 0
+g_t:       f32 = 0.0
+g_fail:    AtomicI32 = AtomicI32.new(0)
+
+fun param(i: i32, k: i32) -> f32:
+    return Memory.read_f32(g_params + (i as i64) * 36 + (k as i64) * 4)
+
+fun compute_one(i: i32):
+    t: f32 = g_t
+    px: f32 = param(i, 0) + t
+    py: f32 = param(i, 1)
+    pz: f32 = param(i, 2)
+    rx: f32 = param(i, 3) + t * 40.0
+    ry: f32 = param(i, 4) + t * 25.0
+    rz: f32 = param(i, 5)
+    sx: f32 = param(i, 6)
+    sy: f32 = param(i, 7)
+    sz: f32 = param(i, 8)
+    m: Mat4 = Mat4.trs(px, py, pz, rx, ry, rz, sx, sy, sz)
+    m.write_to_ptr(g_out + (i as i64) * 64)
+
+fun do_bench():
+    g_params = Memory.malloc((N as i64) * 36)
+    par_out: i64 = Memory.malloc((N as i64) * 64)
+    ser_out: i64 = Memory.malloc((N as i64) * 64)
+    if g_params == 0 or par_out == 0 or ser_out == 0:
+        print("FAIL")
+        Process.exit(1)
+
+    seed: i32 = 123456789
+    i: i32 = 0
+    while i < N:
+        k: i32 = 0
+        while k < 9:
+            seed = seed * 1103515245 + 12345
+            v: i32 = (seed >> 16) ^ seed
+            ff: f32 = ((v & 1023) as f32) / 64.0
+            Memory.write_f32(g_params + (i as i64) * 36 + (k as i64) * 4, ff)
+            k = k + 1
+        i = i + 1
+
+    # ONE closure, created outside the loop (no per-frame env leak).
+    body: @heap fun(i32) = fun(idx: i32) compute_one(idx)
+
+    # --- PARALLEL ---
+    g_out = par_out
+    p_start: i64 = Time.now_ms()
+    f: i32 = 0
+    while f < FRAMES:
+        g_t = (f as f32) * 0.016
+        parallel_for(N, body)
+        f = f + 1
+    p_ms: i64 = Time.elapsed_ms(p_start)
+
+    # --- SERIAL (same mapping) ---
+    g_out = ser_out
+    s_start: i64 = Time.now_ms()
+    f2: i32 = 0
+    while f2 < FRAMES:
+        g_t = (f2 as f32) * 0.016
+        si: i32 = 0
+        while si < N:
+            compute_one(si)
+            si = si + 1
+        f2 = f2 + 1
+    s_ms: i64 = Time.elapsed_ms(s_start)
+
+    # --- Correctness gate (last frame buffers must match exactly) ---
+    j: i32 = 0
+    while j < N * 16:
+        if Memory.read_i32(par_out + (j as i64) * 4) != Memory.read_i32(ser_out + (j as i64) * 4):
+            g_fail.fetch_add(1)
+            j = N * 16
+        j = j + 1
+
+    print("--- transform-update bench (TRS per object per frame) ---")
+    print("objects")
+    print(N)
+    print("frames")
+    print(FRAMES)
+    print("parallel ms")
+    print(p_ms)
+    print("serial ms")
+    print(s_ms)
+    print("speedup x1000 (serial*1000/parallel)")
+    if p_ms > 0 as i64:
+        print((s_ms * 1000 as i64) / p_ms)
+    else:
+        print("parallel sub-ms")
+
+    if g_fail.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+
+    parallel_shutdown()
+    Process.exit(0)
+
+do_bench()
