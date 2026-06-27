@@ -1,0 +1,144 @@
+import std
+
+# Feature: dolet-parallel, Property 3: Exact-count invariant (completion before return)
+#
+# Property 3 (Validates: Requirements 7.4, 3.2, 9.1):
+#   For any integer N >= 0 and any worker count, if EVERY index performs
+#   exactly one fetch_add(1) on a SHARED AtomicI32 counter (initialized to
+#   0) inside parallel_for(N, body), then immediately after parallel_for
+#   returns the counter equals N — which ALSO establishes that all body
+#   invocations completed before the call returned (R3.2).
+#
+# Why this is the strongest "completion before return" probe:
+#   If parallel_for ever returned early (before all chunks ran), the
+#   shared counter would still be < N at the moment we read it. A lost
+#   atomic update would also show < N; a double-execution of any index
+#   would show > N. So a single equality check (counter == N) catches
+#   early-return, lost increments, AND duplicated increments at once.
+#
+# Contrast with Property 1 (exactly-once, per-index PRIVATE slots): there
+# each index wrote its OWN slot, so there was no contention on a single
+# memory location. Here we DELIBERATELY funnel every index through ONE
+# shared AtomicI32, stressing concurrent contention on a single cache
+# line. The SeqCst fetch_add must serialize all N increments with no lost
+# updates — the same guarantee tests/atomic_counter.dlt relies on, now
+# driven through the parallel_for scheduler under work stealing.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed LCG seed (Random.seed) so the run is reproducible. A distinct
+#     seed from the sibling property tests for input diversity.
+#   * >= 100 iterations. Each iteration picks a random N in [1, MAX_N].
+#   * A fresh SHARED counter (AtomicI32.new(0)) is created per iteration.
+#     The body ignores its index arg and does counter.fetch_add(1) on that
+#     single shared atomic.
+#   * After parallel_for returns, assert counter.load() == N. Mismatches
+#     are tallied and the direction is distinguished for diagnostics:
+#       - counter <  N  → lost increment OR early return,
+#       - counter >  N  → duplicated increment.
+#   * The counter is freed every iteration. AtomicI32 has no destroy();
+#     its storage address IS the pointer, so we free it directly via
+#     Memory.free(counter as i64) — exactly how std/parallel.dlt frees its
+#     `remaining` AtomicI64 (Memory.free(remaining as i64)). No leak across
+#     iterations.
+#
+# Passing the SHARED counter to a @heap fun(i32) that crosses the thread
+# boundary: AtomicI32 is @heap, so the value IS the storage pointer. We
+# capture the counter's i64 address and recover it inside a module-level
+# helper (_count_one): c = addr as AtomicI32; c.fetch_add(1). All workers
+# and the participating caller increment the very same atomic.
+#
+# A watchdog thread turns any deadlock (a hang where parallel_for never
+# completes) into a clear FAIL via Process.exit(1) instead of hanging the
+# runner — important because this drives the real default pool's workers.
+
+const ITERATIONS:  i32 = 150
+const MAX_N:       i32 = 2000
+const WATCHDOG_MS: i32 = 30000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Per-index body target: increment the ONE shared counter. The counter's
+# heap address is passed as an i64 (the @heap AtomicI32 value), recovered
+# here as an AtomicI32, and incremented atomically. The index arg is
+# intentionally unused — every index funnels into the same atomic, which
+# is the whole point of the exact-count invariant.
+fun _count_one(counter_addr: i64):
+    c: AtomicI32 = counter_addr as AtomicI32
+    c.fetch_add(1)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in exact-count invariant")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized N sequence (distinct seed).
+    Random.seed(555555 as i64)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random N in [1, MAX_N]. next_i32() is already non-negative.
+        n: i32 = 1 + (Random.next_i32() % MAX_N)
+
+        # Fresh SHARED counter for this iteration, starting at 0.
+        counter: AtomicI32 = AtomicI32.new(0)
+        addr: i64 = counter as i64
+
+        # Run the parallel mapping: every index increments the SAME atomic.
+        body: @heap fun(i32) = fun(i: i32) _count_one(addr)
+        parallel_for(n, body)
+
+        # After return, the shared counter must equal N exactly (R7.4).
+        # Equality also proves all bodies ran before return (R3.2).
+        total: i32 = counter.load()
+        if total != n:
+            if total < n:
+                fail("counter < N (lost increment or early return)")
+            else:
+                fail("counter > N (duplicate increment)")
+
+        # Release this iteration's counter. AtomicI32 has no destroy();
+        # the value is its storage pointer, so free it directly — same as
+        # how std/parallel.dlt frees `remaining` (Memory.free(rem as i64)).
+        Memory.free(counter as i64)
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 3: exact-count invariant (completion before return) ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly. The default
+    # pool's worker threads intentionally never join here (no shutdown in
+    # this property), so a direct process exit guarantees prompt,
+    # deterministic termination.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

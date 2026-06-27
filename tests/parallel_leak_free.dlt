@@ -1,0 +1,157 @@
+import std
+
+# Feature: dolet-parallel, Property 9: Init/shutdown cycles are leak-free and fully joined
+#
+# Property 9 (Validates: Requirements 5.6, 5.5, 9.3):
+#   For any number of init->shutdown cycles, after every cycle completes
+#   the process-wide default pool has freed EVERYTHING it allocated, so
+#   Memory.alloc_balance() (net malloc - free) returns to its pre-cycle
+#   value (no leak — R5.6, R9.3), AND every cycle completes without
+#   hanging, which proves every worker thread was actually joined rather
+#   than left running (R5.5). A worker that was never signalled/joined
+#   would block parallel_shutdown()'s join() forever and the watchdog
+#   would fire.
+#
+# A full init->shutdown cycle is:
+#   1. parallel_for(N, body)  — lazily builds the default pool (spawns
+#      its workers, allocates deques/arrays/atomics/mutexes) and runs N
+#      body invocations through it.
+#   2. parallel_shutdown()    — signals + joins every worker, then frees
+#      the deques (struct + buffer + atomics), the worker-env closures,
+#      the threads/deques/envs arrays, the shutdown/pending/epoch
+#      atomics, both mutexes, the kept-alive `state` atomic, and the
+#      @heap pool struct, and resets the default-pool globals so the next
+#      parallel_for rebuilds a fresh pool.
+# Across such cycles the net allocation balance must return to baseline.
+#
+# CRITICAL measurement note (established by the 7.1 smoke test):
+#   The USER closure (the @heap fun(i32) body) is allocated by the user
+#   and is NOT freed by parallel_for / parallel_shutdown — it is
+#   user-owned, correctly so. To measure ONLY the pool's alloc/free
+#   balance we allocate ONE reusable body closure (and one reusable
+#   counter + buffer) BEFORE taking the alloc_balance baseline, and reuse
+#   them across every cycle. Allocating a fresh body inside each cycle
+#   would make alloc_balance grow by 1 per cycle from the USER closure —
+#   that is NOT a pool leak, just a measurement artifact. One reusable
+#   body keeps the only in-flight allocations the pool's own, every one
+#   of which the matching parallel_shutdown() fully frees.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed distinct LCG seed (Random.seed) so the run is reproducible.
+#   * >= 100 iterations; each iteration runs a random BURST of cycles in
+#     [1, MAX_CYCLES]. Each cycle drives the pool with a small random N
+#     in [1, MAX_N] so workers actually spin up, then tears it down.
+#   * The reusable body increments a shared AtomicI32 counter so the pool
+#     does real work (workers genuinely run).
+#   * After each iteration's burst, assert Memory.alloc_balance() == b0
+#     (the baseline taken AFTER allocating the reusable body/counter).
+#     Because each cycle ENDS with parallel_shutdown(), the balance must
+#     be back at b0 after every burst; any drift is a net pool leak and
+#     is tallied as a failure with the observed delta.
+#
+# A watchdog thread turns any deadlock (e.g. a worker that was never
+# joined, hanging parallel_shutdown()'s join()) into a clear FAIL via
+# Process.exit(1) instead of an indefinite hang. This harness does a LOT
+# of pool init/teardown, so it doubles as a strong join/leak stress test.
+
+const ITERATIONS:  i32 = 100
+const MAX_CYCLES:  i32 = 100
+const MAX_N:       i32 = 500
+const WATCHDOG_MS: i32 = 60000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Reusable shared counter the body increments (declared before baseline).
+g_counter: AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Per-index body: trivial real work so the pool actually runs. Touches
+# only the shared atomic counter (race-free fetch_add). This single
+# closure is allocated ONCE and reused across every cycle so it never
+# contributes to the measured alloc balance.
+fun _work_one(i: i32):
+    g_counter.fetch_add(1)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked (a worker was not joined) and
+# exit with a clear failure so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible un-joined worker / deadlock in shutdown")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed distinct seed -> reproducible randomized cycle/N sequence.
+    Random.seed(13371337 as i64)
+
+    # Allocate the ONE reusable body closure BEFORE the baseline. This is
+    # the user-owned allocation; keeping it out of the per-cycle loop is
+    # what makes alloc_balance measure ONLY the pool's own alloc/free.
+    body: @heap fun(i32) = fun(i: i32) _work_one(i)
+
+    # Baseline AFTER all reusable allocations (body + counter + globals).
+    b0: i64 = Memory.alloc_balance()
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random burst length in [1, MAX_CYCLES].
+        cycles: i32 = 1 + (Random.next_i32() % MAX_CYCLES)
+
+        c: i32 = 0
+        while c < cycles:
+            # Drive the pool with a small-ish random N so workers spin up.
+            n: i32 = 1 + (Random.next_i32() % MAX_N)
+            # init (lazy build) + run work through the pool ...
+            parallel_for(n, body)
+            # ... then full teardown: join all workers, free everything.
+            parallel_shutdown()
+            c = c + 1
+
+        # After this burst of complete cycles, the net allocation balance
+        # must be exactly back at baseline — every cycle ended with a
+        # full parallel_shutdown() that frees all the pool allocated.
+        bal: i64 = Memory.alloc_balance()
+        if bal != b0:
+            fail("alloc_balance drifted from baseline (net pool leak)")
+            print("delta (bal - b0)")
+            print(bal - b0)
+
+        iter = iter + 1
+
+    # Verdict + diagnostics.
+    final_bal: i64 = Memory.alloc_balance()
+    print("--- Property 9: init/shutdown cycles are leak-free and fully joined ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("baseline alloc_balance (b0)")
+    print(b0)
+    print("final alloc_balance")
+    print(final_bal)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

@@ -1,0 +1,118 @@
+import std
+
+# Feature: dolet-parallel, Property 5: Explicit worker count is honored
+#
+# Property 5 (Validates: Requirements 2.3):
+#   For any explicit worker count n supplied at construction time,
+#   ThreadPool.new_with_workers(n) must produce a pool whose
+#   worker_count() equals EXACTLY n. The special case n == 0 must yield a
+#   valid serial-mode pool with worker_count() == 0 (no deques, no OS
+#   threads, no crash) — R2.3 plus the serial-mode guarantee.
+#
+# This pins down the explicit-count contract of new_with_workers
+# (std/thread_pool.dlt). On a normal Windows machine CreateThread
+# succeeds for reasonable n, so the constructor records exactly n live
+# workers; the graceful-degradation path (spawn failure -> fewer
+# workers) only triggers when the OS refuses a thread, which a small n
+# never provokes. We therefore cap n to a SMALL range so the property
+# exercises the honored-count guarantee without exhausting OS thread
+# limits.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed LCG seed (Random.seed), distinct from the sibling property
+#     tests, so the run is reproducible with diverse inputs.
+#   * >= 100 iterations. Each iteration picks a random n in [0, 8] via
+#     next_i32() % (MAX_WORKERS + 1). next_i32() is non-negative.
+#     Iteration 0 is FORCED to n == 0 so the serial-mode boundary is
+#     always exercised explicitly.
+#   * Each iteration builds a SEPARATE pool (not the global default pool)
+#     with new_with_workers(n), asserts worker_count() == n, then calls
+#     pool.shutdown() to join its worker threads and free resources.
+#     Without the shutdown each iteration would leak n OS threads and
+#     eventually exhaust the system, so the shutdown is mandatory.
+#   * n == 0 case: worker_count() must be 0 and shutdown() is a safe
+#     no-op (nothing to join or free beyond the lifecycle atomics).
+#
+# A watchdog thread turns any hang in spawn/join/shutdown into a clear
+# FAIL via Process.exit(1) instead of an indefinite hang — important
+# because this test spawns and joins many real OS threads.
+
+const ITERATIONS:  i32 = 150
+const MAX_WORKERS: i32 = 8
+const WATCHDOG_MS: i32 = 30000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in explicit worker count")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we start spawning pools.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized worker-count sequence.
+    Random.seed(24681012 as i64)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random n in [0, MAX_WORKERS]. Force iteration 0 to n == 0 so
+        # the serial-mode boundary is always tested explicitly.
+        n: i32 = Random.next_i32() % (MAX_WORKERS + 1)
+        if iter == 0:
+            n = 0
+
+        # Build a SEPARATE pool with EXACTLY n workers requested.
+        p: ThreadPool = ThreadPool.new_with_workers(n)
+
+        # The explicit count must be honored exactly (R2.3); n == 0 must
+        # yield a valid serial-mode pool with worker_count() == 0.
+        wc: i32 = p.worker_count()
+        if wc != n:
+            fail("worker_count does not match requested n")
+            print("requested n")
+            print(n)
+            print("actual worker_count")
+            print(wc)
+
+        # Shut the pool down to join worker threads and free resources
+        # (mandatory — otherwise each iteration leaks n OS threads).
+        # For n == 0 this is a safe no-op.
+        p.shutdown()
+
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 5: explicit worker count is honored ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

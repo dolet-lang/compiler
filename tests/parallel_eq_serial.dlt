@@ -1,0 +1,171 @@
+import std
+
+# Feature: dolet-parallel, Property 2: Parallel equals serial for a pure mapping
+#
+# Property 2 (Validates: Requirements 3.6, 7.2, 3.4, 3.5, 4.4, 9.2):
+#   For any integer N > 0 and any Pure_Mapping f(i), running
+#   parallel_for(N, body-that-writes out_parallel[i] = f(i)) produces
+#   output IDENTICAL to a plain serial loop that writes
+#   out_serial[i] = f(i) — regardless of worker count or scheduling.
+#
+# This is the determinism-of-results guarantee. parallel_for
+# (std/parallel.dlt) partitions [0,N) into DISJOINT, gap-free chunks and
+# runs each chunk on exactly one executor, so a Pure_Mapping (a body that
+# writes ONLY its own index slot and reads no shared mutable state) is
+# data-race-free by construction. The observable result therefore must
+# equal the serial loop's result for the same f (R7.2, R3.6). On a
+# single-core / no-thread target the same path degrades to a serial loop
+# (R3.4, R3.5), which trivially matches.
+#
+# To stress load imbalance / work stealing (R4.4) the mapping does a
+# deterministic, per-index busy loop whose length depends only on i, so
+# different indices cost different amounts of CPU. A correct work-stealing
+# scheduler must still produce the identical mapping no matter how the
+# uneven work gets redistributed across idle workers.
+#
+# NOTE on worker count: parallel_for uses the process-wide default pool
+# whose worker count is derived from cpu_count() (the real Core_Count
+# path). There is no public API in parallel_for to swap the default pool's
+# worker count, so this harness exercises the default pool across many
+# random N — which already covers the live multi-worker scheduling path.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed LCG seed (Random.seed) so the run is reproducible.
+#   * >= 100 iterations. Each iteration picks a random N in [1, 2000].
+#   * Two raw i32 buffers of N*4 bytes are allocated (out_parallel and
+#     out_serial). parallel_for fills the first; a plain while-loop fills
+#     the second using the SAME pure mapping helper.
+#   * After both are filled, assert out_parallel[i] == out_serial[i] for
+#     every i; any mismatch is tallied as a property violation.
+#   * Both buffers are freed every iteration (no cross-iteration leak).
+#
+# A watchdog thread turns any deadlock (e.g. a hang where the parallel
+# fill never completes) into a clear FAIL via Process.exit(1) instead of
+# hanging the runner — important because this drives the real default
+# pool's workers.
+
+const ITERATIONS:  i32 = 150
+const MAX_N:       i32 = 2000
+const WATCHDOG_MS: i32 = 30000
+
+# A pure, index-derived constant folded into the mapping so the values
+# are not trivially i*i. Depends only on the fixed seed, not on timing.
+const MAP_CONST: i32 = 1337
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# The Pure_Mapping f(i): a value that depends ONLY on i (and the build's
+# fixed MAP_CONST). Before computing the result it spins a deterministic,
+# per-index busy loop so different indices cost different amounts of CPU
+# (load imbalance, R4.4). The busy loop's length is a pure function of i,
+# so it never changes the produced value — it only changes timing, which
+# a correct scheduler must be insensitive to.
+fun pure_map(i: i32) -> i32:
+    # Variable-length busy work: 0..63 spins, derived purely from i.
+    spins: i32 = i % 64
+    acc:   i32 = 0
+    s:     i32 = 0
+    while s < spins:
+        acc = acc + s
+        s = s + 1
+    # Result depends only on i (acc is a pure function of i too, but we
+    # fold in i*i + MAP_CONST as the meaningful payload).
+    return i * i + MAP_CONST + (acc % 7)
+
+# Per-index body: write f(i) into this index's own slot. Writing ONLY
+# slot i (no shared mutable state) is what makes this a Pure_Mapping, so
+# the parallel and serial fills are guaranteed race-free and comparable.
+fun _map_one(buf: i64, i: i32):
+    Memory.write_i32(buf + (i as i64) * 4, pure_map(i))
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in parallel == serial mapping")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized N sequence.
+    Random.seed(987654321 as i64)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random N in [1, MAX_N]. next_i32() is already non-negative.
+        n: i32 = 1 + (Random.next_i32() % MAX_N)
+
+        # Two i32 buffers: one filled in parallel, one filled serially.
+        out_parallel: i64 = Memory.malloc((n as i64) * 4)
+        if out_parallel == 0:
+            fail("malloc out_parallel failed")
+            iter = iter + 1
+            continue
+        out_serial: i64 = Memory.malloc((n as i64) * 4)
+        if out_serial == 0:
+            fail("malloc out_serial failed")
+            Memory.free(out_parallel)
+            iter = iter + 1
+            continue
+
+        # Parallel fill: each index writes f(i) into its own slot.
+        pbase: i64 = out_parallel
+        body: @heap fun(i32) = fun(i: i32) _map_one(pbase, i)
+        parallel_for(n, body)
+
+        # Serial fill: same pure mapping, plain in-order loop.
+        i: i32 = 0
+        while i < n:
+            _map_one(out_serial, i)
+            i = i + 1
+
+        # The two outputs must be byte-for-byte identical (R7.2, R3.6).
+        j: i32 = 0
+        while j < n:
+            pv: i32 = Memory.read_i32(out_parallel + (j as i64) * 4)
+            sv: i32 = Memory.read_i32(out_serial + (j as i64) * 4)
+            if pv != sv:
+                fail("parallel result differs from serial at an index")
+            j = j + 1
+
+        # Release this iteration's buffers (no cross-iteration leak).
+        Memory.free(out_parallel)
+        Memory.free(out_serial)
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 2: parallel == serial pure mapping ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly. The default
+    # pool's worker threads intentionally never join here (no shutdown in
+    # this property), so a direct process exit guarantees prompt,
+    # deterministic termination.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

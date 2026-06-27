@@ -1,0 +1,119 @@
+import std
+
+# Feature: dolet-parallel, Property 8: Shutdown idempotence
+#
+# Property 8 (Validates: Requirements 5.8, 7.6):
+#   For any number of consecutive shutdown calls on a pool, the
+#   observable result is identical to a single shutdown and every call
+#   after the first returns without error.
+#
+# The pool's shutdown() (std/thread_pool.dlt) does a CAS
+# RUNNING(1) -> SHUTDOWN(2): only the thread that wins the CAS tears the
+# pool down (signals exit, bumps the epoch, joins every worker, frees the
+# per-worker deques + the two arrays, releases the lifecycle atomics and
+# the park mutex). The lone `state` AtomicI32 is DELIBERATELY kept alive
+# so a repeat shutdown() CAS-checks state, sees a non-RUNNING value, and
+# returns early — no use-after-free, no double free, no crash. After the
+# first shutdown worker_count() is 0 and stays 0 across all repeats. That
+# is precisely R5.8 (shutdown when already shut down returns without
+# error) and R7.6 (shutdown more than once behaves identically to one).
+#
+# This is a deterministic randomized stress harness:
+#   * Fixed LCG seed (Random.seed) so the run is reproducible.
+#   * >= 100 iterations, each building a fresh pool with a random small
+#     worker count (0..4 — exercises both serial-mode n==0 pools and real
+#     worker pools) and then calling shutdown() a random number of times
+#     (2..6) back to back.
+#   * After the FIRST shutdown, worker_count() must be 0, and it must
+#     stay 0 across every repeated call; no repeated call may crash.
+#
+# A watchdog thread turns any deadlock (e.g. a hang in shutdown's worker
+# join) into a clear FAIL via Process.exit(1) instead of an indefinite
+# hang — important because this test spawns and joins real OS threads.
+
+const ITERATIONS: i32 = 150
+const WATCHDOG_MS: i32 = 30000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in shutdown idempotence")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we start building/tearing down pools.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized worker-count / repeat-count.
+    Random.seed(987654321 as i64)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random small worker count in [0, 4]: 0 is a valid serial-mode
+        # pool (nothing to join/free beyond the lifecycle atomics), 1..4
+        # spawn real OS worker threads that the first shutdown must join.
+        n: i32 = Random.next_i32() % 5
+        if n < 0:
+            n = 0 - n
+        pool: ThreadPool = ThreadPool.new_with_workers(n)
+
+        # Repeat shutdown 2..6 times in a row. The first call performs the
+        # real teardown; every later call must be a safe no-op.
+        reps: i32 = 2 + (Random.next_i32() % 5)
+        if reps < 2:
+            reps = 2
+
+        # First shutdown: the single real teardown.
+        pool.shutdown()
+        if pool.worker_count() != 0:
+            fail("worker_count not 0 after first shutdown")
+
+        # Every subsequent shutdown must behave identically to the single
+        # shutdown: return without error and leave worker_count() at 0.
+        r: i32 = 1
+        while r < reps:
+            pool.shutdown()
+            if pool.worker_count() != 0:
+                fail("worker_count changed across repeated shutdown")
+            r = r + 1
+
+        # Occasionally yield to interleave teardown with the watchdog and
+        # any not-yet-scheduled worker exits.
+        if (Random.next_i32() % 8) == 0:
+            Thread.yield_now()
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 8: shutdown idempotence ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

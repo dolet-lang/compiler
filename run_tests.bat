@@ -154,8 +154,23 @@ for %%f in (
     closures_locals_in_body
     thread_basic
     thread_parallel_sum
+    cpu_count_basic
     atomic_counter
     atomic_cas
+    parallel_deque_basic
+    parallel_init_idempotence
+    parallel_shutdown_idempotence
+    parallel_exactly_once
+    parallel_eq_serial
+    parallel_exact_count
+    parallel_empty_range
+    parallel_explicit_workers
+    parallel_no_deadlock
+    spawn_task_basic
+    spawn_task_exactly_once
+    parallel_leak_free
+    frog_cull_equiv
+    parallel_perf_smoke
     mutex_basic
     random_basic
     struct_nested_global

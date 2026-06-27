@@ -1,0 +1,299 @@
+import std
+
+# Feature: dolet-parallel, Property 11: Engine parallel culling produces the same visible set
+#
+# Property 11 (Validates: Requirements 10.2, 10.3):
+#   Computing the per-instance visibility set with engine_parallel_for /
+#   parallel_for produces EXACTLY the same visible set as a plain serial
+#   loop, using the SAME visibility math the Frog engine uses for CPU
+#   frustum culling. This is the Pure_Mapping property that justifies
+#   parallelizing the engine's culling pre-pass (R10.2) — each instance
+#   writes ONLY its own result slot, reads no shared mutable state, so the
+#   parallel and serial passes are race-free and must agree. On a
+#   no-OS-threads target parallel_for degrades to serial automatically
+#   (R10.3), which trivially matches.
+#
+# This test is HEADLESS: it does NOT import frog (which needs a Vulkan
+# SDK + window + GPU and cannot build in this environment). Instead it
+# REPLICATES the engine's visibility math (_frog_instance_visible from
+# packages/frog/render/gpu_renderer_core.dlt) as the module-level pure
+# function `_cull_visible`, copied with the SAME constants (2.25, 2.0,
+# 1.08, 0.001), the same @sqrt usage, and the same early-return plane
+# tests — including vp==0 -> 1 and model==0 -> 0. Proving parallel ==
+# serial over this exact math is what validates the engine pre-pass.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed LCG seed (Random.seed) so the run is reproducible.
+#   * >= 100 iterations. Each picks a random N in [1, 1500].
+#   * A fixed perspective-ish vp matrix culls some instances and keeps
+#     others. Each instance gets its own 64-byte model matrix (identity +
+#     random translation) and a small random bound radius.
+#   * SERIAL pass fills serial_vis[i] = _cull_visible(...).
+#   * PARALLEL pass: parallel_for(N, body) where the body captures the
+#     base pointers as i64 and writes ONLY parallel_vis[i].
+#   * Assert serial_vis[i] == parallel_vis[i] for all i (tally mismatches).
+#   * Assert the set is MIXED across the whole run (some visible AND some
+#     culled) so the test isn't trivially all-1 or all-0.
+#   * Every per-iteration allocation is freed (no leak).
+#
+# A watchdog thread turns any deadlock into a clear FAIL via
+# Process.exit(1) so the runner never hangs.
+
+const ITERATIONS:  i32 = 120
+const MAX_N:       i32 = 1500
+const WATCHDOG_MS: i32 = 30000
+
+g_fails:          AtomicI32 = AtomicI32.new(0)
+g_done:           AtomicI32 = AtomicI32.new(0)
+g_total_visible:  AtomicI32 = AtomicI32.new(0)
+g_total_culled:   AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# ----------------------------------------------------------------------
+# _cull_abs_f32 — exact copy of _frog_abs_f32 (gpu_renderer_core.dlt:22).
+# ----------------------------------------------------------------------
+fun _cull_abs_f32(v: f32) -> f32:
+    if v < 0.0:
+        return 0.0 - v
+    return v
+
+# ----------------------------------------------------------------------
+# _cull_visible — exact replica of _frog_instance_visible
+# (gpu_renderer_core.dlt ~96-139). SAME constants (2.25, 2.0, 1.08,
+# 0.001), SAME @sqrt usage, SAME early-return plane tests, SAME
+# vp==0 -> 1 / model==0 -> 0 edge cases. Returns 1 (visible) or 0.
+# ----------------------------------------------------------------------
+fun _cull_visible(vp: i64, model: i64, bx: f32, by: f32, bz: f32, br: f32) -> i32:
+    if vp == 0:
+        return 1
+    if model == 0:
+        return 0
+
+    x: f32 = Memory.read_f32(model + 0) * bx + Memory.read_f32(model + 16) * by + Memory.read_f32(model + 32) * bz + Memory.read_f32(model + 48)
+    y: f32 = Memory.read_f32(model + 4) * bx + Memory.read_f32(model + 20) * by + Memory.read_f32(model + 36) * bz + Memory.read_f32(model + 52)
+    z: f32 = Memory.read_f32(model + 8) * bx + Memory.read_f32(model + 24) * by + Memory.read_f32(model + 40) * bz + Memory.read_f32(model + 56)
+
+    cx: f32 = Memory.read_f32(vp + 0) * x + Memory.read_f32(vp + 16) * y + Memory.read_f32(vp + 32) * z + Memory.read_f32(vp + 48)
+    cy: f32 = Memory.read_f32(vp + 4) * x + Memory.read_f32(vp + 20) * y + Memory.read_f32(vp + 36) * z + Memory.read_f32(vp + 52)
+    cz: f32 = Memory.read_f32(vp + 8) * x + Memory.read_f32(vp + 24) * y + Memory.read_f32(vp + 40) * z + Memory.read_f32(vp + 56)
+    cw: f32 = Memory.read_f32(vp + 12) * x + Memory.read_f32(vp + 28) * y + Memory.read_f32(vp + 44) * z + Memory.read_f32(vp + 60)
+
+    sx: f32 = @sqrt(Memory.read_f32(model + 0) * Memory.read_f32(model + 0) + Memory.read_f32(model + 4) * Memory.read_f32(model + 4) + Memory.read_f32(model + 8) * Memory.read_f32(model + 8))
+    sy: f32 = @sqrt(Memory.read_f32(model + 16) * Memory.read_f32(model + 16) + Memory.read_f32(model + 20) * Memory.read_f32(model + 20) + Memory.read_f32(model + 24) * Memory.read_f32(model + 24))
+    sz: f32 = @sqrt(Memory.read_f32(model + 32) * Memory.read_f32(model + 32) + Memory.read_f32(model + 36) * Memory.read_f32(model + 36) + Memory.read_f32(model + 40) * Memory.read_f32(model + 40))
+    max_scale: f32 = sx
+    if sy > max_scale:
+        max_scale = sy
+    if sz > max_scale:
+        max_scale = sz
+    if max_scale < 0.001:
+        max_scale = 1.0
+    bounds: f32 = br * max_scale * 2.25 + 2.0
+    limit: f32 = _cull_abs_f32(cw) * 1.08 + bounds
+
+    if cw < 0.0 - bounds:
+        return 0
+    if cx < 0.0 - limit:
+        return 0
+    if cx > limit:
+        return 0
+    if cy < 0.0 - limit:
+        return 0
+    if cy > limit:
+        return 0
+    if cz < 0.0 - bounds:
+        return 0
+    if cz > _cull_abs_f32(cw) + bounds:
+        return 0
+    return 1
+
+# ----------------------------------------------------------------------
+# _cull_one — per-instance body. Reads instance `i`'s model pointer and
+# bounds from the parallel arrays and writes ONLY its own result slot in
+# `out` (Pure_Mapping: no shared mutable state, race-free).
+# ----------------------------------------------------------------------
+fun _cull_one(vp: i64, models: i64, bxs: i64, bys: i64, bzs: i64, brs: i64, out: i64, i: i32):
+    model: i64 = Memory.read_i64(models + (i as i64) * 8)
+    bx: f32 = Memory.read_f32(bxs + (i as i64) * 4)
+    by: f32 = Memory.read_f32(bys + (i as i64) * 4)
+    bz: f32 = Memory.read_f32(bzs + (i as i64) * 4)
+    br: f32 = Memory.read_f32(brs + (i as i64) * 4)
+    v: i32 = _cull_visible(vp, model, bx, by, bz, br)
+    Memory.write_i32(out + (i as i64) * 4, v)
+
+# Build the fixed view-projection matrix (64 bytes, 16 f32, column-major).
+# A perspective projection (fov 60, aspect 1, near 0.1, far 100) with an
+# identity view. Exact values don't matter — only that some instances
+# fall inside the frustum and some outside.
+fun build_vp() -> i64:
+    vp: i64 = Memory.malloc_zeroed(64) as i64
+    if vp == 0:
+        return 0
+    # col0
+    Memory.write_f32(vp + 0,  1.7320508)   # f / aspect
+    # col1
+    Memory.write_f32(vp + 20, 1.7320508)   # f
+    # col2
+    Memory.write_f32(vp + 40, 0.0 - 1.002002)   # (far+near)/(near-far)
+    Memory.write_f32(vp + 44, 0.0 - 1.0)        # -1 (perspective divide)
+    # col3
+    Memory.write_f32(vp + 56, 0.0 - 0.2002002)  # (2*far*near)/(near-far)
+    return vp
+
+# Deadlock watchdog.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in frog cull equivalence")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    vp: i64 = build_vp()
+    if vp == 0:
+        fail("malloc vp failed")
+        g_done.store(1)
+        Process.exit(1)
+
+    # Fixed seed -> reproducible scene sequence.
+    Random.seed(424242 as i64)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        n: i32 = 1 + (Random.next_i32() % MAX_N)
+
+        # Per-instance arrays.
+        models: i64 = Memory.malloc((n as i64) * 8)          # i64 model ptrs
+        bxs:    i64 = Memory.malloc_zeroed((n as i64) * 4)   # bound center x (0)
+        bys:    i64 = Memory.malloc_zeroed((n as i64) * 4)   # bound center y (0)
+        bzs:    i64 = Memory.malloc_zeroed((n as i64) * 4)   # bound center z (0)
+        brs:    i64 = Memory.malloc((n as i64) * 4)          # bound radius
+        serial_vis:   i64 = Memory.malloc((n as i64) * 4)
+        parallel_vis: i64 = Memory.malloc((n as i64) * 4)
+
+        if models == 0 or brs == 0 or serial_vis == 0 or parallel_vis == 0 or bxs == 0 or bys == 0 or bzs == 0:
+            fail("malloc instance arrays failed")
+            iter = iter + 1
+            continue
+
+        # Build N instances: identity model matrix + random translation so
+        # some land inside the frustum and some outside.
+        k: i32 = 0
+        while k < n:
+            m: i64 = Memory.malloc_zeroed(64)
+            # identity diagonal
+            Memory.write_f32(m + 0,  1.0)
+            Memory.write_f32(m + 20, 1.0)
+            Memory.write_f32(m + 40, 1.0)
+            Memory.write_f32(m + 60, 1.0)
+            # random translation: tx,ty in [-80,80], tz in [-100,20]
+            rx: f64 = Random.next_f64()
+            ry: f64 = Random.next_f64()
+            rz: f64 = Random.next_f64()
+            tx: f32 = ((rx * 2.0 - 1.0) * 80.0) as f32
+            ty: f32 = ((ry * 2.0 - 1.0) * 80.0) as f32
+            tz: f32 = (rz * 120.0 - 100.0) as f32
+            Memory.write_f32(m + 48, tx)
+            Memory.write_f32(m + 52, ty)
+            Memory.write_f32(m + 56, tz)
+            Memory.write_i64(models + (k as i64) * 8, m)
+            # random small bound radius in [0.5, 3.0]
+            rr: f64 = Random.next_f64()
+            br: f32 = (rr * 2.5 + 0.5) as f32
+            Memory.write_f32(brs + (k as i64) * 4, br)
+            k = k + 1
+
+        # SERIAL pass.
+        si: i32 = 0
+        while si < n:
+            model: i64 = Memory.read_i64(models + (si as i64) * 8)
+            bx: f32 = Memory.read_f32(bxs + (si as i64) * 4)
+            by: f32 = Memory.read_f32(bys + (si as i64) * 4)
+            bz: f32 = Memory.read_f32(bzs + (si as i64) * 4)
+            brv: f32 = Memory.read_f32(brs + (si as i64) * 4)
+            Memory.write_i32(serial_vis + (si as i64) * 4, _cull_visible(vp, model, bx, by, bz, brv))
+            si = si + 1
+
+        # PARALLEL pass: capture base pointers as i64 in the @heap body.
+        vp_c:     i64 = vp
+        models_c: i64 = models
+        bxs_c:    i64 = bxs
+        bys_c:    i64 = bys
+        bzs_c:    i64 = bzs
+        brs_c:    i64 = brs
+        out_c:    i64 = parallel_vis
+        body: @heap fun(i32) = fun(i: i32) _cull_one(vp_c, models_c, bxs_c, bys_c, bzs_c, brs_c, out_c, i)
+        parallel_for(n, body)
+
+        # Compare + tally; also accumulate the mixed-set diagnostics.
+        j: i32 = 0
+        while j < n:
+            pv: i32 = Memory.read_i32(parallel_vis + (j as i64) * 4)
+            sv: i32 = Memory.read_i32(serial_vis + (j as i64) * 4)
+            if pv != sv:
+                fail("parallel visible set differs from serial at an index")
+            if sv == 1:
+                g_total_visible.fetch_add(1)
+            else:
+                g_total_culled.fetch_add(1)
+            j = j + 1
+
+        # Free this iteration's allocations (no leak).
+        f: i32 = 0
+        while f < n:
+            Memory.free(Memory.read_i64(models + (f as i64) * 8))
+            f = f + 1
+        Memory.free(models)
+        Memory.free(bxs)
+        Memory.free(bys)
+        Memory.free(bzs)
+        Memory.free(brs)
+        Memory.free(serial_vis)
+        Memory.free(parallel_vis)
+        iter = iter + 1
+
+    Memory.free(vp)
+
+    vis: i32 = g_total_visible.load()
+    cul: i32 = g_total_culled.load()
+
+    # The visible set must be MIXED (not trivially all-1 or all-0),
+    # otherwise the equivalence proof is vacuous.
+    if vis == 0:
+        fail("no instances were ever visible - vp/translation spread is degenerate")
+    if cul == 0:
+        fail("no instances were ever culled - vp/translation spread is degenerate")
+
+    print("--- Property 11: engine parallel culling == serial visible set ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("total visible")
+    print(vis)
+    print("total culled")
+    print(cul)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Release the process-wide pool, signal the watchdog, exit cleanly.
+    parallel_shutdown()
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

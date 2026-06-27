@@ -1,0 +1,138 @@
+import std
+
+# Feature: dolet-parallel, Property 4: Empty range invokes the body zero times
+#
+# Property 4 (Validates: Requirements 3.3):
+#   For any count c <= 0 (zero OR negative) and any Body_Closure, the call
+#   parallel_for(c, body) must invoke the Body_Closure EXACTLY ZERO times
+#   and return immediately. There is no index in the range [0, c) when
+#   c <= 0, so a correct parallel_for never touches the body at all.
+#
+# This pins down the empty-range guard at the very top of parallel_for
+# (std/parallel.dlt): `if count <= 0: return`. The guard fires BEFORE the
+# default pool is even consulted, so neither the parallel path nor the
+# serial fallback should ever call body. Any invocation — even one — is a
+# violation of R3.3.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed LCG seed (Random.seed), distinct from the sibling property
+#     tests, so the run is reproducible with diverse inputs.
+#   * >= 100 iterations. Each iteration picks a NON-POSITIVE count and
+#     calls parallel_for(c, body) where body increments a SHARED
+#     invocation counter. We cover BOTH zero and negative counts:
+#       - even iterations  -> count == 0 exactly,
+#       - odd  iterations  -> a random negative in [-1000, -1].
+#     Iteration 0 (even) therefore always tests the exact-0 boundary, and
+#     the odd iterations spread across a wide negative span.
+#   * A SINGLE process-wide AtomicI32 invocation counter (g_invocations)
+#     is reset to 0 with store(0) before each parallel_for call. After the
+#     call returns, assert g_invocations.load() == 0. Any non-zero value
+#     means the body ran for a c <= 0 range — tallied as a violation. Using
+#     a global atomic that we reset means there is nothing to free per
+#     iteration (no malloc, no leak).
+#   * parallel_for(c<=0) must return immediately with no hang; the
+#     watchdog still guards the run in case the guard regresses into the
+#     scheduler and deadlocks.
+#
+# Passing the SHARED counter to a @heap fun(i32) that crosses the thread
+# boundary: AtomicI32 is @heap, so the value IS its storage pointer. We
+# capture g_invocations' i64 address and recover it inside a module-level
+# helper (_bump): c = addr as AtomicI32; c.fetch_add(1). This mirrors the
+# capture pattern of parallel_exact_count.dlt's _count_one — if the body
+# were ever (incorrectly) invoked, the increment would be observed.
+#
+# A watchdog thread turns any deadlock into a clear FAIL via
+# Process.exit(1) instead of hanging the runner.
+
+const ITERATIONS:  i32 = 150
+const MAX_NEG:     i32 = 1001    # random negative magnitude upper bound (exclusive of 1001)
+const WATCHDOG_MS: i32 = 30000
+
+g_fails:       AtomicI32 = AtomicI32.new(0)
+g_done:        AtomicI32 = AtomicI32.new(0)
+g_invocations: AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Per-index body target: bump the shared invocation counter. For a
+# correct parallel_for over a c <= 0 range this is NEVER called; any call
+# at all is a property violation. The counter's heap address is passed as
+# an i64 (the @heap AtomicI32 value) and recovered here.
+fun _bump(addr: i64):
+    c: AtomicI32 = addr as AtomicI32
+    c.fetch_add(1)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in empty-range property")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized count sequence (distinct seed).
+    Random.seed(99001122 as i64)
+
+    addr: i64 = g_invocations as i64
+    body: @heap fun(i32) = fun(i: i32) _bump(addr)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Choose a NON-POSITIVE count. Even iters test exactly 0; odd iters
+        # test a random negative in [-1000, -1]. Iteration 0 is even, so
+        # the exact-0 boundary is always exercised.
+        c: i32 = 0
+        if iter % 2 == 0:
+            c = 0
+        else:
+            # next_i32() is non-negative; map to [1, 1000] then negate.
+            mag: i32 = 1 + (Random.next_i32() % (MAX_NEG - 1))
+            c = 0 - mag
+
+        # Reset the shared invocation counter before the call.
+        g_invocations.store(0)
+
+        # The body must be invoked ZERO times for any c <= 0 (R3.3).
+        parallel_for(c, body)
+
+        # After return, the counter must still be 0 — body never ran.
+        invoked: i32 = g_invocations.load()
+        if invoked != 0:
+            fail("body invoked on a non-positive range (count <= 0)")
+
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 4: empty range invokes the body zero times ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly. The default
+    # pool's worker threads intentionally never join here (no shutdown in
+    # this property), so a direct process exit guarantees prompt,
+    # deterministic termination.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

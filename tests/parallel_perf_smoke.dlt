@@ -1,0 +1,155 @@
+import std
+
+# Feature: dolet-parallel, Property: perf smoke (informational, R8.1/R8.2/R8.3)
+#
+# INFORMATIONAL perf smoke test for parallel_for.
+#
+# Requirement 8 expresses a PERFORMANCE INTENT: on a multi-core machine
+# an embarrassingly-parallel workload run through parallel_for should
+# complete measurably faster than the same workload run serially
+# (R8.1), the persistent pool keeps per-item scheduling overhead low
+# (R8.2), and the engine culling pre-pass benefits from this (R8.3).
+#
+# Timing is inherently machine-dependent: on a single-core box, a busy
+# CI runner, or under a debugger the parallel path can legitimately be
+# the same speed or even slower. Therefore this test NEVER fails on
+# timing. It prints both durations and the speedup ratio for human
+# inspection, but the ONLY thing that decides PASS/FAIL is a hard
+# CORRECTNESS gate: the parallel output buffer must equal the serial
+# output buffer element-for-element. As long as the parallel result is
+# correct it prints "PASS", so it can never break run_tests.bat due to
+# timing noise.
+#
+# Workload (embarrassingly parallel, Pure_Mapping):
+#   * A large N (200000) i32 buffer. Each index i computes a heavy pure
+#     function heavy_compute(i) and writes ONLY its own slot i. No shared
+#     mutable state -> race-free by construction, so parallel and serial
+#     fills must produce identical buffers.
+#   * heavy_compute(i) is a deterministic fixed-iteration arithmetic
+#     grind (no timing/randomness in the value) so the SAME mapping is
+#     produced whether run in parallel or serially.
+#
+# Procedure:
+#   1. Fill buf_parallel via parallel_for(N, body)  -> time it (ms).
+#   2. Fill buf_serial via a plain while-loop using the SAME body/mapping
+#      -> time it (ms).
+#   3. Print both durations + speedup ratio (informational).
+#   4. CORRECTNESS GATE: assert buf_parallel[i] == buf_serial[i] for all
+#      i. PASS iff every element matches; FAIL otherwise.
+#
+# A watchdog thread (Thread.spawn) turns any deadlock/hang in the
+# parallel fill into a clear FAIL via Process.exit(1) so the runner
+# never hangs while driving the default pool. On success we
+# Process.exit(0) for prompt, deterministic termination.
+
+const N:           i32 = 200000
+const WATCHDOG_MS: i32 = 60000
+
+# A pure constant folded into the mapping so values aren't trivial.
+const MAP_CONST: i32 = 1013904223
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# heavy_compute(i): a deterministic, CPU-heavy pure function of i ONLY.
+# Runs a fixed number of arithmetic iterations so each index costs real
+# work (makes the parallel speedup observable on multi-core) while the
+# produced value depends solely on i -> identical in parallel and serial.
+fun heavy_compute(i: i32) -> i32:
+    acc: i32 = i + MAP_CONST
+    k:   i32 = 0
+    while k < 800:
+        acc = acc * 1664525 + 1013904223
+        acc = acc ^ (acc >> 13)
+        acc = acc + (i * (k + 1))
+        k = k + 1
+    return acc
+
+# Per-index body: write heavy_compute(i) into this index's own slot.
+fun _compute_one(buf: i64, i: i32):
+    Memory.write_i32(buf + (i as i64) * 4, heavy_compute(i))
+
+# Deadlock watchdog.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in parallel perf smoke")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    buf_parallel: i64 = Memory.malloc((N as i64) * 4)
+    buf_serial:   i64 = Memory.malloc((N as i64) * 4)
+    if buf_parallel == 0 or buf_serial == 0:
+        fail("malloc buffers failed")
+        g_done.store(1)
+        Process.exit(1)
+
+    # --- Parallel fill (timed) ---
+    pbase: i64 = buf_parallel
+    body: @heap fun(i32) = fun(i: i32) _compute_one(pbase, i)
+    p_start: i64 = Time.now_ms()
+    parallel_for(N, body)
+    p_ms: i64 = Time.elapsed_ms(p_start)
+
+    # --- Serial fill (timed) using the SAME body/mapping ---
+    s_start: i64 = Time.now_ms()
+    i: i32 = 0
+    while i < N:
+        _compute_one(buf_serial, i)
+        i = i + 1
+    s_ms: i64 = Time.elapsed_ms(s_start)
+
+    # --- Correctness gate: the ONLY thing that decides PASS/FAIL ---
+    j: i32 = 0
+    while j < N:
+        pv: i32 = Memory.read_i32(buf_parallel + (j as i64) * 4)
+        sv: i32 = Memory.read_i32(buf_serial + (j as i64) * 4)
+        if pv != sv:
+            fail("parallel result differs from serial at an index")
+            j = N
+        j = j + 1
+
+    # --- Informational timing report (never gates PASS/FAIL) ---
+    print("--- perf smoke (informational): parallel_for vs serial ---")
+    print("N")
+    print(N)
+    print("parallel ms")
+    print(p_ms)
+    print("serial ms")
+    print(s_ms)
+    print("speedup x1000 (serial*1000/parallel; >1000 means parallel faster)")
+    if p_ms > 0 as i64:
+        print((s_ms * 1000 as i64) / p_ms)
+    else:
+        print("parallel too fast to measure (sub-ms)")
+
+    Memory.free(buf_parallel)
+    Memory.free(buf_serial)
+
+    # Verdict is purely the correctness gate.
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+
+    # Release the process-wide pool, signal the watchdog, exit cleanly.
+    parallel_shutdown()
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

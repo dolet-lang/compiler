@@ -1,0 +1,268 @@
+import std
+
+# Feature: dolet-parallel, Property 10: Termination without deadlock for any core count
+#
+# Property 10 (Validates: Requirements 7.7):
+#   For any Core_Count (worker count) from 0 upward and any N >= 0, a
+#   parallel_for(N, body) call TERMINATES (returns) within a bounded time
+#   while workers are stealing and the pool is draining — it never
+#   deadlocks. The guarantee must hold across the WHOLE range of worker
+#   counts from 0 up to 2x the machine's logical core count, not just the
+#   single fixed count the process-wide default pool happens to use.
+#
+# Why this needs explicit pools:
+#   The public parallel_for() always runs on the process-wide default
+#   pool, whose worker count is pinned by CpuInfo.cpu_count(). To exercise
+#   "any core count from 0 to 2x cpu_count" we must drive a real parallel
+#   workload against EXPLICIT pools built with ThreadPool.new_with_workers(n).
+#   run_on_pool() below replicates parallel_for's exact submission +
+#   caller-drain logic (std/parallel.dlt) but against a GIVEN pool, reusing
+#   the same internal helpers (_pool_caller_drain -> _pool_caller_steal_one
+#   -> _pool_execute_item) so it is faithful to the production path rather
+#   than a re-implementation.
+#
+# The deadlock-prone shapes are forced explicitly:
+#   * iteration 0 -> n == 0 (serial-mode pool: must run the body in-order
+#     on the calling thread with no deques to submit to),
+#   * iteration 1 -> n == 1 (the single-worker case, where a naive design
+#     can lose a wakeup or block the lone worker behind the caller).
+#   Every other iteration picks a random n in [0, 2x cpu_count] with a
+#   random N in [1, 2000], and a per-index busy loop of variable length so
+#   chunks are uneven and stealing/load-balancing is genuinely exercised.
+#
+# Termination is the property under test, so the workload doubles as a
+# completeness check: each index writes its own slot in an i32 buffer
+# (race-free — unique slot per index), and after the run every slot must
+# equal exactly 1 (Property-1 style hits[i]==1). A skip (slot 0) or a
+# duplicate (slot >= 2) is tallied as a failure, strengthening this into a
+# termination+correctness test.
+#
+# A watchdog thread converts ANY hang (a genuine deadlock where remaining
+# never reaches 0) into a clear FAIL via Process.exit(1) instead of
+# hanging the runner. Because this test stands up MANY pools (each with up
+# to 2x cpu_count real OS threads) and shuts each down, the watchdog gets
+# a generous timeout.
+
+const ITERATIONS:  i32 = 120
+const MAX_N:       i32 = 2000
+const WATCHDOG_MS: i32 = 60000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Per-index body: a deterministic variable-length busy loop (length
+# depends on i so chunks are uneven and stealing is forced), then write
+# this index's own slot exactly once. Writing a unique slot per index is
+# race-free, yet still exposes skips (slot stays 0) and duplicates (slot
+# becomes >= 2) after the fact.
+fun _work_one(buf: i64, i: i32):
+    iters: i32 = (i % 64) + 1
+    acc: i32 = 0
+    k: i32 = 0
+    while k < iters:
+        acc = acc + ((i * 31 + k) % 7)
+        k = k + 1
+    # acc is a sum of non-negative remainders, so it is never < 0; the
+    # branch keeps the busy loop live (not dead-code) while the write is
+    # always exactly 1.
+    v: i32 = 1
+    if acc < 0:
+        v = 2
+    Memory.write_i32(buf + (i as i64) * 4, v)
+
+# ----------------------------------------------------------------------
+# run_on_pool — run body(i) for every i in [0, count) against the GIVEN
+# explicit pool, mirroring parallel_for's logic exactly (std/parallel.dlt)
+# but parameterized on the pool instead of the process-wide default. This
+# is what lets the property sweep worker counts from 0 to 2x cpu_count.
+#
+# Faithful reuse of the production drain path:
+#   * partition [0,count) into the same chunks parallel_for uses,
+#   * build real 40-byte RANGE records, submit_chunk round-robin,
+#   * signal_work, then caller participates via _pool_caller_drain
+#     (which steals + executes through the SAME _pool_execute_item the
+#     workers use), then spins on remaining == 0.
+#   * n == 0 (serial-mode pool) runs the body in-order on the calling
+#     thread — there are no deques to submit to.
+# ----------------------------------------------------------------------
+fun run_on_pool(pool: ThreadPool, count: i32, body: @heap fun(i32)):
+    if count <= 0:
+        return
+
+    workers: i32 = pool.worker_count()
+
+    # Serial-mode pool (n == 0): run in-order on the calling thread. This
+    # is the deadlock-free path for a pool with no workers (mirrors
+    # parallel_for's serial fallback) — there are no deques to push to.
+    if workers == 0:
+        si: i32 = 0
+        while si < count:
+            body(si)
+            si = si + 1
+        return
+
+    # Same chunk math as parallel_for: oversubscribe relative to the
+    # executor count (workers + participating caller), cap to count, min 1.
+    num_chunks: i32 = (workers + 1) * 4
+    if num_chunks > count:
+        num_chunks = count
+    if num_chunks < 1:
+        num_chunks = 1
+
+    # Submission arena: one 40-byte RANGE record per chunk. Degrade to a
+    # serial loop on allocation failure rather than crash (still correct).
+    arena: i64 = Memory.malloc((num_chunks as i64) * 40) as i64
+    if arena == 0:
+        fi: i32 = 0
+        while fi < count:
+            body(fi)
+            fi = fi + 1
+        return
+
+    remaining: AtomicI64 = AtomicI64.new(num_chunks as i64)
+    body_ptr: i64 = body as i64
+    rem_ptr: i64 = remaining as i64
+
+    # Even split; the first `extra` chunks carry one additional index.
+    base: i32 = count / num_chunks
+    extra: i32 = count - base * num_chunks
+
+    lo: i32 = 0
+    ci: i32 = 0
+    while ci < num_chunks:
+        csize: i32 = base
+        if ci < extra:
+            csize = base + 1
+        hi: i32 = lo + csize
+
+        # Fully populate the RANGE record before publishing its handle:
+        #   0:kind=RANGE  8:body_ptr  16:lo  24:hi  32:remaining_ptr
+        rec: i64 = arena + (ci as i64) * 40
+        Memory.write_i64(rec + 0, WORK_KIND_RANGE)
+        Memory.write_i64(rec + 8, body_ptr)
+        Memory.write_i64(rec + 16, lo as i64)
+        Memory.write_i64(rec + 24, hi as i64)
+        Memory.write_i64(rec + 32, rem_ptr)
+
+        deque_idx: i32 = ci % workers
+        pool.submit_chunk(deque_idx, rec)
+
+        lo = hi
+        ci = ci + 1
+
+    # Publish the work count and wake parked workers.
+    pool.signal_work(num_chunks as i64)
+
+    # Caller participates in draining (steals + executes via the same
+    # _pool_execute_item the workers use) — guarantees forward progress.
+    _pool_caller_drain(pool, remaining)
+
+    # Final wait: the drain already blocks until remaining == 0, but spin
+    # once more in case a worker held the very last chunk.
+    while remaining.load() > 0 as i64:
+        Thread.yield_now()
+
+    # All chunks done — release the remaining counter and the arena.
+    Memory.free(remaining as i64)
+    Memory.free(arena)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in no-deadlock-any-core-count")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we start standing up pools.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed, distinct seed -> reproducible randomized (n, N) sequence.
+    Random.seed(31415926 as i64)
+
+    # Worker-count range: 0 .. 2x logical cores.
+    cpu:  i32 = CpuInfo.cpu_count()
+    maxw: i32 = cpu * 2
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random worker count in [0, 2x cpu_count]. next_i32() is
+        # non-negative. Force the two deadlock-prone shapes first:
+        #   iter 0 -> n == 0 (serial-mode pool)
+        #   iter 1 -> n == 1 (single-worker pool)
+        n: i32 = Random.next_i32() % (maxw + 1)
+        if iter == 0:
+            n = 0
+        if iter == 1:
+            n = 1
+
+        # Random N in [1, MAX_N].
+        bign: i32 = 1 + (Random.next_i32() % MAX_N)
+
+        # Build an EXPLICIT pool with exactly n workers (not the default
+        # pool) so we genuinely exercise this worker count.
+        pool: ThreadPool = ThreadPool.new_with_workers(n)
+
+        # Zero-allocate the per-index hit buffer.
+        buf: i64 = Memory.malloc_zeroed((bign as i64) * 4)
+        if buf == 0:
+            fail("malloc_zeroed failed")
+            pool.shutdown()
+            iter = iter + 1
+            continue
+
+        # Drive the parallel workload against THIS pool. Must terminate.
+        base: i64 = buf
+        body: @heap fun(i32) = fun(i: i32) _work_one(base, i)
+        run_on_pool(pool, bign, body)
+
+        # Termination + completeness: every index hit exactly once.
+        i: i32 = 0
+        while i < bign:
+            hits: i32 = Memory.read_i32(buf + (i as i64) * 4)
+            if hits != 1:
+                if hits == 0:
+                    fail("index skipped (hits == 0)")
+                else:
+                    fail("index hit more than once (hits >= 2)")
+            i = i + 1
+
+        # Release this iteration's buffer, then shut the pool down to join
+        # its worker threads (mandatory — otherwise we leak n OS threads).
+        Memory.free(buf)
+        pool.shutdown()
+
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 10: termination without deadlock for any core count ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("cpu_count")
+    print(cpu)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

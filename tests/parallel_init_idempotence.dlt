@@ -1,0 +1,109 @@
+import std
+
+# Feature: dolet-parallel, Property 7: Init idempotence
+#
+# Property 7 (Validates: Requirements 5.7, 7.5):
+#   For any sequence of Pool_Lifecycle initialization calls with no
+#   intervening shutdown, the resulting pool behaves identically to a
+#   single initialization — the same set of Worker_Threads stays
+#   unchanged and no additional threads are created.
+#
+# The process-wide default pool is the idempotent-init path under test.
+# _default_pool() (std/thread_pool.dlt) lazily builds the pool exactly
+# once, guarded by a CAS on g_default_pool_state (UNINIT->1); the winner
+# constructs ThreadPool.new() and publishes its address, and EVERY later
+# call returns that same published pool. That is precisely R5.7 / R7.5:
+# init invoked again with no intervening shutdown leaves the existing
+# Worker_Threads unchanged.
+#
+# This is a deterministic randomized stress harness:
+#   * Fixed LCG seed (Random.seed) so the interleaving is reproducible.
+#   * >= 100 iterations, each issuing 1..4 repeated _default_pool() calls
+#     with random yields between them to interleave with the live worker
+#     threads.
+#   * Each repeated call must return the SAME pool address (no second
+#     pool was ever built) and the SAME worker_count() (no extra
+#     Worker_Threads were created) as the very first initialization.
+#
+# A watchdog thread turns any deadlock (e.g. a hang in _default_pool's
+# publish-wait spin) into a clear FAIL instead of an indefinite hang.
+
+const ITERATIONS: i32 = 200
+const WATCHDOG_MS: i32 = 15000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in init idempotence")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we touch the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized interleaving.
+    Random.seed(123456789 as i64)
+
+    # First initialization establishes the baseline every later call
+    # must match exactly (same pool, same worker set).
+    base: ThreadPool = _default_pool()
+    base_addr: i64 = base as i64
+    base_workers: i32 = base.worker_count()
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Re-invoke init 1..4 times this iteration, with NO intervening
+        # shutdown — the exact precondition of R5.7 / R7.5.
+        reps: i32 = 1 + (Random.next_i32() % 4)
+        r: i32 = 0
+        while r < reps:
+            p: ThreadPool = _default_pool()
+            # Identical address => no second pool was constructed.
+            if (p as i64) != base_addr:
+                fail("pool address changed across repeated init")
+            # Identical worker count => no extra Worker_Threads created.
+            if p.worker_count() != base_workers:
+                fail("worker_count changed across repeated init")
+            r = r + 1
+        # Occasionally yield to interleave with the live worker threads.
+        if (Random.next_i32() % 8) == 0:
+            Thread.yield_now()
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 7: init idempotence ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("base worker_count")
+    print(base_workers)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly. The default
+    # pool's worker threads intentionally never join here (no shutdown
+    # in this property), so a direct process exit guarantees prompt,
+    # deterministic termination.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

@@ -1,0 +1,172 @@
+import std
+
+# Feature: dolet-parallel, Property 6: Each spawned task runs exactly once
+#
+# Property 6 (Validates: Requirements 6.2):
+#   For any batch of k Task_Closures submitted via spawn_task, after every
+#   returned TaskHandle has been wait()-ed, each spawned task has executed
+#   EXACTLY ONCE — none lost, none duplicated.
+#
+# How spawn_task guarantees this (library/std/parallel.dlt):
+#   spawn_task wraps `work` in a 24-byte TASK work-item, pushes it onto a
+#   worker deque, and signals the pool. A TASK item is run by exactly one
+#   executor because the owner's pop() and a thief's steal() race for the
+#   same handle via CAS on the deque `top` — exactly one wins, the loser
+#   gets ABORT and moves on (R4.2, R4.3). _pool_execute_item runs the
+#   closure once and flips its done atomic to 1. So k spawned tasks each
+#   run once; if we point them all at ONE shared counter, the counter must
+#   land on exactly k.
+#
+# Funneling k tasks into one shared counter (capture-by-address, the same
+# trick parallel_exact_count.dlt uses): AtomicI32 is @heap, so its value
+# IS its storage pointer. We capture the counter's i64 address and recover
+# it inside a module-level helper (_run_one): c = addr as AtomicI32;
+# c.fetch_add(1). All workers increment the very same atomic.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed LCG seed (distinct from the sibling property tests) so the run
+#     is reproducible.
+#   * >= 100 iterations (ITERATIONS = 120). Each iteration picks a random
+#     k in [1, MAX_K] tasks and a FRESH shared counter (AtomicI32.new(0)).
+#   * It spawns k tasks, each calling _run_one(addr) on that counter, and
+#     records each handle's done-pointer + task-record address into two
+#     malloc'd i64 side arrays (TaskHandle is a 16-byte struct value, so
+#     it can't go in a generic dynamic array directly — we stash its two
+#     fields instead).
+#   * It then waits on every task by RECONSTRUCTING each TaskHandle from
+#     its two stored fields and calling the real .wait(). Using the real
+#     wait() (not a hand-rolled spin) keeps the help-drain behavior, so a
+#     low-worker pool still makes forward progress (R7.7), and wait() also
+#     reclaims each task record exactly once (no leak, no double free).
+#   * After all waits, assert the shared counter == k. A counter < k means
+#     a task was lost (or never ran); > k means a task ran twice. Either is
+#     tallied as a property violation.
+#   * The counter and both side arrays are freed every iteration (no leak
+#     across iterations). The per-task records are freed by wait().
+#
+# A watchdog thread turns any deadlock (a hang where a task never runs)
+# into a clear FAIL via Process.exit(1) instead of hanging the runner —
+# important because this drives the real default pool's workers.
+
+const ITERATIONS:  i32 = 120
+const MAX_K:       i32 = 64
+const WATCHDOG_MS: i32 = 60000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Per-task body target: increment the ONE shared counter. The counter's
+# heap address is captured as an i64 (the @heap AtomicI32 value), recovered
+# here as an AtomicI32, and incremented atomically. Every spawned task in
+# an iteration funnels into the same atomic — the whole point of the
+# exactly-once invariant.
+fun _run_one(addr: i64):
+    c: AtomicI32 = addr as AtomicI32
+    c.fetch_add(1)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in spawn_task exactly-once")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized k sequence (distinct seed).
+    Random.seed(70707070 as i64)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random k in [1, MAX_K]. next_i32() is already non-negative.
+        k: i32 = 1 + (Random.next_i32() % MAX_K)
+
+        # Fresh SHARED counter for this iteration, starting at 0.
+        counter: AtomicI32 = AtomicI32.new(0)
+        addr: i64 = counter as i64
+
+        # Side arrays: one i64 per handle for its done-pointer and its
+        # task-record address. TaskHandle is a struct value, so we stash
+        # its two fields and reconstruct the handle to wait on it.
+        dones: i64 = Memory.malloc((k as i64) * 8) as i64
+        recs:  i64 = Memory.malloc((k as i64) * 8) as i64
+        if dones == 0:
+            fail("malloc dones failed")
+            iter = iter + 1
+            continue
+        if recs == 0:
+            fail("malloc recs failed")
+            Memory.free(dones)
+            iter = iter + 1
+            continue
+
+        # Spawn k tasks, each incrementing the shared counter once.
+        j: i32 = 0
+        while j < k:
+            w: @heap fun() = fun() _run_one(addr)
+            h: TaskHandle = spawn_task(w)
+            Memory.write_i64(dones + (j as i64) * 8, h.done as i64)
+            Memory.write_i64(recs  + (j as i64) * 8, h.rec)
+            j = j + 1
+
+        # Wait on every task by reconstructing its handle and calling the
+        # real .wait() (help-drain + one-shot record free).
+        j = 0
+        while j < k:
+            d:  AtomicI32 = Memory.read_i64(dones + (j as i64) * 8) as AtomicI32
+            rc: i64       = Memory.read_i64(recs  + (j as i64) * 8)
+            hh: TaskHandle = TaskHandle(done=d, rec=rc)
+            hh.wait()
+            j = j + 1
+
+        # After all waits, the shared counter must equal k EXACTLY (R6.2).
+        total: i32 = counter.load()
+        if total != k:
+            if total < k:
+                fail("counter < k (task lost or never ran)")
+            else:
+                fail("counter > k (task ran more than once)")
+
+        # Release this iteration's resources. AtomicI32 has no destroy();
+        # its value is its storage pointer, so free it directly. The per-
+        # task records were already freed by wait(); free the side arrays.
+        Memory.free(counter as i64)
+        Memory.free(dones)
+        Memory.free(recs)
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 6: each spawned task runs exactly once ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly. The default
+    # pool's worker threads intentionally never join here (no shutdown in
+    # this property), so a direct process exit guarantees prompt,
+    # deterministic termination.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

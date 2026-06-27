@@ -1,0 +1,131 @@
+import std
+
+# spawn_task / TaskHandle.wait — unit tests (no randomization).
+#
+# Validates Requirements 6.1, 6.3, 6.4:
+#   * R6.1: spawn_task schedules the Task_Closure and returns a TaskHandle.
+#   * R6.3: wait() blocks the caller until the task has completed.
+#   * R6.4: wait() on an already-completed task returns immediately.
+#
+# spawn_task lives in library/std/parallel.dlt. A spawned `work` must be a
+# `@heap fun()` because its env crosses the worker thread boundary (R11.2).
+# To have a task mutate shared state we capture an AtomicI32's address (its
+# @heap value IS its storage pointer) and recover it in a module-level
+# helper — the same capture-by-address pattern the property tests use.
+#
+# Style mirrors tests/parallel_deque_basic.dlt: print PASS/FAIL per check,
+# tally a g_fails counter, print "0 = all passed" at the end. A watchdog
+# thread drives the pool and turns any hang into a clear failure exit.
+
+const WATCHDOG_MS: i32 = 30000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Boolean check helper: PASS when ok==1, else FAIL + tally.
+fun check(label: str, ok: i32):
+    if ok == 1:
+        print("PASS")
+    else:
+        print("FAIL")
+        g_fails.fetch_add(1)
+    print(label)
+
+# Task body target: bump the shared counter once. The counter's heap
+# address is captured as an i64 and recovered here as an AtomicI32.
+fun _bump(addr: i64):
+    c: AtomicI32 = addr as AtomicI32
+    c.fetch_add(1)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in spawn_task basic")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # ----------------------------------------------------------------
+    # Test A (R6.1, R6.3): a spawned task increments a shared counter;
+    # after wait() the update is visible on the calling thread.
+    # ----------------------------------------------------------------
+    print("--- spawn_task + wait sees the update ---")
+    counter: AtomicI32 = AtomicI32.new(0)
+    addr: i64 = counter as i64
+
+    w: @heap fun() = fun() _bump(addr)
+    h: TaskHandle = spawn_task(w)
+    h.wait()
+
+    after: i32 = counter.load()
+    ok_a: i32 = 0
+    if after == 1:
+        ok_a = 1
+    check("counter == 1 after wait", ok_a)
+    print(after)
+
+    Memory.free(counter as i64)
+
+    # ----------------------------------------------------------------
+    # Test B (R6.4): wait() on a task that has ALREADY completed returns
+    # immediately. We spawn a fresh task and let its executor finish it
+    # FIRST — we observe done flip to 1 by polling the handle's done atomic
+    # directly (no wait(), so the task record is not yet reclaimed). On a
+    # pool with workers the worker drains it; in serial mode spawn_task ran
+    # it inline so done is already 1. THEN we call wait() exactly once: the
+    # task is already complete, so wait()'s loop body never runs and it
+    # returns at once, reclaiming the record exactly once (no double free).
+    # The counter must read 1 — the task ran exactly once.
+    #
+    # Note: we deliberately do NOT call wait() twice on one handle. wait()
+    # frees the owned task record when it observes done==1, so a second
+    # wait() on the same handle would double-free. R6.4 only concerns a
+    # single wait() against an already-completed task, which is what this
+    # tests.
+    # ----------------------------------------------------------------
+    print("--- wait on already-completed task returns immediately ---")
+    counter2: AtomicI32 = AtomicI32.new(0)
+    addr2: i64 = counter2 as i64
+
+    w2: @heap fun() = fun() _bump(addr2)
+    h2: TaskHandle = spawn_task(w2)
+
+    # Let the executor finish the task before we wait (poll done directly).
+    while h2.done.load() == 0:
+        Thread.yield_now()
+
+    # Task already complete: this wait() must return immediately.
+    h2.wait()
+    done2: i32 = counter2.load()
+    ok_b: i32 = 0
+    if done2 == 1:
+        ok_b = 1
+    check("counter == 1 (immediate wait on completed task)", ok_b)
+    print(done2)
+
+    Memory.free(counter2 as i64)
+
+    # ----------------------------------------------------------------
+    # Final verdict — 0 failures expected.
+    # ----------------------------------------------------------------
+    print("--- result (0 = all passed) ---")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly. The default
+    # pool's worker threads intentionally never join here, so a direct
+    # process exit guarantees prompt, deterministic termination.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

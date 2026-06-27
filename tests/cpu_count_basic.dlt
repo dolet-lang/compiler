@@ -1,0 +1,26 @@
+import std
+
+# Cpu_Info_Provider smoke test — CpuInfo.cpu_count() reports the logical
+# processor count at runtime (GetActiveProcessorCount, falling back to
+# GetSystemInfo, and 1 on failure). The contract is that it is ALWAYS
+# >= 1: even on a no-thread / degraded environment it returns 1 so the
+# thread pool can run in serial mode. This asserts that invariant on the
+# real machine the test runs on.
+#
+# CpuInfo lives in library/platform/windows/cpu_info.dlt and is
+# auto-loaded with the platform tier (no extra import needed for it);
+# `import std` is here only for print.
+
+fun do_test():
+    n: i32 = CpuInfo.cpu_count()
+
+    # Always-true invariant: at least one core (serial-mode floor).
+    if n >= 1:
+        print("PASS")
+    else:
+        print("FAIL")
+
+    # Echo the detected core count for visibility in the runner log.
+    print(n)
+
+do_test()

@@ -1,0 +1,130 @@
+import std
+
+# Feature: dolet-parallel, Property 1: Exactly-once index coverage
+#
+# Property 1 (Validates: Requirements 3.1, 7.3, 4.2, 4.3, 2.5):
+#   For any integer N > 0 and any Body_Closure, after parallel_for(N, body)
+#   returns, every index i in [0, N) has been invoked EXACTLY ONCE — no
+#   index is skipped (lost) and none is invoked twice (duplicated).
+#
+# This is the load-balancer's central correctness guarantee. parallel_for
+# (std/parallel.dlt) partitions [0,N) into DISJOINT, gap-free chunks and
+# pushes each as one RANGE work-item onto a worker deque. A chunk is run
+# by exactly one executor because the owner's pop() and a thief's steal()
+# race for the same handle via CAS on the deque `top` — exactly one wins,
+# the loser gets ABORT and moves on (R4.2, R4.3). Combined with the
+# caller-participates draining, every index is therefore touched once.
+#
+# Test design (deterministic randomized stress harness):
+#   * Fixed LCG seed (Random.seed) so the run is reproducible.
+#   * >= 100 iterations. Each iteration picks a random N in [1, 2000].
+#   * A raw i32 buffer of N*4 bytes is zero-allocated. The body does a
+#     plain increment of its own slot: hits[i] = hits[i] + 1. In the
+#     correct (exactly-once) case no two invocations ever touch the same
+#     slot, so a plain increment is race-free AND still detects both
+#     failure modes after the fact:
+#       - a SKIP leaves a slot at 0,
+#       - a DUPLICATE pushes a slot to 2+.
+#   * After parallel_for returns, assert every slot == 1; any slot != 1
+#     is tallied as a property violation.
+#   * The buffer is freed every iteration (no leak across iterations).
+#
+# A watchdog thread turns any deadlock (e.g. a hang where remaining never
+# reaches 0) into a clear FAIL via Process.exit(1) instead of hanging the
+# runner — important because this drives the real default pool's workers.
+
+const ITERATIONS: i32 = 150
+const MAX_N:      i32 = 2000
+const WATCHDOG_MS: i32 = 30000
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+g_done:  AtomicI32 = AtomicI32.new(0)
+
+# Tally + report a single property violation.
+fun fail(label: str):
+    g_fails.fetch_add(1)
+    print("FAIL")
+    print(label)
+
+# Per-index body: increment this index's slot in the raw i32 buffer.
+# In the exactly-once case each slot is touched by a single invocation,
+# so this plain read-modify-write needs no atomics and still exposes
+# skips (slot stays 0) and duplicates (slot becomes >= 2).
+fun _hit_one(buf: i64, i: i32):
+    slot: i64 = buf + (i as i64) * 4
+    Memory.write_i32(slot, Memory.read_i32(slot) + 1)
+
+# Deadlock watchdog: if the test has not signalled completion within
+# WATCHDOG_MS, treat the run as deadlocked and exit with a clear failure
+# so the runner never hangs.
+fun watchdog():
+    waited: i32 = 0
+    while waited < WATCHDOG_MS:
+        if g_done.load() == 1:
+            return
+        Thread.sleep(50)
+        waited = waited + 50
+    print("FAIL")
+    print("watchdog timeout - possible deadlock in exactly-once coverage")
+    Process.exit(1)
+
+fun do_test():
+    # Arm the watchdog before we drive the pool.
+    wd: @heap fun() = fun() watchdog()
+    wt: Thread = Thread.spawn(wd)
+
+    # Fixed seed -> reproducible randomized N sequence.
+    Random.seed(424242 as i64)
+
+    iter: i32 = 0
+    while iter < ITERATIONS:
+        # Random N in [1, MAX_N]. next_i32() is already non-negative.
+        n: i32 = 1 + (Random.next_i32() % MAX_N)
+
+        # Zero-allocate an i32 hit counter per index.
+        buf: i64 = Memory.malloc_zeroed((n as i64) * 4)
+        if buf == 0:
+            fail("malloc_zeroed failed")
+            iter = iter + 1
+            continue
+
+        # Run the parallel mapping: each index increments its own slot.
+        base: i64 = buf
+        body: @heap fun(i32) = fun(i: i32) _hit_one(base, i)
+        parallel_for(n, body)
+
+        # After return, every index must have been hit EXACTLY once.
+        i: i32 = 0
+        while i < n:
+            hits: i32 = Memory.read_i32(buf + (i as i64) * 4)
+            if hits != 1:
+                # Distinguish skip vs duplicate for diagnostics.
+                if hits == 0:
+                    fail("index skipped (hits == 0)")
+                else:
+                    fail("index hit more than once (hits >= 2)")
+            i = i + 1
+
+        # Release this iteration's buffer (no cross-iteration leak).
+        Memory.free(buf)
+        iter = iter + 1
+
+    # Verdict.
+    print("--- Property 1: exactly-once index coverage ---")
+    if g_fails.load() == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+    print("iterations")
+    print(ITERATIONS)
+    print("failures (0 = all passed)")
+    print(g_fails.load())
+
+    # Signal the watchdog we finished, then exit cleanly. The default
+    # pool's worker threads intentionally never join here (no shutdown in
+    # this property), so a direct process exit guarantees prompt,
+    # deterministic termination.
+    g_done.store(1)
+    Process.exit(0)
+
+do_test()

@@ -1,0 +1,135 @@
+import std
+
+# Work_Stealing_Deque — single-threaded unit test (no threads).
+#
+# The deque lives in library/core/parallel_deque.dlt and is auto-loaded
+# with the core tier (`import std` here is only for print). It is a ring
+# buffer of i64 work-item handles with two monotonic AtomicI64 counters:
+#   * OWNER pushes/pops at the BOTTOM end  -> LIFO for the owner
+#   * THIEVES steal from the TOP end       -> FIFO from a thief's view
+#
+# Sentinels (all real handles are >= 0):
+#   DEQUE_EMPTY = -1  -> nothing to take
+#   DEQUE_ABORT = -2  -> a thief lost a CAS race (concurrent only)
+#
+# This test exercises, on a single thread (no race possible):
+#   1. push then pop returns LIFO order from the owner end
+#   2. steal returns FIFO order from the top end
+#   3. pop/steal on an empty deque return EMPTY (-1)
+#   4. push beyond capacity wraps around correctly via the mask
+#
+# DEQUE_ABORT (-2) cannot be produced single-threaded: ABORT is only
+# returned when a concurrent CAS on `top` is lost, which needs a second
+# thread contending the last item. It is covered by the concurrent
+# scheduler stress tests. Here we assert the single-threaded contract:
+# steal/pop never return ABORT, only a real handle or EMPTY.
+
+const EMPTY: i64 = -1
+
+g_fails: AtomicI32 = AtomicI32.new(0)
+
+# Assert helper: prints PASS/FAIL + a label + the observed value so the
+# runner log stays readable, and tallies failures for a final verdict.
+fun check(label: str, got: i64, want: i64):
+    if got == want:
+        print("PASS")
+    else:
+        print("FAIL")
+        g_fails.fetch_add(1)
+    print(label)
+    print(got)
+
+fun do_test():
+    # ----------------------------------------------------------------
+    # 1. push / pop LIFO from the OWNER end.
+    # Push 100, 200, 300; pop must return them most-recent-first.
+    # ----------------------------------------------------------------
+    print("--- push/pop LIFO (owner end) ---")
+    d: Work_Stealing_Deque = Work_Stealing_Deque.new(8 as i64)
+    d.push(100 as i64)
+    d.push(200 as i64)
+    d.push(300 as i64)
+    check("lifo pop #1", d.pop(), 300 as i64)
+    check("lifo pop #2", d.pop(), 200 as i64)
+    check("lifo pop #3", d.pop(), 100 as i64)
+    # Drained: next pop is EMPTY, and the deque reports empty.
+    check("pop empty -> EMPTY", d.pop(), EMPTY)
+    if d.is_empty():
+        print("PASS")
+    else:
+        print("FAIL")
+        g_fails.fetch_add(1)
+    print("is_empty after drain")
+    d.destroy()
+
+    # ----------------------------------------------------------------
+    # 2. steal FIFO from the TOP end.
+    # Push 11, 22, 33, 44; steal must return them oldest-first.
+    # ----------------------------------------------------------------
+    print("--- steal FIFO (top end) ---")
+    s: Work_Stealing_Deque = Work_Stealing_Deque.new(8 as i64)
+    s.push(11 as i64)
+    s.push(22 as i64)
+    s.push(33 as i64)
+    s.push(44 as i64)
+    check("fifo steal #1", s.steal(), 11 as i64)
+    check("fifo steal #2", s.steal(), 22 as i64)
+    check("fifo steal #3", s.steal(), 33 as i64)
+    check("fifo steal #4", s.steal(), 44 as i64)
+    # Drained: next steal is EMPTY (never ABORT in the single-thread case).
+    check("steal empty -> EMPTY", s.steal(), EMPTY)
+    s.destroy()
+
+    # ----------------------------------------------------------------
+    # 3. EMPTY cases on a brand-new deque (nothing ever pushed).
+    # Both ends report EMPTY; is_empty() is true.
+    # ----------------------------------------------------------------
+    print("--- EMPTY on fresh deque ---")
+    e: Work_Stealing_Deque = Work_Stealing_Deque.new(4 as i64)
+    if e.is_empty():
+        print("PASS")
+    else:
+        print("FAIL")
+        g_fails.fetch_add(1)
+    print("fresh is_empty")
+    check("fresh pop -> EMPTY", e.pop(), EMPTY)
+    check("fresh steal -> EMPTY", e.steal(), EMPTY)
+    e.destroy()
+
+    # ----------------------------------------------------------------
+    # 4. wrap-around via the mask.
+    # capacity = 4 (mask = 3). Fill 4 slots, drain them all by stealing
+    # so `top` advances to 4, then push 2 more: logical indices 4 and 5
+    # map to physical slots (4 & 3)=0 and (5 & 3)=1 — i.e. they reuse the
+    # head of the ring buffer. Popping them back must still yield the
+    # right values, proving the mask wraps logical -> physical correctly.
+    # ----------------------------------------------------------------
+    print("--- wrap-around via mask (capacity 4) ---")
+    w: Work_Stealing_Deque = Work_Stealing_Deque.new(4 as i64)
+    w.push(1000 as i64)
+    w.push(1001 as i64)
+    w.push(1002 as i64)
+    w.push(1003 as i64)
+    # Drain by stealing -> top advances 0..4 (FIFO).
+    check("wrap steal #1", w.steal(), 1000 as i64)
+    check("wrap steal #2", w.steal(), 1001 as i64)
+    check("wrap steal #3", w.steal(), 1002 as i64)
+    check("wrap steal #4", w.steal(), 1003 as i64)
+    check("wrap drained -> EMPTY", w.steal(), EMPTY)
+    # Now top == bottom == 4. Push two more: these land at physical slots
+    # 0 and 1 again (logical 4 & 3, 5 & 3) — the wrap-around.
+    w.push(2000 as i64)
+    w.push(2001 as i64)
+    # Pop LIFO: 2001 (logical 5 -> slot 1) then 2000 (logical 4 -> slot 0).
+    check("wrap pop #1", w.pop(), 2001 as i64)
+    check("wrap pop #2", w.pop(), 2000 as i64)
+    check("wrap empty -> EMPTY", w.pop(), EMPTY)
+    w.destroy()
+
+    # ----------------------------------------------------------------
+    # Final verdict — 0 failures expected.
+    # ----------------------------------------------------------------
+    print("--- result (0 = all passed) ---")
+    print(g_fails.load())
+
+do_test()
