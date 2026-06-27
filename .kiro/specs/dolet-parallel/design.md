@@ -17,7 +17,7 @@
 هاد النظام concurrency حقيقي، وأصعب جزء فيه (الـ work-stealing و الـ park/wake) هو مصدر الـ bugs اللي بتطلع بس تحت الضغط. القرار الحاكم: **v1 بيختار أبسط آلية صحيحة، وأي تحسين أداء أسرع بينعمل documented كـ future work.** تحديدًا:
 - الـ atomics SeqCst بس — هاد conservative بس صحيح. acquire/release optimization مؤجّل.
 - الـ park/wake بيستخدم آلية مبنية على الموجود (Mutex + counter + يييلد/Sleep backoff) بدل ما نضيف FFI جديد لـ Win32 events. الـ events أسرع بس بيزيدوا سطح الخطأ — مؤجّلين.
-- الـ work-stealing deque (R4 بيطلبه صراحة) بينعمل، بس الـ steal محمي بشكل conservative (SeqCst + mutex-assisted steal) بدل lock-free Chase-Lev الكامل.
+- الـ work-stealing deque (R4 بيطلبه صراحة) بينعمل **lock-free** (Chase-Lev conservative SeqCst-only): الـ submitter ثread واحد لكل deque (single bottom-writer)، والـ steal بـ CAS على `top` بس. ما في mutex على الـ push/steal hot path — جرّبنا أول نسخة بـ mutex-assisted steal لكن طلعت تخنق الـ scaling، فاستبدلناها بالـ lock-free الصحيح (انظر "Concurrency-Correctness Design").
 
 ### Requirement Coverage Map (R1..R12)
 
@@ -159,7 +159,7 @@ extern lib "kernel32":
 
 ### 2. Work_Stealing_Deque — `core/parallel_deque.dlt`
 
-ring buffer من `i64` handles. المالك بيـ `push`/`pop` من الـ bottom، السارقين بياخدوا من الـ top. الـ `top`/`bottom` كـ `AtomicI64`. تحت SeqCst بس، الـ steal محمي إضافيًا بـ CAS على `top` (conservative-correct؛ النسخة الـ lock-free الكاملة Chase-Lev acquire/release = future work).
+ring buffer من `i64` handles. المالك بيـ `push`/`pop` من الـ bottom، السارقين بياخدوا من الـ top. الـ `top`/`bottom` كـ `AtomicI64`. **lock-free** (Chase-Lev، SeqCst-only conservative): في الـ pool عندنا الـ submitter ثread واحد لكل deque فالـ bottom عنده writer وحيد، والـ workers بيستهلكوا بالـ steal بس (CAS على `top`، ما بيلمسوا `bottom`). فالـ `push` (write-slot ثم `bottom.store` الذري) و الـ `steal` (CAS `top`) آمنين بلا أي قفل. النسخة الـ lock-free الكاملة بـ acquire/release ordering = future work (حاليًا SeqCst).
 
 ```dolet
 @heap
@@ -367,8 +367,8 @@ attach TaskHandle:
 ### R7.3 + R3.1 — Exactly-once index processing
 
 كل index بيكون ضمن chunk واحد بالضبط (المدى `[0,count)` بينقسم لـ chunks متباينة `[lo,hi)` بلا تداخل ولا فجوات). الـ chunk بينفّذه worker واحد بالضبط لأن:
-- الـ owner `pop` و الـ thief `steal` متنافسين على نفس الـ handle بـ CAS على `top`؛ بس واحد بينجح (R4.3). الخاسر بياخد ABROT و بيكمّل.
-- بمجرّد ما الـ handle بينسحب من الـ deque ما بيرجع ينحط.
+- كل المستهلكين (الـ workers و الـ caller المشارك) بياخدوا الشغل بالـ `steal` (CAS على `top`)؛ بس CAS واحد بينجح للـ handle نفسه (R4.3). الخاسر بياخد ABORT و بيكمّل للـ deque التالي.
+- بمجرّد ما الـ handle بينسحب من الـ deque ما بيرجع ينحط. (ما في owner `pop` — الـ submitter ثread منفصل عن الـ workers، فخلّينا الـ `bottom` single-writer وكل سحب بيمرّ عبر CAS على `top`؛ هيك ما في سباق على الـ `bottom` ولا ضياع work-item.)
 
 فكل index بينفّذ مرة وحدة بالضبط — لا ضياع ولا تكرار.
 
