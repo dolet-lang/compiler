@@ -524,7 +524,13 @@ fun parse_chained_dot(base: i64) -> i64:
             elif cur_kind() == TK_ASSIGN:
                 advance()
                 nval: i64 = parse_expression()
-                result = mk_field_assign("", nxt, nval)
+                # Chained write: `result.nxt = nval`. `result` is the base
+                # expression accumulated so far (one or more levels deep), so
+                # we address the field via a NESTED_FIELD target and store
+                # into it — NOT the old broken `mk_field_assign("", ...)`
+                # which dropped the base and produced an empty object name.
+                target: i64 = mk_nested_field(result, nxt)
+                result = mk_nested_field_assign(target, nval)
             else:
                 result = mk_nested_field(result, nxt)
         else:

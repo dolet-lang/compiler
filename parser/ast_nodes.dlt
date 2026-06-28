@@ -79,6 +79,7 @@ NODE_SELF_FIELD: i32 = 92
 NODE_SUPER_METHOD: i32 = 93
 NODE_NESTED_FIELD: i32 = 94
 NODE_NESTED_METHOD: i32 = 95
+NODE_NESTED_FIELD_ASSIGN: i32 = 96
 
 # Enums
 NODE_ENUM_DECL: i32 = 100
@@ -1149,6 +1150,16 @@ fun mk_nested_method(base: i64, method: str, args: i64) -> i64:
     Memory.write_i64(n + 8, base)
     Memory.write_i64(n + 16, method as i64)
     Memory.write_i64(n + 24, args)
+    return n
+
+# NestedFieldAssignNode: f0=target (a NESTED_FIELD/FIELD_ACCESS/SELF_FIELD
+# node addressing the slot to write), f1=value (node). Used for chained
+# writes like `a.b.c = v` and `self.caps.x = v` where the left side is more
+# than one level deep (the single-level case stays NODE_FIELD_ASSIGN).
+fun mk_nested_field_assign(target: i64, value: i64) -> i64:
+    n: i64 = alloc_node(NODE_NESTED_FIELD_ASSIGN)
+    Memory.write_i64(n + 8, target)
+    Memory.write_i64(n + 16, value)
     return n
 
 fun nmethod_base(n: i64) -> i64:

@@ -433,6 +433,17 @@ This is why `list<str>.append(str)` picks the right overload over
 Field access in method body emits
 `llvm.getelementptr %self[0, idx]` then `llvm.load`.
 
+### Nested field assignment (chained writes)
+
+Writes more than one level deep are supported: `a.b.c = v` and
+`self.x.y = v`. The parser builds a `NODE_NESTED_FIELD_ASSIGN`
+(`parser_expr.dlt::parse_chained_dot`) whose target is a `NESTED_FIELD`
+addressing the slot; `codegen_stmt.dlt::gen_nested_field_assignment`
+computes the slot address via `gen_nested_field_ptr` (the same address
+walk used for nested reads) and stores into it. The single-level case
+(`a.b = v`) still uses `NODE_FIELD_ASSIGN`. (Before v2.0.x a chained
+write silently produced an empty object name — "Variable not declared:".)
+
 ---
 
 ## 9. Memory model — stack / heap / arena

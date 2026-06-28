@@ -677,6 +677,10 @@ fun mono_walk_node(ast: i64, node: i64):
     if nt == NODE_FIELD_ASSIGN:
         mono_walk_node(ast, Memory.read_i64(node + 24))
         return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        mono_walk_node(ast, Memory.read_i64(node + 8))
+        mono_walk_node(ast, Memory.read_i64(node + 16))
+        return
     if nt == NODE_BLOCK:
         mono_walk_list(ast, Memory.read_i64(node + 8))
         return
@@ -1006,6 +1010,10 @@ fun collect_caps_node(node: i64, params: i64, out: i64):
         return
     if nt == NODE_FIELD_ASSIGN:
         collect_caps_node(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        collect_caps_node(Memory.read_i64(node + 16), params, out)
         return
     if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP or nt == NODE_STR_CONCAT:
         collect_caps_node(Memory.read_i64(node + 16), params, out)
@@ -1349,6 +1357,17 @@ fun rewrite_captures_in(node: i64, captures: i64, cap_types: i64) -> i64:
             Memory.write_i64(node + 24, nv5)
         return node
 
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        nfa_t: i64 = Memory.read_i64(node + 8)
+        nfa_nt: i64 = rewrite_captures_in(nfa_t, captures, cap_types)
+        if nfa_nt != nfa_t:
+            Memory.write_i64(node + 8, nfa_nt)
+        nfa_v: i64 = Memory.read_i64(node + 16)
+        nfa_nv: i64 = rewrite_captures_in(nfa_v, captures, cap_types)
+        if nfa_nv != nfa_v:
+            Memory.write_i64(node + 16, nfa_nv)
+        return node
+
     if nt == NODE_BLOCK:
         rewrite_captures_in_list(Memory.read_i64(node + 8), captures, cap_types)
         return node
@@ -1676,6 +1695,16 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
         if nv3b != v3b:
             Memory.write_i64(node + 24, nv3b)
         return node
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        nfa_t2: i64 = Memory.read_i64(node + 8)
+        nfa_nt2: i64 = lift_lambdas_in(ast, nfa_t2)
+        if nfa_nt2 != nfa_t2:
+            Memory.write_i64(node + 8, nfa_nt2)
+        nfa_v2: i64 = Memory.read_i64(node + 16)
+        nfa_nv2: i64 = lift_lambdas_in(ast, nfa_v2)
+        if nfa_nv2 != nfa_v2:
+            Memory.write_i64(node + 16, nfa_nv2)
+        return node
     if nt == NODE_FIELD_VAL:
         v4: i64 = Memory.read_i64(node + 16)
         nv4: i64 = lift_lambdas_in(ast, v4)
@@ -1812,6 +1841,10 @@ fun scan_for_lambda_node(node: i64):
         return
     if nt == NODE_FIELD_ASSIGN:
         scan_for_lambda_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        scan_for_lambda_node(Memory.read_i64(node + 8))
+        scan_for_lambda_node(Memory.read_i64(node + 16))
         return
     if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
         scan_for_lambda_node(Memory.read_i64(node + 16))

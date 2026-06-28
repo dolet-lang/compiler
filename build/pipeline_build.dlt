@@ -1032,6 +1032,7 @@ NODE_SELF_FIELD: i32 = 92
 NODE_SUPER_METHOD: i32 = 93
 NODE_NESTED_FIELD: i32 = 94
 NODE_NESTED_METHOD: i32 = 95
+NODE_NESTED_FIELD_ASSIGN: i32 = 96
 
 # Enums
 NODE_ENUM_DECL: i32 = 100
@@ -2102,6 +2103,16 @@ fun mk_nested_method(base: i64, method: str, args: i64) -> i64:
     Memory.write_i64(n + 8, base)
     Memory.write_i64(n + 16, method as i64)
     Memory.write_i64(n + 24, args)
+    return n
+
+# NestedFieldAssignNode: f0=target (a NESTED_FIELD/FIELD_ACCESS/SELF_FIELD
+# node addressing the slot to write), f1=value (node). Used for chained
+# writes like `a.b.c = v` and `self.caps.x = v` where the left side is more
+# than one level deep (the single-level case stays NODE_FIELD_ASSIGN).
+fun mk_nested_field_assign(target: i64, value: i64) -> i64:
+    n: i64 = alloc_node(NODE_NESTED_FIELD_ASSIGN)
+    Memory.write_i64(n + 8, target)
+    Memory.write_i64(n + 16, value)
     return n
 
 fun nmethod_base(n: i64) -> i64:
@@ -3401,7 +3412,13 @@ fun parse_chained_dot(base: i64) -> i64:
             elif cur_kind() == TK_ASSIGN:
                 advance()
                 nval: i64 = parse_expression()
-                result = mk_field_assign("", nxt, nval)
+                # Chained write: `result.nxt = nval`. `result` is the base
+                # expression accumulated so far (one or more levels deep), so
+                # we address the field via a NESTED_FIELD target and store
+                # into it — NOT the old broken `mk_field_assign("", ...)`
+                # which dropped the base and produced an empty object name.
+                target: i64 = mk_nested_field(result, nxt)
+                result = mk_nested_field_assign(target, nval)
             else:
                 result = mk_nested_field(result, nxt)
         else:
@@ -5701,6 +5718,7 @@ fun init_ast_constants():
     NODE_SUPER_METHOD = 93
     NODE_NESTED_FIELD = 94
     NODE_NESTED_METHOD = 95
+    NODE_NESTED_FIELD_ASSIGN = 96
     NODE_ENUM_DECL = 100
     NODE_ENUM_VARIANT = 101
     NODE_ENUM_ACCESS = 102
@@ -9456,6 +9474,36 @@ fun gen_field_assignment(node: i64):
         emit_store(val3, fp2, mt2)
 
 # ==========================================
+# Nested Field Assignment (a.b.c = value, self.x.y = value)
+# ==========================================
+# The target is a NESTED_FIELD / FIELD_ACCESS / SELF_FIELD node addressing
+# the slot to write. We reuse gen_nested_field_ptr (the same address
+# computation used for nested reads) to get the field's pointer, then store
+# the value into it. Handles arbitrary depth (a.b.c.d = v) recursively.
+fun gen_nested_field_assignment(node: i64):
+    target: i64 = Memory.read_i64(node + 8)
+    val_node: i64 = Memory.read_i64(node + 16)
+
+    # Field type of the target (the innermost field being written).
+    ftype: str = infer_expr_type(target)
+    mt: str = mlir_type(ftype)
+
+    # Address of the target slot (no load — we want the slot to store into).
+    fp: str = gen_nested_field_ptr(target)
+
+    val: str = gen_expr(val_node, ftype)
+    actual_type: str = infer_expr_type(val_node)
+    if str_eq(actual_type, ftype) == 0:
+        val = implicit_cast(val, actual_type, ftype)
+
+    # Inline (non-heap) struct field: copy the struct contents into the slot.
+    if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+        nested_dest: str = emit_load(fp, mt)
+        copy_struct_into(nested_dest, val, ftype)
+    else:
+        emit_store(val, fp, mt)
+
+# ==========================================
 # Static Field Assignment (Struct.field = value)
 # ==========================================
 fun gen_static_field_assignment(node: i64):
@@ -10349,6 +10397,8 @@ fun gen_statement(node: i64):
         gen_assignment(node)
     elif nt == NODE_FIELD_ASSIGN:
         gen_field_assignment(node)
+    elif nt == NODE_NESTED_FIELD_ASSIGN:
+        gen_nested_field_assignment(node)
     elif nt == NODE_STATIC_FIELD_ASSIGN:
         gen_static_field_assignment(node)
     elif nt == NODE_IF:
@@ -12418,6 +12468,11 @@ fun ts_walk_node(node: i64):
         ts_walk_node(Memory.read_i64(node + 24))
         return
 
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+
     if nt == NODE_STATIC_FIELD_ASSIGN:
         sname5: str = Memory.read_i64(node + 8) as str
         if (sname5 as i64) != 0:
@@ -13377,6 +13432,10 @@ fun mono_walk_node(ast: i64, node: i64):
     if nt == NODE_FIELD_ASSIGN:
         mono_walk_node(ast, Memory.read_i64(node + 24))
         return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        mono_walk_node(ast, Memory.read_i64(node + 8))
+        mono_walk_node(ast, Memory.read_i64(node + 16))
+        return
     if nt == NODE_BLOCK:
         mono_walk_list(ast, Memory.read_i64(node + 8))
         return
@@ -13706,6 +13765,10 @@ fun collect_caps_node(node: i64, params: i64, out: i64):
         return
     if nt == NODE_FIELD_ASSIGN:
         collect_caps_node(Memory.read_i64(node + 24), params, out)
+        return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        collect_caps_node(Memory.read_i64(node + 8), params, out)
+        collect_caps_node(Memory.read_i64(node + 16), params, out)
         return
     if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP or nt == NODE_STR_CONCAT:
         collect_caps_node(Memory.read_i64(node + 16), params, out)
@@ -14049,6 +14112,17 @@ fun rewrite_captures_in(node: i64, captures: i64, cap_types: i64) -> i64:
             Memory.write_i64(node + 24, nv5)
         return node
 
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        nfa_t: i64 = Memory.read_i64(node + 8)
+        nfa_nt: i64 = rewrite_captures_in(nfa_t, captures, cap_types)
+        if nfa_nt != nfa_t:
+            Memory.write_i64(node + 8, nfa_nt)
+        nfa_v: i64 = Memory.read_i64(node + 16)
+        nfa_nv: i64 = rewrite_captures_in(nfa_v, captures, cap_types)
+        if nfa_nv != nfa_v:
+            Memory.write_i64(node + 16, nfa_nv)
+        return node
+
     if nt == NODE_BLOCK:
         rewrite_captures_in_list(Memory.read_i64(node + 8), captures, cap_types)
         return node
@@ -14376,6 +14450,16 @@ fun lift_lambdas_in(ast: i64, node: i64) -> i64:
         if nv3b != v3b:
             Memory.write_i64(node + 24, nv3b)
         return node
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        nfa_t2: i64 = Memory.read_i64(node + 8)
+        nfa_nt2: i64 = lift_lambdas_in(ast, nfa_t2)
+        if nfa_nt2 != nfa_t2:
+            Memory.write_i64(node + 8, nfa_nt2)
+        nfa_v2: i64 = Memory.read_i64(node + 16)
+        nfa_nv2: i64 = lift_lambdas_in(ast, nfa_v2)
+        if nfa_nv2 != nfa_v2:
+            Memory.write_i64(node + 16, nfa_nv2)
+        return node
     if nt == NODE_FIELD_VAL:
         v4: i64 = Memory.read_i64(node + 16)
         nv4: i64 = lift_lambdas_in(ast, v4)
@@ -14512,6 +14596,10 @@ fun scan_for_lambda_node(node: i64):
         return
     if nt == NODE_FIELD_ASSIGN:
         scan_for_lambda_node(Memory.read_i64(node + 24))
+        return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        scan_for_lambda_node(Memory.read_i64(node + 8))
+        scan_for_lambda_node(Memory.read_i64(node + 16))
         return
     if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
         scan_for_lambda_node(Memory.read_i64(node + 16))
@@ -14987,6 +15075,10 @@ fun collect_strings(node: i64):
         collect_strings(Memory.read_i64(node + 24))
         return
     if nt == NODE_ASSIGN or nt == NODE_FIELD_ASSIGN:
+        collect_strings(Memory.read_i64(node + 16))
+        return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        collect_strings(Memory.read_i64(node + 8))
         collect_strings(Memory.read_i64(node + 16))
         return
     if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:

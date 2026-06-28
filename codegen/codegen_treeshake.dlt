@@ -205,6 +205,11 @@ fun ts_walk_node(node: i64):
         ts_walk_node(Memory.read_i64(node + 24))
         return
 
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        ts_walk_node(Memory.read_i64(node + 8))
+        ts_walk_node(Memory.read_i64(node + 16))
+        return
+
     if nt == NODE_STATIC_FIELD_ASSIGN:
         sname5: str = Memory.read_i64(node + 8) as str
         if (sname5 as i64) != 0:

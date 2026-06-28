@@ -174,6 +174,7 @@ for %%f in (
     mutex_basic
     random_basic
     struct_nested_global
+    nested_field_assign
     type_alias_methods
     nested_namespace
     trait_impl

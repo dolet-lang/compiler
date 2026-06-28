@@ -162,6 +162,36 @@ fun gen_field_assignment(node: i64):
         emit_store(val3, fp2, mt2)
 
 # ==========================================
+# Nested Field Assignment (a.b.c = value, self.x.y = value)
+# ==========================================
+# The target is a NESTED_FIELD / FIELD_ACCESS / SELF_FIELD node addressing
+# the slot to write. We reuse gen_nested_field_ptr (the same address
+# computation used for nested reads) to get the field's pointer, then store
+# the value into it. Handles arbitrary depth (a.b.c.d = v) recursively.
+fun gen_nested_field_assignment(node: i64):
+    target: i64 = Memory.read_i64(node + 8)
+    val_node: i64 = Memory.read_i64(node + 16)
+
+    # Field type of the target (the innermost field being written).
+    ftype: str = infer_expr_type(target)
+    mt: str = mlir_type(ftype)
+
+    # Address of the target slot (no load — we want the slot to store into).
+    fp: str = gen_nested_field_ptr(target)
+
+    val: str = gen_expr(val_node, ftype)
+    actual_type: str = infer_expr_type(val_node)
+    if str_eq(actual_type, ftype) == 0:
+        val = implicit_cast(val, actual_type, ftype)
+
+    # Inline (non-heap) struct field: copy the struct contents into the slot.
+    if is_struct_type(ftype) == 1 and is_heap_struct(ftype) == 0:
+        nested_dest: str = emit_load(fp, mt)
+        copy_struct_into(nested_dest, val, ftype)
+    else:
+        emit_store(val, fp, mt)
+
+# ==========================================
 # Static Field Assignment (Struct.field = value)
 # ==========================================
 fun gen_static_field_assignment(node: i64):
@@ -1055,6 +1085,8 @@ fun gen_statement(node: i64):
         gen_assignment(node)
     elif nt == NODE_FIELD_ASSIGN:
         gen_field_assignment(node)
+    elif nt == NODE_NESTED_FIELD_ASSIGN:
+        gen_nested_field_assignment(node)
     elif nt == NODE_STATIC_FIELD_ASSIGN:
         gen_static_field_assignment(node)
     elif nt == NODE_IF:

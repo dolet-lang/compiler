@@ -1,0 +1,63 @@
+import std
+
+# Verify chained / nested field WRITE: a.b.c = v (more than one level deep).
+# Reads were already supported; this exercises the new write path.
+
+struct Inner:
+    a: i32 = 0
+    b: i32 = 0
+
+struct Outer:
+    inner: Inner = Inner()
+    tag: i32 = 0
+
+struct Wrap:
+    outer: Outer = Outer()
+
+attach Wrap:
+    # Nested write through self: self.outer.inner.a = v
+    fun set_deep(self, v: i32):
+        self.outer.inner.a = v
+
+fun fail(label: str):
+    print("FAIL")
+    print(label)
+
+fun do_test():
+    fails: i32 = 0
+
+    w: Wrap = Wrap()
+    # two-level write on a local var
+    w.outer.tag = 7
+    if w.outer.tag != 7:
+        fail("two-level write w.outer.tag")
+        fails = fails + 1
+
+    # three-level write on a local var
+    w.outer.inner.a = 42
+    if w.outer.inner.a != 42:
+        fail("three-level write w.outer.inner.a")
+        fails = fails + 1
+
+    # second field, ensure no clobber of sibling
+    w.outer.inner.b = 99
+    if w.outer.inner.b != 99:
+        fail("three-level write w.outer.inner.b")
+        fails = fails + 1
+    if w.outer.inner.a != 42:
+        fail("sibling clobbered after b write")
+        fails = fails + 1
+
+    # nested write through self inside a method
+    w2: Wrap = Wrap()
+    w2.set_deep(123)
+    if w2.outer.inner.a != 123:
+        fail("self.outer.inner.a write via method")
+        fails = fails + 1
+
+    if fails == 0:
+        print("PASS")
+    else:
+        print("FAIL")
+
+do_test()

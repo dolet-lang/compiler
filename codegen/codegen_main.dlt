@@ -411,6 +411,10 @@ fun collect_strings(node: i64):
     if nt == NODE_ASSIGN or nt == NODE_FIELD_ASSIGN:
         collect_strings(Memory.read_i64(node + 16))
         return
+    if nt == NODE_NESTED_FIELD_ASSIGN:
+        collect_strings(Memory.read_i64(node + 8))
+        collect_strings(Memory.read_i64(node + 16))
+        return
     if nt == NODE_BINARY_OP or nt == NODE_COMPARISON or nt == NODE_LOGICAL_OP:
         collect_strings(Memory.read_i64(node + 16))
         collect_strings(Memory.read_i64(node + 24))
