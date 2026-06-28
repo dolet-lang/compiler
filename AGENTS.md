@@ -4,7 +4,7 @@
 > this BEFORE grepping the source. Every section was verified against
 > the codebase at `dolet-compiler/`. File:line references are real.
 
-**Compiler version:** v1.5.0-beta · **Bootstrap:** stage 1→2→3
+**Compiler version:** v2.0.0-beta · **Bootstrap:** stage 1→2→3
 byte-stable on Windows · **Test count:** 94 PASS / 0 FAIL.
 
 ---
@@ -40,7 +40,7 @@ byte-stable on Windows · **Test count:** 94 PASS / 0 FAIL.
 - **Verified facts only.** Every claim was cross-checked against the
   source. File:line references point at the line that proves the
   claim.
-- **Pinned to v1.5.0-beta.** When the language changes, update this
+- **Pinned to v2.0.0-beta.** When the language changes, update this
   file in the same PR. Stale doc is worse than no doc.
 - **Examples come from `tests/`.** They're real, runnable, and the
   test-runner verifies them. If an example here disagrees with a test
