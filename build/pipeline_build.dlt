@@ -441,8 +441,6 @@ fun resolve_keyword(name: str) -> i32:
         return TK_AS
     if str_eq(name, "is") == 1:
         return TK_IS
-    if str_eq(name, "const") == 1:
-        return TK_CONST
     if str_eq(name, "static") == 1:
         return TK_STATIC
     if str_eq(name, "mut") == 1:
@@ -4333,28 +4331,8 @@ fun parse_dot_stmt(name: str) -> i64:
     return mk_field_access(name, member)
 
 # ==========================================
-# Const Declaration: const name = expr  or  const name: type = expr
-# ==========================================
-fun parse_const_decl() -> i64:
-    eat(TK_CONST)
-    name: str = cur_val()
-    eat(TK_IDENT)
-
-    vtype: str = ""
-    if cur_kind() == TK_COLON:
-        advance()
-        vtype = parse_type_name()
-
-    eat(TK_ASSIGN)
-    val: i64 = parse_expression()
-
-    if str_eq(vtype, "") == 1:
-        return mk_var_decl("", name, val, 1, 1, 0)
-    return mk_var_decl(vtype, name, val, 0, 1, 0)
-
-# ==========================================
 # Imm Declaration: imm name = expr  or  imm name: type = expr
-# Same as const — immutable variable
+# Immutable variable binding (the `const` keyword was removed in v1.5).
 # ==========================================
 fun parse_imm_decl() -> i64:
     eat(TK_IMM)
@@ -5226,11 +5204,7 @@ fun parse_statement() -> i64:
         skip_newlines()
         return 0
 
-    # Const declaration
-    if k == TK_CONST:
-        return parse_const_decl()
-
-    # Imm declaration (alias for const)
+    # Imm declaration (immutable binding)
     if k == TK_IMM:
         return parse_imm_decl()
 
@@ -5554,6 +5528,11 @@ fun parse_statement() -> i64:
 
     # Identifier: var decl, assignment, function call, method call
     if k == TK_IDENT:
+        # `const` was removed from the language (v1.5) — it is no longer a
+        # keyword. Reject it with a clear message instead of silently
+        # mis-parsing `const NAME = ...` as a stray expression.
+        if str_eq(cur_val(), "const") == 1:
+            panic("`const` was removed; use `imm NAME: T = expr` for an immutable binding")
         # Check if it's a variable declaration: Name : type
         # or assignment, function call, etc.
         return parse_var_decl_ident()

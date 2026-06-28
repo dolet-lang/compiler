@@ -51,9 +51,9 @@ import std
 # completes) into a clear FAIL via Process.exit(1) instead of hanging the
 # runner — important because this drives the real default pool's workers.
 
-const ITERATIONS:  i32 = 150
-const MAX_N:       i32 = 2000
-const WATCHDOG_MS: i32 = 30000
+imm ITERATIONS:  i32 = 150
+imm MAX_N:       i32 = 2000
+imm WATCHDOG_MS: i32 = 30000
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)

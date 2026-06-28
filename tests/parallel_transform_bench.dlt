@@ -15,8 +15,8 @@ import frog
 # global. Creating a fresh @heap closure every loop iteration would leak
 # one env per frame (no free) and is the pattern to avoid in hot loops.
 
-const N:      i32 = 20000
-const FRAMES: i32 = 60
+imm N:      i32 = 20000
+imm FRAMES: i32 = 60
 
 g_params:  i64 = 0
 g_out:     i64 = 0

@@ -42,11 +42,11 @@ import std
 # never hangs while driving the default pool. On success we
 # Process.exit(0) for prompt, deterministic termination.
 
-const N:           i32 = 200000
-const WATCHDOG_MS: i32 = 60000
+imm N:           i32 = 200000
+imm WATCHDOG_MS: i32 = 60000
 
 # A pure constant folded into the mapping so values aren't trivial.
-const MAP_CONST: i32 = 1013904223
+imm MAP_CONST: i32 = 1013904223
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)

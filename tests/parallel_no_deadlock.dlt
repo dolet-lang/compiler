@@ -43,9 +43,9 @@ import std
 # to 2x cpu_count real OS threads) and shuts each down, the watchdog gets
 # a generous timeout.
 
-const ITERATIONS:  i32 = 120
-const MAX_N:       i32 = 2000
-const WATCHDOG_MS: i32 = 60000
+imm ITERATIONS:  i32 = 120
+imm MAX_N:       i32 = 2000
+imm WATCHDOG_MS: i32 = 60000
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)

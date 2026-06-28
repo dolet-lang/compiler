@@ -39,9 +39,9 @@ import std
 # A watchdog thread turns any deadlock into a clear FAIL via
 # Process.exit(1) so the runner never hangs.
 
-const ITERATIONS:  i32 = 120
-const MAX_N:       i32 = 1500
-const WATCHDOG_MS: i32 = 30000
+imm ITERATIONS:  i32 = 120
+imm MAX_N:       i32 = 1500
+imm WATCHDOG_MS: i32 = 30000
 
 g_fails:          AtomicI32 = AtomicI32.new(0)
 g_done:           AtomicI32 = AtomicI32.new(0)

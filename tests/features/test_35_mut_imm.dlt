@@ -49,6 +49,6 @@ while i <= 5:
     i = i + 1
 print(sum)
 
-# ===== const still works (backward compatible) =====
-const OLD_CONST: i32 = 42
+# ===== imm constant (const keyword fully removed) =====
+imm OLD_CONST: i32 = 42
 print(OLD_CONST)

@@ -24,7 +24,7 @@ import std
 # scheduler stress tests. Here we assert the single-threaded contract:
 # steal/pop never return ABORT, only a real handle or EMPTY.
 
-const EMPTY: i64 = -1
+imm EMPTY: i64 = -1
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 

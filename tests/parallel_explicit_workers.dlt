@@ -37,9 +37,9 @@ import std
 # FAIL via Process.exit(1) instead of an indefinite hang — important
 # because this test spawns and joins many real OS threads.
 
-const ITERATIONS:  i32 = 150
-const MAX_WORKERS: i32 = 8
-const WATCHDOG_MS: i32 = 30000
+imm ITERATIONS:  i32 = 150
+imm MAX_WORKERS: i32 = 8
+imm WATCHDOG_MS: i32 = 30000
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)

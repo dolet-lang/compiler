@@ -529,7 +529,7 @@ struct MyStruct:
     value: i32
 
 var myNum?: i32 = 10
-const myNum: i32 = 42
+imm myNum: i32 = 42
 ptr: ptr<i32> = Pointer.addr(myNum)
 
 private mut y: i32 = 20
@@ -537,10 +537,10 @@ ptr2: ptr<i32> = Pointer.addr(y)
 
 
 mut myNum?: i32 = 10
-const myNum: i32 = 42
+imm myNum: i32 = 42
 mylist: list<i32> = [1, 2, 3]
 myarray: array<i32[3]> = [4, 5, 6]
-const myarray: array<i32[3]> = [7, 8, 9]
+imm myarray: array<i32[3]> = [7, 8, 9]
 
 var mylist: list<i32> = []
 
@@ -567,7 +567,7 @@ mymap: map<str, i32> = {
     "two": 2
 }
 x: i32 = 10
-const y: i32 = 20
+imm y: i32 = 20
 
 
 
@@ -578,7 +578,7 @@ mymap: map<str, map<list<i32>, i32>> = {
     "one": { [1, 2, 3]: 10 },
     "two": { [4, 5, 6]: 20 }
 }
-const mymap: map<str, map<list<i32>, i32>> = {
+imm mymap: map<str, map<list<i32>, i32>> = {
     "one": { [1, 2, 3]: 10 },
     "two": { [4, 5, 6]: 20 }
 }

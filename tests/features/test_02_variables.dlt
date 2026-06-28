@@ -23,8 +23,8 @@ print(ratio)
 print(letter)
 
 # Constants
-const PI = 3.14159
-const MAX_SIZE: i32 = 1000
+imm PI = 3.14159
+imm MAX_SIZE: i32 = 1000
 
 print(PI)
 print(MAX_SIZE)

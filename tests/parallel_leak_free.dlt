@@ -54,10 +54,10 @@ import std
 # Process.exit(1) instead of an indefinite hang. This harness does a LOT
 # of pool init/teardown, so it doubles as a strong join/leak stress test.
 
-const ITERATIONS:  i32 = 100
-const MAX_CYCLES:  i32 = 100
-const MAX_N:       i32 = 500
-const WATCHDOG_MS: i32 = 60000
+imm ITERATIONS:  i32 = 100
+imm MAX_CYCLES:  i32 = 100
+imm MAX_N:       i32 = 500
+imm WATCHDOG_MS: i32 = 60000
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)

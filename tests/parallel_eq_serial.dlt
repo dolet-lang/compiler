@@ -44,13 +44,13 @@ import std
 # hanging the runner — important because this drives the real default
 # pool's workers.
 
-const ITERATIONS:  i32 = 150
-const MAX_N:       i32 = 2000
-const WATCHDOG_MS: i32 = 30000
+imm ITERATIONS:  i32 = 150
+imm MAX_N:       i32 = 2000
+imm WATCHDOG_MS: i32 = 30000
 
 # A pure, index-derived constant folded into the mapping so the values
 # are not trivially i*i. Depends only on the fixed seed, not on timing.
-const MAP_CONST: i32 = 1337
+imm MAP_CONST: i32 = 1337
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)

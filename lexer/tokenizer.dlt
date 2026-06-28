@@ -440,8 +440,6 @@ fun resolve_keyword(name: str) -> i32:
         return TK_AS
     if str_eq(name, "is") == 1:
         return TK_IS
-    if str_eq(name, "const") == 1:
-        return TK_CONST
     if str_eq(name, "static") == 1:
         return TK_STATIC
     if str_eq(name, "mut") == 1:

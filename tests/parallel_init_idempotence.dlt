@@ -28,8 +28,8 @@ import std
 # A watchdog thread turns any deadlock (e.g. a hang in _default_pool's
 # publish-wait spin) into a clear FAIL instead of an indefinite hang.
 
-const ITERATIONS: i32 = 200
-const WATCHDOG_MS: i32 = 15000
+imm ITERATIONS: i32 = 200
+imm WATCHDOG_MS: i32 = 15000
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)

@@ -17,7 +17,7 @@ import std
 # tally a g_fails counter, print "0 = all passed" at the end. A watchdog
 # thread drives the pool and turns any hang into a clear failure exit.
 
-const WATCHDOG_MS: i32 = 30000
+imm WATCHDOG_MS: i32 = 30000
 
 g_fails: AtomicI32 = AtomicI32.new(0)
 g_done:  AtomicI32 = AtomicI32.new(0)
