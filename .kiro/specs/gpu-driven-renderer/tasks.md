@@ -49,49 +49,47 @@
 
 ---
 
-## المرحلة 1 — Bindless Texture Table (R1) — أكبر مكسب معماري
+## المرحلة 1 — Bindless Texture Table (R1) — أكبر مكسب معماري ✅ مكتملة
 
-- [ ] 1.1 أضف حقول الـ bindless لـ `GpuRendererCore` (layout/pool/set/
-      count/enabled) + `bindless_enabled = caps.descriptor_indexing && flag`.
+- [x] 1.1 حقول الـ bindless في `GpuRendererCore` (layout/pool/set/count/
+      capacity/supported/flag/enabled) + `set_bindless_caps`.
   - _Requirements: 1.1_
 
-- [ ] 1.2 نفّذ `_bindless_init`: ينشئ descriptor set layout (binding 0،
-      count=cap، PARTIALLY_BOUND + UPDATE_AFTER_BIND) + pool + set. خلف
-      `bindless_enabled`.
+- [x] 1.2 `_bindless_init`: descriptor set layout (binding 0، count=cap،
+      PARTIALLY_BOUND + UPDATE_AFTER_BIND) + pool (UPDATE_AFTER_BIND) + set.
+      تفعيل descriptor-indexing على الجهاز عبر الـ struct المخصص
+      `VkPhysicalDeviceDescriptorIndexingFeatures` (sType 1000161001) — بدون
+      الـ Vulkan12 aggregate (VUID-02830). fallback متدرّج.
   - _Requirements: 1.1_
-  - **مهم (تأجيل من المرحلة 0)**: تفعيل descriptor-indexing على الجهاز
-    لازم يصير هون — عبر `VkPhysicalDeviceDescriptorIndexingFeatures`
-    (sType 1000161001) **بدل** الـ Vulkan12Features، + تفعيل
-    `VK_EXT_descriptor_indexing` extension. ممنوع الـ struct-ين بنفس
-    الـ pNext chain (NVIDIA driver crash). يعني `init_with_gpu_preference`
-    لازم يتعدّل ليبني الجهاز بالـ struct المخصص لما `bindless_enabled`.
-    fallback: لو فشل → device بدون descriptor-indexing + bindless_enabled=0.
 
-- [ ] 1.3 نفّذ `_bindless_register(view, sampler) -> i32`: يكتب الـ slot،
-      يرجّع الـ index. اربط تسجيل الـ texture الموجود ليكتب slot في الجدول
-      (بالتوازي مع المسار القديم — ما نكسر الـ classic بعد).
+- [x] 1.3 `_bindless_register(view, sampler) -> i32` + ربطه بـ
+      `register_texture` (بالتوازي مع المسار القديم). `tex_bindless_slots[]`.
   - _Requirements: 1.2_
 
-- [ ] 1.4 اكتب fragment shader bindless (`*_bindless.frag`) مع
-      `GL_EXT_nonuniform_qualifier` + `sampler2D textures[]`؛ مرّر
-      `texture_index` من الـ vertex shader (من الـ instance data،
-      مُحزَّم في material vec4). ترجم لـ SPIR-V واضمّنه.
+- [x] 1.4 الـ shaders: `textured_bindless.vert` (يمرّر uvec4×2 texidx) +
+      `textured_bindless.frag` (`sampler2D textures[]` set 2،
+      `nonuniformEXT`). توسيع الـ instance record 96→128 (5 slots + spare)؛
+      الـ cull compute ينسخها. اضطر رفع `MAX_TOKENS` بالكمبايلر (الـ frag
+      الكبير سبّب token-buffer overflow) + bootstrap.
   - _Requirements: 1.3_
 
-- [ ] 1.5 أنشئ pipeline variant يستعمل الـ bindless set + الـ shader
-      الجديد، خلف `bindless_enabled`. اربط الـ bindless set مرة وحدة بداية
-      الـ frame.
+- [x] 1.5 `_create_bindless_pipeline`: 3-set layout (material/lights/bindless)
+      + 22 vertex attribute (loc 21/22 texidx)، نفس fixed-function state.
   - _Requirements: 1.1, 1.3_
 
-- [ ] 1.6 عدّل `gpu_draw_main` (والمسار الـ CPU draw): لو `bindless_enabled`
-      → لا `vkCmdBindDescriptorSets` بين المجموعات؛ الـ texture index من
-      الـ instance. وإلا → المسار الحالي بالضبط.
+- [x] 1.6 الرسم: لو `bindless_enabled` → bindless pipeline + ربط الجدول مرة
+      (set 2) + set 0 مرة (shadow sampler) + **صفر per-group descriptor bind**.
+      المسار الكلاسيكي fallback.
   - _Requirements: 1.1, 1.4_
 
-- [ ] 1.7 **Checkpoint بصري**: المستخدم يشغّل بالـ flag ON ثم OFF، يقارن
-      الصورة (لازم متطابقة) والـ FPS. تأكيد: لا regression بصري + bindless
-      شغّال. لا متابعة قبل التأكيد.
+- [x] 1.7 **Checkpoint بصري**: ✅ تم على RTX — الصورة **متطابقة** مع الكلاسيكي
+      (rendering كامل + 100k bots)، صفر تشويه، `[frog.bindless] pipeline ready`.
+      الـ flag `Engine.set_bindless(0/1)` للتبديل.
   - _Requirements: 1.5, 7.1, 7.3_
+
+> ملاحظة: `gpu_draw_main` (مسار الـ GPU-culling indirect draw) لسا ما اتعدّل
+> للـ bindless — هاد بيتغطّى مع المرحلة 2 (indirect-count) اللي بتعيد بناءه.
+> المسار النشط حالياً (CPU draw mode) bindless كامل.
 
 ---
 
