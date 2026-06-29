@@ -189,6 +189,33 @@
 
 ---
 
+## المرحلة S — تحسين تكلفة pass الظلال (GPU) ✅ مكتملة
+
+> اكتُشف عبر الـ GPU profiler إنّ pass الظلال = ~72% من زمن الـ GPU
+> (shadow≈2.6ms من total≈3.7ms على RTX، 100k مكعب متحرّك ظلّال). هدف
+> المرحلة: تقليل تكلفة الـ shadow pass بدون regression بصري، كله opt-in
+> خلف flags، fallback آمن للسلوك القديم.
+
+- [x] S.1 **Shadow LOD (size-cull)**: قص الـ casters اللي ظلّها المُسقَط على
+      الـ shadow map أصغر من عتبة. المقياس مبني على تدرّج صفوف مصفوفة الـ vp
+      (NDC projected radius) عشان يزبط للإسقاط الـ **orthographic** للإضاءة
+      الاتجاهية (الـ cw ثابت، فمقياس الـ perspective ما بنفع). API:
+      `Engine.debug.shadow_min_size(threshold)`، 0 = معطّل (افتراضي).
+  - النتيجة: shadow ~2.62ms → ~2.30ms. ✅ تأكيد بصري: الظلال القريبة سليمة.
+
+- [x] S.2 **CSM cascade-0 priority cull**: أي caster محتوى **بالكامل** جوّا
+      صندوق الـ cascade القريب (NDC مع هامش أمان) ما بينعاد رسمه بالـ cascade
+      البعيد — بيشيل الـ double-draw بمنطقة تداخل الـ cascadeين. API:
+      `Engine.debug.shadow_cascade0_margin(margin)`، 0 = معطّل (افتراضي).
+  - النتيجة: shadow ~2.30ms → ~1.56ms (عند المواضع الكثيفة). ✅ تأكيد بصري:
+    صفر regression، ما في حدود/وميض بين الـ cascadeين.
+  - إجمالاً: shadow pass ↓ ~40%، GPU frame ~3.7ms → ~2.0ms بأحسن الحالات.
+
+- [ ] S.3 (مؤجّل/اختياري) دقة shadow-map تكيّفية للمشاهد الكثيفة + خيار
+      cascade واحد. مكسب إضافي محتمل بس بمساس بصري أعلى — يُدرَس لاحقاً.
+
+---
+
 ## بعد كل مرحلة
 
 - [ ] حدّث `AGENTS.md` لو تغيّرت معمارية/calling-convention/بنية stdlib.
