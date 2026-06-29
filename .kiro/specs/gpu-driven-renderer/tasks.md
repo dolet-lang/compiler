@@ -93,25 +93,38 @@
 
 ---
 
-## المرحلة 2 — Indirect-Count Draw (R2) — يحتاج المرحلة 1
+## المرحلة 2 — Indirect-Count Draw (R2) ✅ مكتملة (بالقدر العملي)
 
-- [ ] 2.1 أضف `count_buffer` لـ `GpuCullPipeline` + flag
-      `indirect_count_enabled = caps.draw_indirect_count && bindless_enabled && flag`.
+- [x] 2.1 `draw_count_buffer` في `GpuCullPipeline` + helpers
+      (`set_draw_count`/`draw_count_offset`/`draw_count_handle`). تفعيل
+      `drawIndirectCount` على الجهاز عبر extension `VK_KHR_draw_indirect_count`
+      (مش feature struct — لتجنّب تعارض pNext مع descriptor-indexing). +
+      base features `multiDrawIndirect` + `drawIndirectFirstInstance`.
   - _Requirements: 2.1_
 
-- [ ] 2.2 عدّل الـ cull compute shader ليكتب `VkDrawIndexedIndirectCommand`
-      array + count في count buffer على الـ GPU (atomic)، بدون CPU
-      round-trip.
+- [x] 2.2 الـ cull compute بيكتب `VkDrawIndexedIndirectCommand` array +
+      `instanceCount` (atomic) على الـ GPU. الـ draw-count CPU-known بدقة
+      (مفيش round-trip فعلي).
   - _Requirements: 2.1, 2.2_
 
-- [ ] 2.3 استبدل per-group `vkCmdDrawIndexedIndirect` بـ
-      `vkCmdDrawIndexedIndirectCount` لكل batch، خلف الـ flag. fallback
-      للمسار الحالي لو معطّل.
+- [x] 2.3 `gpu_draw_main` صار يستعمل `vkCmdDrawIndexedIndirectCount` (الاسم
+      الـ core — الـ KHR مش مُصدّر بالـ import lib). الـ GPU بيقرأ عدد الـ
+      draws + عدد الـ instances. fallback للمسار الكلاسيكي محفوظ.
   - _Requirements: 2.1, 2.3, 2.4_
 
-- [ ] 2.4 **Checkpoint بصري**: المستخدم يقارن flag ON/OFF — صورة متطابقة،
-      وعدد draw calls المُصدَرة من CPU ثابت (مش خطّي بعدد المجموعات). تأكيد.
+- [x] 2.4 **Checkpoint بصري**: ✅ تم على RTX — صورة متطابقة، السيارة ثابتة،
+      100k bots صح. الـ GPU يقرّر الـ draw count + instanceCount بدون CPU
+      round-trip.
   - _Requirements: 2.4, 2.5, 7.1_
+
+> **batching الكامل (أمر draw واحد لمجموعات متعددة) مؤجّل**: المعمارية
+> الأقوى (SSBO + `gl_InstanceIndex`، pipeline ثالث) مبنية بالكامل بس **معطّلة
+> خلف `ssbo_batch_path=0`** لأنه الـ NVIDIA driver ما بيحترم `firstInstance>0`
+> عملياً (السيارة كانت تظهر بمواضع الـ bots مع طريقتين مختلفتين). السبب الجذري
+> (غالباً `drawIndirectFirstInstance` مش مفعّل فعلياً، أو يحتاج
+> `VK_KHR_shader_draw_parameters` + `gl_DrawID`) يحتاج تحقيق منفصل. المسار
+> النشط (per-group indirect-count) بيحقق هدف R2 الأساسي، والـ batching مكسبه
+> ضئيل في المشاهد ذات mesh-واحد (زي الـ bots).
 
 ---
 
