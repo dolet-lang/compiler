@@ -138,12 +138,12 @@ TK_CHAR_TYPE: i32 = 134
 # indents buffer: i32 array (4 bytes each)
 # ==========================================
 
-MAX_TOKENS: i32 = 524288
-out_kinds: i64 = Memory.malloc_zeroed(2097152)
-out_values: i64 = Memory.malloc_zeroed(4194304)
-out_indents: i64 = Memory.malloc_zeroed(2097152)
+MAX_TOKENS: i32 = 1048576
+out_kinds: i64 = Memory.malloc_zeroed(4194304)
+out_values: i64 = Memory.malloc_zeroed(8388608)
+out_indents: i64 = Memory.malloc_zeroed(4194304)
 # C2: per-token source line numbers (1-based), parallel to out_kinds
-out_lines: i64 = Memory.malloc_zeroed(2097152)
+out_lines: i64 = Memory.malloc_zeroed(4194304)
 out_count: i32 = 0
 g_tok_cur_line: i32 = 1
 
@@ -15759,11 +15759,11 @@ fun init_tokenizer_constants():
     TK_ANNOT = 135
 
 fun init_tokenizer_buffers():
-    MAX_TOKENS = 524288
-    out_kinds = Memory.malloc_zeroed(2097152)
-    out_values = Memory.malloc_zeroed(4194304)
-    out_indents = Memory.malloc_zeroed(2097152)
-    out_lines = Memory.malloc_zeroed(2097152)
+    MAX_TOKENS = 1048576
+    out_kinds = Memory.malloc_zeroed(4194304)
+    out_values = Memory.malloc_zeroed(8388608)
+    out_indents = Memory.malloc_zeroed(4194304)
+    out_lines = Memory.malloc_zeroed(4194304)
     g_tok_cur_line = 1
     out_count = 0
     tok_pos = 0
