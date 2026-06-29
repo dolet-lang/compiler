@@ -33,10 +33,19 @@
       `[frog.caps] api=.. bindless=.. indirect_count=.. dynamic_rendering=.. max_desc=..`
   - _Requirements: 5.3_
 
-- [ ] 0.6 **Checkpoint بصري**: المستخدم يبني ويشغّل اللعبة — تتأكد إنها
+- [x] 0.6 **Checkpoint بصري**: المستخدم يبني ويشغّل اللعبة — تتأكد إنها
       تشتغل بالضبط زي قبل (صفر تغيير بصري/أداء) ويقرأ سطر الـ caps على
       جهازه. لا متابعة قبل التأكيد.
   - _Requirements: 5.4, 7.1_
+  - ✅ **تم** على RTX: `[frog.caps] api=4206592 bindless=1 indirect_count=1
+    dynamic_rendering=1 max_desc=65536`. اللعبة اشتغلت كامل (rendering +
+    GPU cull self_test visible=2 + 100k bots) صفر regression بصري.
+  - **اكتشاف NVIDIA**: الـ Vulkan-1.2 aggregate (sType 49) بيرجّع
+    descriptor-indexing sub-features = 0؛ الـ struct المخصص
+    `VkPhysicalDeviceDescriptorIndexingFeatures` (sType 1000161001) بيرجّعها
+    صح. الكشف صار يقرأ من الاثنين (OR). **تفعيل bindless على الجهاز مؤجّل
+    للمرحلة 1** (لإنه ممنوع تحط struct-ين بنفس pNext chain — VUID-02830 —
+    والـ NVIDIA driver بينهار؛ لسا ما في مسار رسم بستعمله).
 
 ---
 
@@ -50,6 +59,13 @@
       count=cap، PARTIALLY_BOUND + UPDATE_AFTER_BIND) + pool + set. خلف
       `bindless_enabled`.
   - _Requirements: 1.1_
+  - **مهم (تأجيل من المرحلة 0)**: تفعيل descriptor-indexing على الجهاز
+    لازم يصير هون — عبر `VkPhysicalDeviceDescriptorIndexingFeatures`
+    (sType 1000161001) **بدل** الـ Vulkan12Features، + تفعيل
+    `VK_EXT_descriptor_indexing` extension. ممنوع الـ struct-ين بنفس
+    الـ pNext chain (NVIDIA driver crash). يعني `init_with_gpu_preference`
+    لازم يتعدّل ليبني الجهاز بالـ struct المخصص لما `bindless_enabled`.
+    fallback: لو فشل → device بدون descriptor-indexing + bindless_enabled=0.
 
 - [ ] 1.3 نفّذ `_bindless_register(view, sampler) -> i32`: يكتب الـ slot،
       يرجّع الـ index. اربط تسجيل الـ texture الموجود ليكتب slot في الجدول
