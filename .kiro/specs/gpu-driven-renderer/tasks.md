@@ -211,7 +211,20 @@
     صفر regression، ما في حدود/وميض بين الـ cascadeين.
   - إجمالاً: shadow pass ↓ ~40%، GPU frame ~3.7ms → ~2.0ms بأحسن الحالات.
 
-- [ ] S.3 (مؤجّل/اختياري) دقة shadow-map تكيّفية للمشاهد الكثيفة + خيار
+- [x] S.3 **توازي بناء instances الظلال (CPU)**: اكتُشف عبر profiler الـ CPU
+      الجديد (`Engine.debug.cpu_record_timing(1)`) إنّ بناء الظلال = 3.7ms من
+      4.46ms (83%) من تسجيل أوامر الإطار، كله على thread واحد. الحساب الثقيل
+      لكل caster (مصفوفة + sqrt + frustum + cascade-0) صار يتوزّع عبر
+      `engine_parallel_for` لمصفوفة `g_shadow_vis_out`، وحلقة الـ compaction
+      صارت قراءة جاهزة. ناتج byte-identical، صفر خطر بصري.
+  - النتيجة: shadow_build 3.7ms → ~1.3ms، total_record 4.46ms → ~2.05ms،
+    **الإطار 6.8ms (140 FPS) → 4.3ms (230 FPS)**. ✅ تأكيد بصري: الظلال سليمة.
+
+- [ ] S.4 (التالي) توازي حلقة الـ compaction/النسخ نفسها (الـ `Memory.copy`
+      لكل caster مرئي). كل cascade بمنطقته الخاصة → race-free. مكسب متوقّع
+      ~0.7ms إضافية من الـ ~1.3ms المتبقية.
+
+- [ ] S.5 (مؤجّل/اختياري) دقة shadow-map تكيّفية للمشاهد الكثيفة + خيار
       cascade واحد. مكسب إضافي محتمل بس بمساس بصري أعلى — يُدرَس لاحقاً.
 
 ---
