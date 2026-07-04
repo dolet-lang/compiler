@@ -243,6 +243,56 @@
 
 ---
 
+## المرحلة S6 — GPU-Driven Shadow Culling (الأقوى، rewrite معماري)
+
+> الهدف: إلغاء الـ CPU shadow compaction (~1.3ms) **و** تقليل الـ GPU shadow
+> (indirect draw واحد لكل cascade بدل per-group)، بإعادة استخدام معمارية الـ
+> GPU cull الموجودة (`GpuCullPipeline` + `cull.comp`) على frustum الظل.
+>
+> الفكرة الأساسية: الـ `cull.comp` بيعمل frustum cull + compaction لأي set
+> من الـ planes. الظل يحتاج **نفس العملية بالضبط** بس بـ planes الـ cascade.
+> فنعيد استخدام نفس الـ candidate `in_buffer` (محدّث أصلاً) + نفس الـ compute
+> pipeline، ونضيف shadow-specific out/cmd regions لكل cascade.
+
+- [ ] S6.1 وسّع `GpuCullPipeline` بـ shadow output regions: `shadow_out_buffer`
+      (compacted instances، usage STORAGE|VERTEX) + shadow indirect cmds +
+      draw-count، مقسّمة per-cascade × per-slot. `ensure_shadow_capacity`.
+  - _Requirements: 2.1, 7.1_
+
+- [ ] S6.2 API لـ dispatch الظل: `dispatch_shadow_cascade(cmd, cascade_planes,
+      candidate_count, out_base, cmd_index, push)` — يعيد استخدام نفس الـ
+      pipeline/desc_set بس يكتب لـ shadow regions (عبر desc_set ثاني يشير
+      لـ shadow_out). barrier compute→vertex.
+  - _Requirements: 2.1, 2.2_
+
+- [ ] S6.3 استخرج planes كل cascade من `light_vp[cascade]` عبر
+      `frog_cull_extract_planes` (موجودة). أضف distance/size cull للـ shadow
+      داخل نسخة `cull_shadow.comp` (أو push flag) لمطابقة السلوك الحالي.
+  - _Requirements: 2.1_
+
+- [ ] S6.4 عدّل `_record_shadow_pass`: خلف flag `gpu_shadow_cull_enabled`،
+      استبدل الـ CPU loop بـ dispatch per-cascade + `vkCmdDrawIndexedIndirect`
+      من shadow_out. fallback كامل للمسار الـ CPU الحالي (المسار المتوازي).
+  - _Requirements: 2.1, 3.1, 7.1_
+
+- [x] S6.5 **Checkpoint بصري**: ✅ تم على RTX. `Engine.debug.gpu_shadow_cull(1)`.
+      النتيجة: CPU `shadow_build` ~1300us → **~100-120us** (الـ compaction اختفت
+      من CPU)، `total_record` ~4460us → ~1080us. الظلال متطابقة بصرياً بعد إضافة
+      الـ distance cull. GPU shadow مستقر ~3.1-3.5ms (بدون spikes السيارة).
+  - _Requirements: 7.1, 7.3_
+
+- [x] S6.6 **distance cull للـ GPU shadow**: أضيف test مسافة اختياري للـ
+      `cull.comp` (خلف `camDistance.w > 0` بالـ push — الـ main pass يمرّر 0 =
+      بدون تغيير). الـ push توسّع 112→128 بايت، أعيد توليد SPIR-V. الظل يقص
+      الـ casters الأبعد من مسافة الظل (مطابقة للمسار الـ CPU الأصلي). النتيجة:
+      مدى الظلال رجع مطابق للأصل، CPU يضل محرّر (~100us).
+
+> ملاحظة: أكبر خطر = الـ shadow candidate buffer لازم يكون محدّث بمواقع كل
+> الـ casters (مش بس المرئيين بالكاميرا). الـ GPU cull الحالي `in_buffer`
+> بيحوي كل الـ candidates أصلاً (قبل الـ camera cull)، فنعيد استخدامه مباشرة.
+
+---
+
 ## بعد كل مرحلة
 
 - [ ] حدّث `AGENTS.md` لو تغيّرت معمارية/calling-convention/بنية stdlib.
