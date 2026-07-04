@@ -254,25 +254,30 @@
 > فنعيد استخدام نفس الـ candidate `in_buffer` (محدّث أصلاً) + نفس الـ compute
 > pipeline، ونضيف shadow-specific out/cmd regions لكل cascade.
 
-- [ ] S6.1 وسّع `GpuCullPipeline` بـ shadow output regions: `shadow_out_buffer`
-      (compacted instances، usage STORAGE|VERTEX) + shadow indirect cmds +
-      draw-count، مقسّمة per-cascade × per-slot. `ensure_shadow_capacity`.
+- [x] S6.1 وسّع `GpuCullPipeline` بـ shadow output regions: `shadow_out_buffer`
+      (compacted instances، usage STORAGE|VERTEX) + `shadow_cmd_buffer`
+      (indirect cmds) + `shadow_desc_set`، مقسّمة per-cascade × per-slot
+      (`FROG_CULL_SHADOW_CASCADES=2`). أُنشئت بـ `ensure_capacity` +
+      `_update_shadow_descriptors`. الـ shadow instance stride وُحّد لـ 128B
+      (`FROG_GPU_INSTANCE_STRIDE`) ليغذّي نفس البفر المسارين CPU/GPU.
   - _Requirements: 2.1, 7.1_
 
-- [ ] S6.2 API لـ dispatch الظل: `dispatch_shadow_cascade(cmd, cascade_planes,
-      candidate_count, out_base, cmd_index, push)` — يعيد استخدام نفس الـ
-      pipeline/desc_set بس يكتب لـ shadow regions (عبر desc_set ثاني يشير
-      لـ shadow_out). barrier compute→vertex.
+- [x] S6.2 API الـ dispatch: `dispatch_shadow_group` (يعيد استخدام نفس الـ
+      pipeline بس يربط `shadow_desc_set` → يكتب shadow regions) +
+      `prepare_shadow_cmd` + `shadow_barrier_before/after` (HOST→COMPUTE،
+      COMPUTE→{vertex,indirect}). helpers: `shadow_out_base/cmd_base/handle`.
   - _Requirements: 2.1, 2.2_
 
-- [ ] S6.3 استخرج planes كل cascade من `light_vp[cascade]` عبر
-      `frog_cull_extract_planes` (موجودة). أضف distance/size cull للـ shadow
-      داخل نسخة `cull_shadow.comp` (أو push flag) لمطابقة السلوك الحالي.
+- [x] S6.3 استخراج planes كل cascade من `light_vp[cascade]` عبر
+      `frog_cull_extract_planes`. distance cull أُضيف للـ `cull.comp` كـ
+      param اختياري بالـ push (`camDistance.w>0`؛ الـ main pass يمرّر 0 =
+      بدون تغيير)، push 112→128B، SPIR-V أُعيد توليده. (size-cull للظل ما
+      لزم — الـ frustum + distance يطابقوا المسار القديم عملياً.)
   - _Requirements: 2.1_
 
-- [ ] S6.4 عدّل `_record_shadow_pass`: خلف flag `gpu_shadow_cull_enabled`،
-      استبدل الـ CPU loop بـ dispatch per-cascade + `vkCmdDrawIndexedIndirect`
-      من shadow_out. fallback كامل للمسار الـ CPU الحالي (المسار المتوازي).
+- [x] S6.4 `_record_shadow_pass_gpu` خلف flag `Engine.debug.gpu_shadow_cull(1)`:
+      dispatch per-cascade → `vkCmdDrawIndexedIndirect` من shadow_out. fallback
+      كامل للمسار الـ CPU المتوازي لو الـ GPU draw مش نشط أو الـ flag مطفي.
   - _Requirements: 2.1, 3.1, 7.1_
 
 - [x] S6.5 **Checkpoint بصري**: ✅ تم على RTX. `Engine.debug.gpu_shadow_cull(1)`.
@@ -290,6 +295,33 @@
 > ملاحظة: أكبر خطر = الـ shadow candidate buffer لازم يكون محدّث بمواقع كل
 > الـ casters (مش بس المرئيين بالكاميرا). الـ GPU cull الحالي `in_buffer`
 > بيحوي كل الـ candidates أصلاً (قبل الـ camera cull)، فنعيد استخدامه مباشرة.
+
+- [x] S6.7 **إصلاح crash مع cascade واحد** (bug حقيقي كشفه اختبار الأداء):
+      `_frog_shadow_vis_one` (توازي رؤية الظلال، S.3) كان يكتب slot الـ
+      cascadeين دايماً (`while c < 2`) بينما الـ vis buffer محجوز لـ
+      `active_cascade_count` cascade. مع cascade واحد، workers متوازية بتكتب
+      خارج حدود الـ heap → فساد ذاكرة → crash أول إطار. الإصلاح: حدّ الـ
+      writer بـ `g_shadow_active_cascades`. الآن 1 و2 cascade صحيحين.
+
+---
+
+## خلاصة الأداء (مقاسة على RTX، 100k مكعب متحرّك بظلال)
+
+> **الإطار GPU-bound عند ~4ms (~260-330 FPS حسب موضع الكاميرا).** ثبت
+> بالقياس إنّ الـ CPU مش الـ bottleneck (`total_record` ~1080us،
+> `bots update` ~2050us شغل اللعبة، والباقي GPU + present).
+>
+> **قياسات حسمت اتجاهات مرفوضة (لتجنّب إعادة المحاولة):**
+> - دقة shadow-map 8192→4096 (ربع البكسلات): وفّرت ~17% فقط من الـ GPU
+>   shadow → **الدقة/fill-rate مش العامل**. (S.5 غير مجدٍ.)
+> - cascade واحد بدل 2: **نفس التكلفة** (الصندوق الواحد يحتوي casters أكتر
+>   بمساحة أوسع؛ ما في توفير) → الـ cascade count مش العامل.
+> - المرحلة 4 (GPU instance transforms): الإطار GPU-bound فمكسبها على CPU
+>   = صفر FPS، + مخاطرة كسر الـ collision/CPU اللي بيقرأ `model_matrices`.
+>
+> **الاستنتاج:** الـ GPU shadow ~3.5ms = الكلفة الطبيعية لرسم عشرات آلاف
+> الظلال المتحركة. تقليلها أكتر يتطلب تقليل عدد الـ casters أو الجودة
+> (قرارات اللعبة، مش المحرّك). المحرّك وصل حده العملي على هذا المشهد.
 
 ---
 
