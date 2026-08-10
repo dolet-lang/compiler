@@ -137,19 +137,51 @@ TK_CHAR_TYPE: i32 = 134
 # indents buffer: i32 array (4 bytes each)
 # ==========================================
 
-MAX_TOKENS: i32 = 1048576
-out_kinds: i64 = Memory.malloc_zeroed(4194304)
-out_values: i64 = Memory.malloc_zeroed(8388608)
-out_indents: i64 = Memory.malloc_zeroed(4194304)
+out_capacity: i32 = 0
+out_kinds: i64 = 0
+out_values: i64 = 0
+out_indents: i64 = 0
 # C2: per-token source line numbers (1-based), parallel to out_kinds
-out_lines: i64 = Memory.malloc_zeroed(4194304)
+out_lines: i64 = 0
 out_count: i32 = 0
 g_tok_cur_line: i32 = 1
 
-fun emit_token(kind: i32, value: str, indent: i32):
-    if out_count >= MAX_TOKENS:
-        IOOps.io_println("[FATAL] Token buffer overflow - increase MAX_TOKENS")
+fun ensure_token_capacity(required: i32):
+    if required <= out_capacity:
         return
+    new_capacity: i32 = out_capacity
+    if new_capacity < 1024:
+        new_capacity = 1024
+    while new_capacity < required:
+        next_capacity: i32 = new_capacity * 2
+        if next_capacity <= new_capacity:
+            IOOps.io_println("[FATAL] Token buffer capacity overflow")
+            Process.exit(1)
+        new_capacity = next_capacity
+    new_kinds: i64 = Memory.realloc(out_kinds, (new_capacity as i64) * 4)
+    if new_kinds == 0:
+        IOOps.io_println("[FATAL] Out of memory growing token kinds")
+        Process.exit(1)
+    out_kinds = new_kinds
+    new_values: i64 = Memory.realloc(out_values, (new_capacity as i64) * 8)
+    if new_values == 0:
+        IOOps.io_println("[FATAL] Out of memory growing token values")
+        Process.exit(1)
+    out_values = new_values
+    new_indents: i64 = Memory.realloc(out_indents, (new_capacity as i64) * 4)
+    if new_indents == 0:
+        IOOps.io_println("[FATAL] Out of memory growing token indents")
+        Process.exit(1)
+    out_indents = new_indents
+    new_lines: i64 = Memory.realloc(out_lines, (new_capacity as i64) * 4)
+    if new_lines == 0:
+        IOOps.io_println("[FATAL] Out of memory growing token source lines")
+        Process.exit(1)
+    out_lines = new_lines
+    out_capacity = new_capacity
+
+fun emit_token(kind: i32, value: str, indent: i32):
+    ensure_token_capacity(out_count + 1)
     ko: i64 = (out_count as i64) * 4
     vo: i64 = (out_count as i64) * 8
     io: i64 = (out_count as i64) * 4

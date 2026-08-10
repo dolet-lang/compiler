@@ -1,0 +1,11 @@
+schema = 1
+toolchain_id = "llvm"
+toolchain_version = "1"
+host = "windows-x86_64"
+
+# Logical role -> executable path relative to this host directory.
+translate = "bin/mlir-translate.exe"
+compile = "bin/clang.exe"
+link_driver = "bin/clang.exe"
+link_coff = "bin/lld-link.exe"
+link_elf = "bin/ld.lld.exe"

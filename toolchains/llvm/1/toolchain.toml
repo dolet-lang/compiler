@@ -1,0 +1,11 @@
+schema = 1
+toolchain_id = "llvm"
+toolchain_version = "1"
+hosts_root = "hosts"
+
+# This is the versioned Dolet LLVM bundle contract. Component versions may
+# differ because MLIR and LLVM tools are distributed independently; the host
+# manifest is the executable source of truth for every logical role.
+translate_component = "LLVM 22.0.0git"
+compile_component = "Clang 21.1.8"
+link_component = "LLD 21.1.8"

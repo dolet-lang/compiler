@@ -203,7 +203,7 @@ fun is_local_name(name: str) -> i32:
 # ==========================================
 fun panic(msg: str):
     print(@"[PARSE ERROR] {msg}")
-    ExitProcess(1)
+    Process.exit(1)
 
 # ==========================================
 # String Helpers

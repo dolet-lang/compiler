@@ -1,24 +1,47 @@
-# LLVM Tools
+# Dolet Host Toolchains
 
-The Dolet compiler requires the following LLVM tools in this directory:
+`tools/` contains setup and maintenance scripts only. Executables that run on
+the compiler host live in the versioned `toolchains/` store:
 
-| Tool | Purpose |
-|------|---------|
-| `mlir-translate.exe` | Converts MLIR to LLVM IR (.mlir → .ll) |
-| `clang.exe` | Compiles LLVM IR to object files (.ll → .obj) |
-| `lld-link.exe` | Links object files into executables (.obj → .exe) |
-
-## Setup
-
-Run the setup script to copy tools from an existing LLVM installation:
-
-```batch
-setup_tools.bat
+```text
+toolchains/<id>/<version>/
+|-- toolchain.toml
+`-- hosts/<host-id>/
+    |-- host.toml
+    `-- bin/
 ```
 
-Or manually copy the three executables listed above into this directory.
+Target runtimes, ABI data, CRT objects, SDK libraries, and linker policy do
+not belong here. They live under `library/platform/<os>/targets/<target>/`.
 
-## Download
+## Windows LLVM bundle
 
-These tools are part of the LLVM project. You can build them from source or download pre-built binaries from:
-- https://github.com/llvm/llvm-project/releases
+Install the current Windows host bundle from an existing LLVM/MLIR directory:
+
+```batch
+tools\setup_tools.bat C:\llvm\bin
+```
+
+Required source files:
+
+- `clang.exe`
+- `lld-link.exe`
+- `ld.lld.exe`
+- `mlir-translate.exe`
+
+The script installs them under
+`toolchains/llvm/1/hosts/windows-x86_64/bin/`. The checked-in manifests map
+logical compiler roles to these host executables; platform manifests never
+contain executable names or host paths.
+
+## Linux LLVM bundle
+
+On an x86_64 Linux host, install the native Linux executables with:
+
+```sh
+./tools/setup_tools.sh /opt/llvm/bin
+```
+
+They are copied to `toolchains/llvm/1/hosts/linux-x86_64/bin/`. Never copy
+Windows executables into the Linux host pack: host packs describe the machine
+running `doletc`, independently from the target selected by `--target`.

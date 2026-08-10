@@ -129,11 +129,16 @@ fun init_tokenizer_constants():
     TK_ANNOT = 135
 
 fun init_tokenizer_buffers():
-    MAX_TOKENS = 1048576
-    out_kinds = Memory.malloc_zeroed(4194304)
-    out_values = Memory.malloc_zeroed(8388608)
-    out_indents = Memory.malloc_zeroed(4194304)
-    out_lines = Memory.malloc_zeroed(4194304)
+    # Start modestly and grow geometrically. Large programs are no longer
+    # limited by the old 1,048,576-token hard ceiling.
+    out_capacity = 262144
+    out_kinds = Memory.malloc_zeroed((out_capacity as i64) * 4)
+    out_values = Memory.malloc_zeroed((out_capacity as i64) * 8)
+    out_indents = Memory.malloc_zeroed((out_capacity as i64) * 4)
+    out_lines = Memory.malloc_zeroed((out_capacity as i64) * 4)
+    if out_kinds == 0 or out_values == 0 or out_indents == 0 or out_lines == 0:
+        IOOps.io_println("[FATAL] Unable to initialize token buffers")
+        Process.exit(1)
     g_tok_cur_line = 1
     out_count = 0
     tok_pos = 0

@@ -12,9 +12,15 @@ build/*.obj
 *.exe
 !bin/doletc.exe
 
+# Host toolchain executables are installed per machine. Manifests stay tracked.
+toolchains/**/hosts/**/bin/*
+
 # Cloned repos (users add these manually, NOT part of this repo)
 /bootstrap/
-/tools/
+/tools/*
+!/tools/README.md
+!/tools/setup_tools.bat
+!/tools/setup_tools.sh
 /library/
 /packages/
 /dist/

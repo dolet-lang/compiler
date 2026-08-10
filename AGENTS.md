@@ -82,8 +82,11 @@ dolet-compiler/
 │   ├── platform/{windows,linux}/    # OS-specific
 │   └── std/                         # opt-in via `import std`
 ├── bootstrap/                       # Python bootstrap compiler (stage 0)
+├── toolchains/<id>/<version>/       # host executables selected by logical roles
+│   ├── toolchain.toml               # package identity + supported host packs
+│   └── hosts/<host-id>/host.toml    # role -> host executable mapping
 ├── build.bat                        # 3-stage byte-stable bootstrap
-├── run_tests.bat                    # 94 tests
+├── run_tests.bat                    # 121 tests; stress tests opt-in
 ├── tests/                           # *.dlt test files
 └── bin/doletc.exe                   # the compiled compiler
 ```
@@ -693,7 +696,7 @@ struct DisplayBox<T: Display>:
 ```
 1. init_pipeline() — registries, constants
 2. parse CLI args
-3. load_platform_config()                  — reads platform/<name>/platform.conf
+3. load_platform_config()                  — reads Platform Manifest v2 for the target
 4. load_library_registry()                  — reads library/mod.dlt
 5. load_prelude(exe_dir)                    — library/core/annotations.dlt
 6. (unless --no-runtime) load_runtime():
@@ -702,7 +705,9 @@ struct DisplayBox<T: Display>:
      - library/std/mod.dlt
      register_module_name("std")
 7. resolve_and_load_imports(user_src)       — user `import` statements
-8. tokenize → parse → MLIR → LLVM IR → obj → exe
+8. tokenize → parse → MLIR
+9. load_host_toolchain()                   — resolves logical roles for this host
+10. MLIR → LLVM IR → obj → exe (as requested by --emit)
 ```
 
 ### Auto-loaded WITHOUT `import std`
@@ -955,10 +960,12 @@ library/
 │   │   ├── args.dlt
 │   │   ├── dir.dlt
 │   │   ├── time.dlt
-│   │   ├── platform.conf             # toolchain config
-│   │   ├── resources/                # runtime_helpers.obj, kernel32.def/lib, etc.
+│   │   ├── targets/x86_64-msvc/
+│   │   │   ├── platform.toml         # Platform Manifest v2 (target/ABI policy)
+│   │   │   └── resources/            # target runtime helpers/import libraries
 │   │   └── mod.dlt
-│   └── linux/ (mirror, mostly stubbed)
+│   └── linux/                        # real libc/pthread/process/network backend
+│       └── targets/x86_64-gnu/       # GNU target manifest + runtime helpers
 │
 └── std/                              # OPT-IN via `import std`
     ├── io.dlt                        # print, println, IOOps
@@ -991,7 +998,9 @@ If string/numeric operation is platform-independent → it goes in
 | Flag | Effect |
 |---|---|
 | `-o <path>` | Output executable path |
-| `--target <name>` | Reads `library/platform/<name>/platform.conf` (default: detected) |
+| `--target <os/arch-abi>` | Select a registered target (default from host PlatformInfo) |
+| `--platform <path>` | Use an explicit Platform Manifest v2 |
+| `--emit <mlir|llvm|object|exe>` | Stop at the requested pipeline artifact |
 | `--keep-mlir` | Don't delete `.mlir` after build |
 | `--keep-llvm` | Don't delete `.ll` after build |
 | `--no-runtime` | Skip auto-loading core/platform/std |
@@ -1013,19 +1022,28 @@ If string/numeric operation is platform-independent → it goes in
 5. [1/4] Tokenize  → out_kinds, out_values, out_indents, out_lines
 6. [2/4] Parse     → AST (root_ast)
 7. [3/4] Codegen   → MLIR text (write to .mlir file)
-8. [4/4] Build:
-     mlir-translate <input>.mlir → <input>.ll
-     clang -c <input>.ll        → <input>.obj
-     lld-link <input>.obj      → <output>.exe
-9. Cleanup intermediates (unless --keep-mlir / --keep-llvm)
+8. [4/4] Load `toolchains/<id>/<version>/toolchain.toml`, then the
+   matching `hosts/<PlatformInfo.host_id()>/host.toml`.
+9. Resolve target-requested logical roles (`translate`, `compile`,
+   `link_coff`, `link_driver`, etc.) to bundled host executables.
+10. Build only as far as requested by `--emit`:
+     translate role: MLIR → LLVM IR
+     compile role:   LLVM IR → target object
+     link role:      object + target resources → executable
+11. Cleanup intermediates (unless --keep-mlir / --keep-llvm)
 ```
 
 ### File extensions per platform
 
-| Platform | obj_ext | exe_ext | linker |
+| Platform | obj_ext | exe_ext | link role |
 |---|---|---|---|
-| Windows | `.obj` | `.exe` | `lld-link` |
-| Linux | `.o` | (none) | `ld.lld` |
+| Windows x86_64-msvc | `.obj` | `.exe` | `link_coff` |
+| Linux x86_64-gnu | `.o` | (none) | `link_driver` |
+
+Target manifests never contain host executable names. Host binaries and
+their filenames belong only to Host Toolchain Manifests. Target sysroots,
+CRT objects, import libraries, runtime helpers, triples, and linker policy
+belong only to Platform Manifests and their target resource directories.
 
 ---
 
@@ -1198,7 +1216,7 @@ You DO need `import std` for: `print`, `println`, `File`, `Args`,
 After ANY change to compiler or stdlib:
 
 1. **Bootstrap byte-stable**: `build.bat` produces stage 2 ≡ stage 3.
-2. **No test regressions**: `run_tests.bat` reports `94 PASS / 0 FAIL`.
+2. **No test regressions**: `run_tests.bat` reports `121 PASS / 0 FAIL`.
 3. **All 4 user apps rebuild**: simple-app-eqoi, FileManager, DisplayManager, DesktopShell.
 
 ### Test layout (`run_tests.bat`)
@@ -1217,6 +1235,9 @@ cmd.exe /c run_tests.bat
 ```
 
 Look for `Results: <pass> PASS / <fail> FAIL` at the end.
+The known heavy `parallel_leak_free` stress case is skipped by default.
+Run it only in an isolated session with `DOLET_RUN_STRESS=1`; normal tests
+are executed through `tests/run_with_limits.ps1` with hard time/memory caps.
 
 ### When regressions appear
 

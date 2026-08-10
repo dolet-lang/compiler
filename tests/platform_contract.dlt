@@ -1,0 +1,78 @@
+import std
+
+# Executable platform-pack contract. It deliberately uses only the portable
+# surface while exercising every primitive that a supported OS must provide.
+
+g_contract_value: i32 = 0
+g_contract_lock: Mutex = Mutex.new()
+
+fun require_contract(condition: bool, label: str):
+    if not condition:
+        print("PLATFORM CONTRACT FAIL: " + label)
+        Process.exit(97)
+
+fun contract_worker():
+    g_contract_lock.lock()
+    g_contract_value = g_contract_value + 1
+    g_contract_lock.unlock()
+
+fun main_contract():
+    require_contract(Memory.strlen(System.platform()) > 0, "platform identity")
+    require_contract(Argv.count() >= 1, "argv")
+    require_contract(Memory.strlen(Argv.get(0)) > 0, "argv[0]")
+
+    cwd: str = System.cwd()
+    require_contract(Memory.strlen(cwd) > 0, "cwd")
+    joined: str = PathOps.join_path(cwd, "platform_contract.tmp")
+    require_contract(Memory.strlen(joined) > Memory.strlen(cwd), "path join")
+
+    output: File = File.open_cwd("platform_contract.tmp", "w")
+    require_contract(output.is_valid(), "file create")
+    require_contract(output.write("dolet-platform-v1") == 17, "file write")
+    output.close()
+
+    input: File = File.open_cwd("platform_contract.tmp", "r")
+    require_contract(input.is_valid(), "file open")
+    text: str = input.read_text()
+    input.close()
+    require_contract(Str.equals(text, "dolet-platform-v1"), "file read")
+    require_contract(FileOps.file_delete("platform_contract.tmp") == 1, "file delete")
+
+    entries: list<str> = Dir.list(".")
+    require_contract(entries.size() > 0, "directory enumeration")
+
+    captured: Output = Output(code=-1, stdout="", stderr="")
+    if Str.equals(System.platform(), "linux"):
+        captured = Command.output("printf out; printf err >&2; exit 7")
+    else:
+        captured = Command.output("cmd /c echo out & echo err 1>&2 & exit 7")
+    print("process code=" + Convert.i32_to_str(captured.code) + " stdout='" + captured.stdout + "' stderr='" + captured.stderr + "'")
+    require_contract(captured.code == 7, "process exit code")
+    require_contract(Str.equals(captured.stdout, "out"), "process stdout")
+    require_contract(Str.equals(captured.stderr, "err"), "process stderr")
+
+    before: i64 = Time.now_ms()
+    Thread.sleep(2)
+    after: i64 = Time.now_ms()
+    require_contract(after >= before, "monotonic time")
+
+    worker: @heap fun() = fun() contract_worker()
+    thread: Thread = Thread.spawn(worker)
+    thread.join()
+    require_contract(g_contract_value == 1, "thread and mutex")
+
+    event: ParkEvent = ParkEvent.new()
+    event.signal()
+    event.wait(1)
+    event.reset()
+    event.destroy()
+
+    require_contract(NetOps.net_init() == 0, "network initialize")
+    socket_handle: i64 = NetOps.net_socket_create()
+    require_contract(socket_handle >= 0, "network socket")
+    require_contract(NetOps.net_socket_close(socket_handle) == 0, "network close")
+
+    g_contract_lock.destroy()
+    print("PLATFORM CONTRACT OK: " + System.platform())
+
+main_contract()

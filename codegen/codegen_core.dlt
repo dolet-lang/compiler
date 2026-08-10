@@ -48,7 +48,7 @@ g_user_line_offset: i32 = 0
 
 fun panic(msg: str):
     IOOps.io_println(msg)
-    ExitProcess(1)
+    Process.exit(1)
 
 # ==========================================
 # AST Constant Init (workaround: Python MLIR gen loses global initializers in large files)
@@ -157,22 +157,49 @@ fun init_ast_constants():
 # projects and caused silent emit failures → later segfaults).
 g_out: i64 = 0
 g_out_count: i32 = 0
-g_out_cap: i32 = 4194304
+g_out_cap: i32 = 0
 
 # Entry Block Buffer — for hoisting alloca instructions to function entry.
 # One function's allocas only; cleared between functions.
 g_entry_buf: i64 = 0
 g_entry_count: i32 = 0
-g_entry_cap: i32 = 65536
+g_entry_cap: i32 = 0
 g_entry_active: i32 = 0
 g_entry_insert_pos: i32 = 0
 
+# Stable compiler-side string hashing for symbol indexes. Keeping the
+# arithmetic below a prime modulus avoids signed-overflow differences while
+# bootstrapping the compiler on different hosts.
+fun cg_hash_text(text: str) -> i64:
+    h: i64 = 5381
+    n: i64 = Memory.strlen(text)
+    i: i64 = 0
+    while i < n:
+        c: i64 = Memory.read_i8((text as i64) + i) as i64
+        h = ((h * 131) + c + 1) % 2147483629
+        i = i + 1
+    return h
+
+fun cg_hash_pair(first: str, second: str) -> i64:
+    h: i64 = cg_hash_text(first)
+    h = ((h * 131) + 257) % 2147483629
+    n: i64 = Memory.strlen(second)
+    i: i64 = 0
+    while i < n:
+        c: i64 = Memory.read_i8((second as i64) + i) as i64
+        h = ((h * 131) + c + 1) % 2147483629
+        i = i + 1
+    return h
+
 fun init_codegen():
-    g_out_cap = 4194304
+    g_out_cap = 262144
     g_out = Memory.malloc_zeroed((g_out_cap as i64) * 8)
     g_out_count = 0
-    g_entry_cap = 65536
+    g_entry_cap = 4096
     g_entry_buf = Memory.malloc_zeroed((g_entry_cap as i64) * 8)
+    if g_out == 0 or g_entry_buf == 0:
+        IOOps.io_println("[FATAL] Unable to initialize codegen buffers")
+        Process.exit(1)
     g_entry_count = 0
     g_entry_active = 0
     g_entry_insert_pos = 0
@@ -196,10 +223,46 @@ fun init_codegen():
     g_continue_label = ""
     init_fn_annot_registry()
 
-fun emit(line: str):
-    if g_out_count >= g_out_cap:
-        IOOps.io_println("[FATAL] MLIR output buffer overflow - increase g_out_cap")
+fun ensure_out_capacity(required: i32):
+    if required <= g_out_cap:
         return
+    new_capacity: i32 = g_out_cap
+    if new_capacity < 1024:
+        new_capacity = 1024
+    while new_capacity < required:
+        next_capacity: i32 = new_capacity * 2
+        if next_capacity <= new_capacity:
+            IOOps.io_println("[FATAL] MLIR output capacity overflow")
+            Process.exit(1)
+        new_capacity = next_capacity
+    new_out: i64 = Memory.realloc(g_out, (new_capacity as i64) * 8)
+    if new_out == 0:
+        IOOps.io_println("[FATAL] Out of memory growing MLIR output")
+        Process.exit(1)
+    g_out = new_out
+    g_out_cap = new_capacity
+
+fun ensure_entry_capacity(required: i32):
+    if required <= g_entry_cap:
+        return
+    new_capacity: i32 = g_entry_cap
+    if new_capacity < 256:
+        new_capacity = 256
+    while new_capacity < required:
+        next_capacity: i32 = new_capacity * 2
+        if next_capacity <= new_capacity:
+            IOOps.io_println("[FATAL] Entry alloca capacity overflow")
+            Process.exit(1)
+        new_capacity = next_capacity
+    new_entry: i64 = Memory.realloc(g_entry_buf, (new_capacity as i64) * 8)
+    if new_entry == 0:
+        IOOps.io_println("[FATAL] Out of memory growing entry allocas")
+        Process.exit(1)
+    g_entry_buf = new_entry
+    g_entry_cap = new_capacity
+
+fun emit(line: str):
+    ensure_out_capacity(g_out_count + 1)
     off: i64 = (g_out_count as i64) * 8
     Memory.write_i64(g_out + off, line as i64)
     g_out_count = g_out_count + 1
@@ -208,8 +271,7 @@ fun emit_blank():
     emit("")
 
 fun entry_emit(line: str):
-    if g_entry_count >= g_entry_cap:
-        return
+    ensure_entry_capacity(g_entry_count + 1)
     off: i64 = (g_entry_count as i64) * 8
     Memory.write_i64(g_entry_buf + off, line as i64)
     g_entry_count = g_entry_count + 1
@@ -217,6 +279,7 @@ fun entry_emit(line: str):
 fun flush_entry_allocas():
     if g_entry_count == 0:
         return
+    ensure_out_capacity(g_out_count + g_entry_count)
     # Shift existing g_out lines from insert_pos forward to make room
     shift_count: i32 = g_out_count - g_entry_insert_pos
     si: i32 = g_out_count - 1
@@ -307,15 +370,44 @@ g_str_emitted: i32 = 0
 # String pool — all unique string literals in the whole program.
 # Bumped from 65536 to 524288 so large-widget packages (eqoi) don't
 # silently drop strings and produce corrupted MLIR.
-g_str_cap: i32 = 524288
+g_str_cap: i32 = 0
 
 fun init_str_pool():
-    g_str_cap = 524288
+    g_str_cap = 16384
     g_str_labels = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_texts = Memory.malloc_zeroed((g_str_cap as i64) * 8)
     g_str_lens = Memory.malloc_zeroed((g_str_cap as i64) * 4)
     g_str_count = 0
     g_str_counter = 0
+
+fun ensure_str_capacity(required: i32):
+    if required <= g_str_cap:
+        return
+    new_capacity: i32 = g_str_cap
+    if new_capacity < 1024:
+        new_capacity = 1024
+    while new_capacity < required:
+        next_capacity: i32 = new_capacity * 2
+        if next_capacity <= new_capacity:
+            IOOps.io_println("[FATAL] String pool capacity overflow")
+            Process.exit(1)
+        new_capacity = next_capacity
+    new_labels: i64 = Memory.realloc(g_str_labels, (new_capacity as i64) * 8)
+    if new_labels == 0:
+        IOOps.io_println("[FATAL] Out of memory growing string labels")
+        Process.exit(1)
+    g_str_labels = new_labels
+    new_texts: i64 = Memory.realloc(g_str_texts, (new_capacity as i64) * 8)
+    if new_texts == 0:
+        IOOps.io_println("[FATAL] Out of memory growing string texts")
+        Process.exit(1)
+    g_str_texts = new_texts
+    new_lens: i64 = Memory.realloc(g_str_lens, (new_capacity as i64) * 4)
+    if new_lens == 0:
+        IOOps.io_println("[FATAL] Out of memory growing string lengths")
+        Process.exit(1)
+    g_str_lens = new_lens
+    g_str_cap = new_capacity
 
 fun escaped_byte_len(text: str) -> i64:
     slen: i64 = Memory.strlen(text)
@@ -342,10 +434,7 @@ fun gen_string_const(text: str) -> str:
         if str_eq(existing, text) == 1:
             return Memory.read_i64(g_str_labels + off) as str
         i = i + 1
-    # Bounds check
-    if g_str_count >= g_str_cap:
-        IOOps.io_println("[FATAL] String pool overflow - increase g_str_cap")
-        return "@str0"
+    ensure_str_capacity(g_str_count + 1)
     # Register new
     label: str = new_str_label()
     slen: i64 = escaped_byte_len(text) + 1
@@ -474,65 +563,108 @@ fun pop_var_scope():
 g_fun_sig_names: i64 = 0
 g_fun_sig_ret: i64 = 0
 g_fun_sig_count: i32 = 0
+g_fun_sig_params: i64 = 0
+g_fun_sig_index: i64 = 0
+g_fun_sig_index_cap: i32 = 131072
+
+fun fun_sig_index_add(index: i32):
+    name: str = Memory.read_i64(g_fun_sig_names + ((index as i64) * 8)) as str
+    slot: i32 = (cg_hash_text(name) % (g_fun_sig_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_fun_sig_index_cap:
+        off4: i64 = (slot as i64) * 4
+        encoded: i32 = Memory.read_i32(g_fun_sig_index + off4)
+        if encoded == 0:
+            Memory.write_i32(g_fun_sig_index + off4, index + 1)
+            return
+        existing_index: i32 = encoded - 1
+        existing: str = Memory.read_i64(g_fun_sig_names + ((existing_index as i64) * 8)) as str
+        if str_eq(existing, name) == 1:
+            # Preserve the first registration, matching the old linear scan.
+            return
+        slot = (slot + 1) % g_fun_sig_index_cap
+        probes = probes + 1
+    IOOps.io_println("[FATAL] Function signature index is full")
+    Process.exit(1)
+
+fun find_fun_sig_index(name: str) -> i32:
+    slot: i32 = (cg_hash_text(name) % (g_fun_sig_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_fun_sig_index_cap:
+        encoded: i32 = Memory.read_i32(g_fun_sig_index + ((slot as i64) * 4))
+        if encoded == 0:
+            return -1
+        index: i32 = encoded - 1
+        existing: str = Memory.read_i64(g_fun_sig_names + ((index as i64) * 8)) as str
+        if str_eq(existing, name) == 1:
+            return index
+        slot = (slot + 1) % g_fun_sig_index_cap
+        probes = probes + 1
+    return -1
 
 fun init_fun_sigs():
     g_fun_sig_names = Memory.malloc_zeroed(65536 * 8)
     g_fun_sig_ret = Memory.malloc_zeroed(65536 * 8)
     g_fun_sig_params = Memory.malloc_zeroed(65536 * 8)
+    g_fun_sig_index_cap = 131072
+    g_fun_sig_index = Memory.malloc_zeroed((g_fun_sig_index_cap as i64) * 4)
+    if g_fun_sig_names == 0 or g_fun_sig_ret == 0 or g_fun_sig_params == 0 or g_fun_sig_index == 0:
+        IOOps.io_println("[FATAL] Unable to initialize function signature registry")
+        Process.exit(1)
     g_fun_sig_count = 0
 
-g_fun_sig_params: i64 = 0
-
 fun register_fun_sig(name: str, ret_type: str):
+    if g_fun_sig_count >= 65536:
+        IOOps.io_println("[FATAL] Function signature registry capacity exceeded")
+        Process.exit(1)
+    index: i32 = g_fun_sig_count
     off: i64 = (g_fun_sig_count as i64) * 8
     Memory.write_i64(g_fun_sig_names + off, name as i64)
     Memory.write_i64(g_fun_sig_ret + off, ret_type as i64)
     Memory.write_i64(g_fun_sig_params + off, "" as i64)
     g_fun_sig_count = g_fun_sig_count + 1
+    fun_sig_index_add(index)
 
 fun register_fun_sig_with_params(name: str, ret_type: str, param_types: str):
+    if g_fun_sig_count >= 65536:
+        IOOps.io_println("[FATAL] Function signature registry capacity exceeded")
+        Process.exit(1)
+    index: i32 = g_fun_sig_count
     off: i64 = (g_fun_sig_count as i64) * 8
     Memory.write_i64(g_fun_sig_names + off, name as i64)
     Memory.write_i64(g_fun_sig_ret + off, ret_type as i64)
     Memory.write_i64(g_fun_sig_params + off, param_types as i64)
     g_fun_sig_count = g_fun_sig_count + 1
+    fun_sig_index_add(index)
 
 fun get_fun_param_type(name: str, idx: i32) -> str:
-    i: i32 = 0
-    while i < g_fun_sig_count:
-        off: i64 = (i as i64) * 8
-        fn: str = Memory.read_i64(g_fun_sig_names + off) as str
-        if str_eq(fn, name) == 1:
-            pts: str = Memory.read_i64(g_fun_sig_params + off) as str
-            plen: i64 = Memory.strlen(pts)
-            if plen == 0:
-                return ""
-            # Split by comma, get idx-th element
-            cur: i32 = 0
-            start: i64 = 0
-            j: i64 = 0
-            while j <= plen:
-                c: i8 = 0
-                if j < plen:
-                    c = Memory.read_i8((pts as i64) + j)
-                if c == 44 or j == plen:
-                    if cur == idx:
-                        return str_from_range(pts, start, j)
-                    cur = cur + 1
-                    start = j + 1
-                j = j + 1
-            return ""
-        i = i + 1
+    sig_index: i32 = find_fun_sig_index(name)
+    if sig_index < 0:
+        return ""
+    pts: str = Memory.read_i64(g_fun_sig_params + ((sig_index as i64) * 8)) as str
+    plen: i64 = Memory.strlen(pts)
+    if plen == 0:
+        return ""
+    # Split by comma, get idx-th element
+    cur: i32 = 0
+    start: i64 = 0
+    j: i64 = 0
+    while j <= plen:
+        c: i8 = 0
+        if j < plen:
+            c = Memory.read_i8((pts as i64) + j)
+        if c == 44 or j == plen:
+            if cur == idx:
+                return str_from_range(pts, start, j)
+            cur = cur + 1
+            start = j + 1
+        j = j + 1
     return ""
 
 fun get_fun_ret_type(name: str) -> str:
-    i: i32 = 0
-    while i < g_fun_sig_count:
-        off: i64 = (i as i64) * 8
-        fn: str = Memory.read_i64(g_fun_sig_names + off) as str
-        if str_eq(fn, name) == 1:
-            return Memory.read_i64(g_fun_sig_ret + off) as str
-        i = i + 1
+    index: i32 = find_fun_sig_index(name)
+    if index >= 0:
+        return Memory.read_i64(g_fun_sig_ret + ((index as i64) * 8)) as str
     return "unknown"
 
 # True iff `name` is registered in the function signature table.
@@ -540,13 +672,8 @@ fun get_fun_ret_type(name: str) -> str:
 # extend-block methods before they emit silent void calls (the
 # class of bug behind B-01 and B-02).
 fun fun_is_registered(name: str) -> i32:
-    i: i32 = 0
-    while i < g_fun_sig_count:
-        off: i64 = (i as i64) * 8
-        fn: str = Memory.read_i64(g_fun_sig_names + off) as str
-        if str_eq(fn, name) == 1:
-            return 1
-        i = i + 1
+    if find_fun_sig_index(name) >= 0:
+        return 1
     return 0
 
 # ==========================================
@@ -555,38 +682,75 @@ fun fun_is_registered(name: str) -> i32:
 g_struct_names: i64 = 0
 g_struct_field_lists: i64 = 0
 g_struct_count: i32 = 0
+g_struct_index: i64 = 0
+g_struct_index_cap: i32 = 32768
+
+fun struct_index_add(index: i32):
+    name: str = Memory.read_i64(g_struct_names + ((index as i64) * 8)) as str
+    slot: i32 = (cg_hash_text(name) % (g_struct_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_struct_index_cap:
+        off4: i64 = (slot as i64) * 4
+        encoded: i32 = Memory.read_i32(g_struct_index + off4)
+        if encoded == 0:
+            Memory.write_i32(g_struct_index + off4, index + 1)
+            return
+        existing_index: i32 = encoded - 1
+        existing: str = Memory.read_i64(g_struct_names + ((existing_index as i64) * 8)) as str
+        if str_eq(existing, name) == 1:
+            return
+        slot = (slot + 1) % g_struct_index_cap
+        probes = probes + 1
+    IOOps.io_println("[FATAL] Struct index is full")
+    Process.exit(1)
+
+fun find_struct_index(name: str) -> i32:
+    slot: i32 = (cg_hash_text(name) % (g_struct_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_struct_index_cap:
+        encoded: i32 = Memory.read_i32(g_struct_index + ((slot as i64) * 4))
+        if encoded == 0:
+            return -1
+        index: i32 = encoded - 1
+        existing: str = Memory.read_i64(g_struct_names + ((index as i64) * 8)) as str
+        if str_eq(existing, name) == 1:
+            return index
+        slot = (slot + 1) % g_struct_index_cap
+        probes = probes + 1
+    return -1
 
 fun init_struct_registry():
     g_struct_names = Memory.malloc_zeroed(16384 * 8)
     g_struct_field_lists = Memory.malloc_zeroed(16384 * 8)
+    g_struct_index_cap = 32768
+    g_struct_index = Memory.malloc_zeroed((g_struct_index_cap as i64) * 4)
+    if g_struct_names == 0 or g_struct_field_lists == 0 or g_struct_index == 0:
+        IOOps.io_println("[FATAL] Unable to initialize struct registry")
+        Process.exit(1)
     g_struct_count = 0
 
 fun register_struct(name: str, fields: i64):
+    if g_struct_count >= 16384:
+        IOOps.io_println("[FATAL] Struct registry capacity exceeded")
+        Process.exit(1)
+    index: i32 = g_struct_count
     off: i64 = (g_struct_count as i64) * 8
     Memory.write_i64(g_struct_names + off, name as i64)
     Memory.write_i64(g_struct_field_lists + off, fields)
     g_struct_count = g_struct_count + 1
+    struct_index_add(index)
 
 fun is_struct_type(name: str) -> i32:
     lookup: str = normalize_type(name)
-    i: i32 = 0
-    while i < g_struct_count:
-        off: i64 = (i as i64) * 8
-        sn: str = Memory.read_i64(g_struct_names + off) as str
-        if str_eq(sn, lookup) == 1:
-            return 1
-        i = i + 1
+    if find_struct_index(lookup) >= 0:
+        return 1
     return 0
 
 fun get_struct_fields(name: str) -> i64:
     lookup: str = normalize_type(name)
-    i: i32 = 0
-    while i < g_struct_count:
-        off: i64 = (i as i64) * 8
-        sn: str = Memory.read_i64(g_struct_names + off) as str
-        if str_eq(sn, lookup) == 1:
-            return Memory.read_i64(g_struct_field_lists + off)
-        i = i + 1
+    index: i32 = find_struct_index(lookup)
+    if index >= 0:
+        return Memory.read_i64(g_struct_field_lists + ((index as i64) * 8))
     return 0
 
 # ==========================================
@@ -847,29 +1011,69 @@ g_impl_struct: i64 = 0
 g_impl_method_name: i64 = 0
 g_impl_method_node: i64 = 0
 g_impl_count: i32 = 0
+g_impl_next: i64 = 0
+g_impl_index_first: i64 = 0
+g_impl_index_last: i64 = 0
+g_impl_index_cap: i32 = 32768
+
+fun find_impl_slot(sname: str, mname: str) -> i32:
+    slot: i32 = (cg_hash_pair(sname, mname) % (g_impl_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_impl_index_cap:
+        encoded: i32 = Memory.read_i32(g_impl_index_first + ((slot as i64) * 4))
+        if encoded == 0:
+            return slot
+        index: i32 = encoded - 1
+        existing_struct: str = Memory.read_i64(g_impl_struct + ((index as i64) * 8)) as str
+        existing_method: str = Memory.read_i64(g_impl_method_name + ((index as i64) * 8)) as str
+        if str_eq(existing_struct, sname) == 1 and str_eq(existing_method, mname) == 1:
+            return slot
+        slot = (slot + 1) % g_impl_index_cap
+        probes = probes + 1
+    IOOps.io_println("[FATAL] Impl method index is full")
+    Process.exit(1)
+    return 0
 
 fun init_impl_registry():
     g_impl_struct = Memory.malloc_zeroed(16384 * 8)
     g_impl_method_name = Memory.malloc_zeroed(16384 * 8)
     g_impl_method_node = Memory.malloc_zeroed(16384 * 8)
+    g_impl_next = Memory.malloc_zeroed(16384 * 4)
+    g_impl_index_cap = 32768
+    g_impl_index_first = Memory.malloc_zeroed((g_impl_index_cap as i64) * 4)
+    g_impl_index_last = Memory.malloc_zeroed((g_impl_index_cap as i64) * 4)
+    if g_impl_struct == 0 or g_impl_method_name == 0 or g_impl_method_node == 0 or g_impl_next == 0 or g_impl_index_first == 0 or g_impl_index_last == 0:
+        IOOps.io_println("[FATAL] Unable to initialize impl method registry")
+        Process.exit(1)
     g_impl_count = 0
 
 fun register_impl_method(sname: str, mname: str, mnode: i64):
-    off: i64 = (g_impl_count as i64) * 8
+    if g_impl_count >= 16384:
+        IOOps.io_println("[FATAL] Impl method registry capacity exceeded")
+        Process.exit(1)
+    index: i32 = g_impl_count
+    off: i64 = (index as i64) * 8
     Memory.write_i64(g_impl_struct + off, sname as i64)
     Memory.write_i64(g_impl_method_name + off, mname as i64)
     Memory.write_i64(g_impl_method_node + off, mnode)
     g_impl_count = g_impl_count + 1
 
+    slot: i32 = find_impl_slot(sname, mname)
+    slot_off: i64 = (slot as i64) * 4
+    first_encoded: i32 = Memory.read_i32(g_impl_index_first + slot_off)
+    if first_encoded == 0:
+        Memory.write_i32(g_impl_index_first + slot_off, index + 1)
+        Memory.write_i32(g_impl_index_last + slot_off, index + 1)
+    else:
+        last_index: i32 = Memory.read_i32(g_impl_index_last + slot_off) - 1
+        Memory.write_i32(g_impl_next + ((last_index as i64) * 4), index + 1)
+        Memory.write_i32(g_impl_index_last + slot_off, index + 1)
+
 fun find_impl_method(sname: str, mname: str) -> i64:
-    i: i32 = 0
-    while i < g_impl_count:
-        off: i64 = (i as i64) * 8
-        s: str = Memory.read_i64(g_impl_struct + off) as str
-        m: str = Memory.read_i64(g_impl_method_name + off) as str
-        if str_eq(s, sname) == 1 and str_eq(m, mname) == 1:
-            return Memory.read_i64(g_impl_method_node + off)
-        i = i + 1
+    slot: i32 = find_impl_slot(sname, mname)
+    encoded: i32 = Memory.read_i32(g_impl_index_first + ((slot as i64) * 4))
+    if encoded != 0:
+        return Memory.read_i64(g_impl_method_node + (((encoded - 1) as i64) * 8))
     return 0
 
 # Overload-aware variant: finds the impl-method node whose
@@ -878,19 +1082,20 @@ fun find_impl_method(sname: str, mname: str) -> i64:
 # is found — preserves legacy behaviour for non-overloaded methods
 # and for callers that pass partial type info.
 fun find_impl_method_overload(sname: str, mname: str, arg_types_str: str) -> i64:
-    i: i32 = 0
-    while i < g_impl_count:
-        off: i64 = (i as i64) * 8
-        s: str = Memory.read_i64(g_impl_struct + off) as str
-        m: str = Memory.read_i64(g_impl_method_name + off) as str
-        if str_eq(s, sname) == 1 and str_eq(m, mname) == 1:
-            mnode: i64 = Memory.read_i64(g_impl_method_node + off)
-            mparams: i64 = Memory.read_i64(mnode + 16)
-            mp_str: str = build_param_types_str_no_self(mparams)
-            if str_eq(mp_str, arg_types_str) == 1:
-                return mnode
-        i = i + 1
-    return find_impl_method(sname, mname)
+    slot: i32 = find_impl_slot(sname, mname)
+    encoded: i32 = Memory.read_i32(g_impl_index_first + ((slot as i64) * 4))
+    first_encoded: i32 = encoded
+    while encoded != 0:
+        index: i32 = encoded - 1
+        mnode: i64 = Memory.read_i64(g_impl_method_node + ((index as i64) * 8))
+        mparams: i64 = Memory.read_i64(mnode + 16)
+        mp_str: str = build_param_types_str_no_self(mparams)
+        if str_eq(mp_str, arg_types_str) == 1:
+            return mnode
+        encoded = Memory.read_i32(g_impl_next + ((index as i64) * 4))
+    if first_encoded != 0:
+        return Memory.read_i64(g_impl_method_node + (((first_encoded - 1) as i64) * 8))
+    return 0
 
 # ==========================================
 # Codegen State
@@ -1576,11 +1781,90 @@ g_ovl_orig: i64 = 0
 g_ovl_params: i64 = 0
 g_ovl_mangled: i64 = 0
 g_ovl_count: i32 = 0
+g_ovl_exact_index: i64 = 0
+g_ovl_name_index: i64 = 0
+g_ovl_index_cap: i32 = 65536
+
+fun overload_indexes_add(index: i32):
+    orig: str = Memory.read_i64(g_ovl_orig + ((index as i64) * 8)) as str
+    params: str = Memory.read_i64(g_ovl_params + ((index as i64) * 8)) as str
+
+    slot: i32 = (cg_hash_pair(orig, params) % (g_ovl_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_ovl_index_cap:
+        off4: i64 = (slot as i64) * 4
+        encoded: i32 = Memory.read_i32(g_ovl_exact_index + off4)
+        if encoded == 0:
+            Memory.write_i32(g_ovl_exact_index + off4, index + 1)
+            probes = g_ovl_index_cap
+        else:
+            existing_index: i32 = encoded - 1
+            existing_orig: str = Memory.read_i64(g_ovl_orig + ((existing_index as i64) * 8)) as str
+            existing_params: str = Memory.read_i64(g_ovl_params + ((existing_index as i64) * 8)) as str
+            if str_eq(existing_orig, orig) == 1 and str_eq(existing_params, params) == 1:
+                probes = g_ovl_index_cap
+            else:
+                slot = (slot + 1) % g_ovl_index_cap
+                probes = probes + 1
+
+    slot = (cg_hash_text(orig) % (g_ovl_index_cap as i64)) as i32
+    probes = 0
+    while probes < g_ovl_index_cap:
+        off4n: i64 = (slot as i64) * 4
+        encoded_n: i32 = Memory.read_i32(g_ovl_name_index + off4n)
+        if encoded_n == 0:
+            Memory.write_i32(g_ovl_name_index + off4n, index + 1)
+            return
+        existing_name_index: i32 = encoded_n - 1
+        existing_name: str = Memory.read_i64(g_ovl_orig + ((existing_name_index as i64) * 8)) as str
+        if str_eq(existing_name, orig) == 1:
+            return
+        slot = (slot + 1) % g_ovl_index_cap
+        probes = probes + 1
+    IOOps.io_println("[FATAL] Overload name index is full")
+    Process.exit(1)
+
+fun find_overload_exact(orig: str, params: str) -> i32:
+    slot: i32 = (cg_hash_pair(orig, params) % (g_ovl_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_ovl_index_cap:
+        encoded: i32 = Memory.read_i32(g_ovl_exact_index + ((slot as i64) * 4))
+        if encoded == 0:
+            return -1
+        index: i32 = encoded - 1
+        existing_orig: str = Memory.read_i64(g_ovl_orig + ((index as i64) * 8)) as str
+        existing_params: str = Memory.read_i64(g_ovl_params + ((index as i64) * 8)) as str
+        if str_eq(existing_orig, orig) == 1 and str_eq(existing_params, params) == 1:
+            return index
+        slot = (slot + 1) % g_ovl_index_cap
+        probes = probes + 1
+    return -1
+
+fun has_overload_name(orig: str) -> i32:
+    slot: i32 = (cg_hash_text(orig) % (g_ovl_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_ovl_index_cap:
+        encoded: i32 = Memory.read_i32(g_ovl_name_index + ((slot as i64) * 4))
+        if encoded == 0:
+            return 0
+        index: i32 = encoded - 1
+        existing: str = Memory.read_i64(g_ovl_orig + ((index as i64) * 8)) as str
+        if str_eq(existing, orig) == 1:
+            return 1
+        slot = (slot + 1) % g_ovl_index_cap
+        probes = probes + 1
+    return 0
 
 fun init_overload_registry():
     g_ovl_orig = Memory.malloc_zeroed(32768 * 8)
     g_ovl_params = Memory.malloc_zeroed(32768 * 8)
     g_ovl_mangled = Memory.malloc_zeroed(32768 * 8)
+    g_ovl_index_cap = 65536
+    g_ovl_exact_index = Memory.malloc_zeroed((g_ovl_index_cap as i64) * 4)
+    g_ovl_name_index = Memory.malloc_zeroed((g_ovl_index_cap as i64) * 4)
+    if g_ovl_orig == 0 or g_ovl_params == 0 or g_ovl_mangled == 0 or g_ovl_exact_index == 0 or g_ovl_name_index == 0:
+        IOOps.io_println("[FATAL] Unable to initialize overload registry")
+        Process.exit(1)
     g_ovl_count = 0
 
 fun normalize_type(t: str) -> str:
@@ -1660,25 +1944,12 @@ fun build_param_types_str_no_self(params: i64) -> str:
 
 fun register_overload(orig_name: str, param_types_str: str) -> str:
     # Check if this exact (orig_name, param_types) already exists
-    i: i32 = 0
-    while i < g_ovl_count:
-        off: i64 = (i as i64) * 8
-        en: str = Memory.read_i64(g_ovl_orig + off) as str
-        ep: str = Memory.read_i64(g_ovl_params + off) as str
-        if str_eq(en, orig_name) == 1 and str_eq(ep, param_types_str) == 1:
-            return Memory.read_i64(g_ovl_mangled + off) as str
-        i = i + 1
+    exact_index: i32 = find_overload_exact(orig_name, param_types_str)
+    if exact_index >= 0:
+        return Memory.read_i64(g_ovl_mangled + ((exact_index as i64) * 8)) as str
 
     # Check if any overload with same name exists
-    has_existing: i32 = 0
-    i = 0
-    while i < g_ovl_count:
-        off2: i64 = (i as i64) * 8
-        en2: str = Memory.read_i64(g_ovl_orig + off2) as str
-        if str_eq(en2, orig_name) == 1:
-            has_existing = 1
-            i = g_ovl_count
-        i = i + 1
+    has_existing: i32 = has_overload_name(orig_name)
 
     # Build mangled name
     mangled: str = orig_name
@@ -1701,23 +1972,22 @@ fun register_overload(orig_name: str, param_types_str: str) -> str:
         mangled = Str.concat(Str.concat(orig_name, "__"), suffix)
 
     # Register
+    if g_ovl_count >= 32768:
+        IOOps.io_println("[FATAL] Overload registry capacity exceeded")
+        Process.exit(1)
+    new_index: i32 = g_ovl_count
     off3: i64 = (g_ovl_count as i64) * 8
     Memory.write_i64(g_ovl_orig + off3, orig_name as i64)
     Memory.write_i64(g_ovl_params + off3, param_types_str as i64)
     Memory.write_i64(g_ovl_mangled + off3, mangled as i64)
     g_ovl_count = g_ovl_count + 1
+    overload_indexes_add(new_index)
     return mangled
 
 fun resolve_overload(orig_name: str, arg_types_str: str) -> str:
-    # Search for exact match on (orig_name, arg_types_str)
-    i: i32 = 0
-    while i < g_ovl_count:
-        off: i64 = (i as i64) * 8
-        en: str = Memory.read_i64(g_ovl_orig + off) as str
-        ep: str = Memory.read_i64(g_ovl_params + off) as str
-        if str_eq(en, orig_name) == 1 and str_eq(ep, arg_types_str) == 1:
-            return Memory.read_i64(g_ovl_mangled + off) as str
-        i = i + 1
+    index: i32 = find_overload_exact(orig_name, arg_types_str)
+    if index >= 0:
+        return Memory.read_i64(g_ovl_mangled + ((index as i64) * 8)) as str
     # No overload found — return original name
     return orig_name
 
@@ -1851,24 +2121,70 @@ fun register_atomic_intrinsics():
 # ==========================================
 g_emitted_fn_names: i64 = 0
 g_emitted_fn_count: i32 = 0
+g_emitted_fn_cap: i32 = 0
+g_emitted_fn_index: i64 = 0
+g_emitted_fn_index_cap: i32 = 131072
+
+fun emitted_fn_index_add(index: i32):
+    name: str = Memory.read_i64(g_emitted_fn_names + ((index as i64) * 8)) as str
+    slot: i32 = (cg_hash_text(name) % (g_emitted_fn_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_emitted_fn_index_cap:
+        off4: i64 = (slot as i64) * 4
+        encoded: i32 = Memory.read_i32(g_emitted_fn_index + off4)
+        if encoded == 0:
+            Memory.write_i32(g_emitted_fn_index + off4, index + 1)
+            return
+        existing_index: i32 = encoded - 1
+        existing: str = Memory.read_i64(g_emitted_fn_names + ((existing_index as i64) * 8)) as str
+        if str_eq(existing, name) == 1:
+            return
+        slot = (slot + 1) % g_emitted_fn_index_cap
+        probes = probes + 1
+    IOOps.io_println("[FATAL] Emitted-function index is full")
+    Process.exit(1)
 
 fun init_emitted_fns():
-    g_emitted_fn_names = Memory.malloc_zeroed(32768 * 8)
+    g_emitted_fn_cap = 4096
+    g_emitted_fn_names = Memory.malloc_zeroed((g_emitted_fn_cap as i64) * 8)
+    g_emitted_fn_index_cap = 131072
+    g_emitted_fn_index = Memory.malloc_zeroed((g_emitted_fn_index_cap as i64) * 4)
+    if g_emitted_fn_names == 0 or g_emitted_fn_index == 0:
+        IOOps.io_println("[FATAL] Unable to initialize emitted-function registry")
+        Process.exit(1)
     g_emitted_fn_count = 0
 
 fun is_fn_emitted(name: str) -> i32:
-    i: i32 = 0
-    while i < g_emitted_fn_count:
-        off: i64 = (i as i64) * 8
-        existing: str = Memory.read_i64(g_emitted_fn_names + off) as str
+    slot: i32 = (cg_hash_text(name) % (g_emitted_fn_index_cap as i64)) as i32
+    probes: i32 = 0
+    while probes < g_emitted_fn_index_cap:
+        encoded: i32 = Memory.read_i32(g_emitted_fn_index + ((slot as i64) * 4))
+        if encoded == 0:
+            return 0
+        index: i32 = encoded - 1
+        existing: str = Memory.read_i64(g_emitted_fn_names + ((index as i64) * 8)) as str
         if str_eq(existing, name) == 1:
             return 1
-        i = i + 1
+        slot = (slot + 1) % g_emitted_fn_index_cap
+        probes = probes + 1
     return 0
 
 fun mark_fn_emitted(name: str):
-    if g_emitted_fn_count >= 4096:
+    if is_fn_emitted(name) == 1:
         return
-    off: i64 = (g_emitted_fn_count as i64) * 8
+    if g_emitted_fn_count >= g_emitted_fn_cap:
+        new_capacity: i32 = g_emitted_fn_cap * 2
+        if new_capacity <= g_emitted_fn_cap:
+            IOOps.io_println("[FATAL] Emitted-function registry capacity overflow")
+            Process.exit(1)
+        new_names: i64 = Memory.realloc(g_emitted_fn_names, (new_capacity as i64) * 8)
+        if new_names == 0:
+            IOOps.io_println("[FATAL] Out of memory growing emitted-function registry")
+            Process.exit(1)
+        g_emitted_fn_names = new_names
+        g_emitted_fn_cap = new_capacity
+    index: i32 = g_emitted_fn_count
+    off: i64 = (index as i64) * 8
     Memory.write_i64(g_emitted_fn_names + off, name as i64)
     g_emitted_fn_count = g_emitted_fn_count + 1
+    emitted_fn_index_add(index)

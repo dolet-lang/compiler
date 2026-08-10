@@ -1,7 +1,8 @@
 ##############################
 # Dolet Compiler CLI Driver
 # Reads .dlt file, tokenizes, parses, generates MLIR, writes .mlir file
-# Uses Windows API directly (kernel32 auto-included)
+# Uses the host platform runtime for files/processes while the selected
+# target pack supplies the runtime and linker contract for emitted programs.
 ##############################
 """
    ██████╗  ██████╗ ██╗     ███████╗████████╗
@@ -58,9 +59,21 @@ fun replace_extension(path: str, new_ext: str) -> str:
 # ==========================================
 # Platform Config
 # ==========================================
-# Reads library/platform/<name>/platform.conf at startup.
-# The compiler itself knows NO platform names — just reads the config.
+# Reads a target pack's Platform Manifest v2 (platform.toml) at startup.
+# The compiler itself knows NO platform names — just the target contract.
 # ==========================================
+g_host_separator: str = ""
+g_plat_schema: str = ""
+g_plat_id: str = ""
+g_plat_os: str = ""
+g_plat_arch: str = ""
+g_plat_abi: str = ""
+g_plat_module_root: str = ""
+g_plat_registry: str = ""
+g_plat_manifest_path: str = ""
+g_plat_required_capabilities: str = ""
+g_plat_toolchain_id: str = ""
+g_plat_toolchain_version: str = ""
 g_plat_translate: str = ""
 g_plat_compile: str = ""
 g_plat_linker: str = ""
@@ -79,15 +92,38 @@ g_plat_flag_subsystem_console: str = ""
 g_plat_flag_subsystem_gui: str = ""
 g_plat_flag_entry: str = ""
 g_plat_flag_stack: str = ""
-g_plat_separator: str = ""
+g_plat_flag_deterministic: str = ""
+g_plat_flag_link_target: str = ""
 g_plat_name: str = ""
 
 fun plat_config_set(key: str, value: str):
-    if str_eq(key, "translate") == 1:
+    if str_eq(key, "schema") == 1:
+        g_plat_schema = value
+    elif str_eq(key, "id") == 1:
+        g_plat_id = value
+    elif str_eq(key, "os") == 1:
+        g_plat_os = value
+    elif str_eq(key, "arch") == 1:
+        g_plat_arch = value
+    elif str_eq(key, "abi") == 1:
+        g_plat_abi = value
+    elif str_eq(key, "module_root") == 1:
+        g_plat_module_root = value
+    elif str_eq(key, "registry") == 1:
+        g_plat_registry = value
+    elif str_eq(key, "resource_root") == 1:
+        g_plat_sys_path = value
+    elif str_eq(key, "required") == 1:
+        g_plat_required_capabilities = value
+    elif str_eq(key, "toolchain_id") == 1:
+        g_plat_toolchain_id = value
+    elif str_eq(key, "toolchain_version") == 1:
+        g_plat_toolchain_version = value
+    elif str_eq(key, "translate_role") == 1:
         g_plat_translate = value
-    elif str_eq(key, "compile") == 1:
+    elif str_eq(key, "compile_role") == 1:
         g_plat_compile = value
-    elif str_eq(key, "linker") == 1:
+    elif str_eq(key, "link_role") == 1:
         g_plat_linker = value
     elif str_eq(key, "obj_ext") == 1:
         g_plat_obj_ext = value
@@ -119,12 +155,170 @@ fun plat_config_set(key: str, value: str):
         g_plat_flag_entry = value
     elif str_eq(key, "stack") == 1:
         g_plat_flag_stack = value
-    elif str_eq(key, "separator") == 1:
-        g_plat_separator = value
+    elif str_eq(key, "deterministic") == 1:
+        g_plat_flag_deterministic = value
+    elif str_eq(key, "link_target") == 1:
+        g_plat_flag_link_target = value
 
-fun load_platform_config(exe_dir: str, plat_name: str) -> i32:
-    g_plat_name = plat_name
-    conf_path: str = Str.concat(exe_dir, Str.concat("\\..\\library\\platform\\", Str.concat(plat_name, "\\platform.conf")))
+fun host_normalize_path(path: str) -> str:
+    result: str = ""
+    plen: i64 = Memory.strlen(path)
+    pi: i64 = 0
+    pc: i8 = 0 as i8
+    one: i64 = Memory.malloc_zeroed(2)
+    while pi < plen:
+        pc = Memory.read_i8((path as i64) + pi)
+        if pc == 47 or pc == 92:
+            result = Str.concat(result, g_host_separator)
+        else:
+            Memory.write_i8(one, pc)
+            result = Str.concat(result, one as str)
+        pi = pi + 1
+    return result
+
+fun target_os_from_id(target_id: str) -> str:
+    tlen: i64 = Memory.strlen(target_id)
+    ti: i64 = 0
+    while ti < tlen:
+        tc: i8 = Memory.read_i8((target_id as i64) + ti)
+        if tc == 47 or tc == 92:
+            return str_from_range(target_id, 0, ti)
+        ti = ti + 1
+    return target_id
+
+fun target_variant_from_id(target_id: str) -> str:
+    tlen: i64 = Memory.strlen(target_id)
+    ti: i64 = 0
+    while ti < tlen:
+        tc: i8 = Memory.read_i8((target_id as i64) + ti)
+        if tc == 47 or tc == 92:
+            return str_from_range(target_id, ti + 1, tlen)
+        ti = ti + 1
+    return ""
+
+fun is_safe_pack_component(value: str) -> i32:
+    value_len: i64 = Memory.strlen(value)
+    if value_len == 0:
+        return 0
+    if Memory.read_i8(value as i64) == 46 or Memory.read_i8((value as i64) + value_len - 1) == 46:
+        return 0
+    vi: i64 = 0
+    vc: i8 = 0 as i8
+    previous: i8 = 0 as i8
+    allowed: i32 = 0
+    while vi < value_len:
+        vc = Memory.read_i8((value as i64) + vi)
+        allowed = 0
+        if vc >= 48 and vc <= 57:
+            allowed = 1
+        elif vc >= 65 and vc <= 90:
+            allowed = 1
+        elif vc >= 97 and vc <= 122:
+            allowed = 1
+        elif vc == 45 or vc == 46 or vc == 95:
+            allowed = 1
+        if allowed == 0:
+            return 0
+        if vc == 46 and previous == 46:
+            return 0
+        previous = vc
+        vi = vi + 1
+    return 1
+
+fun is_safe_pack_relative_path(value: str) -> i32:
+    value_len: i64 = Memory.strlen(value)
+    if value_len == 0:
+        return 0
+    first: i8 = Memory.read_i8(value as i64)
+    if first == 47 or first == 92:
+        return 0
+    vi: i64 = 0
+    vc: i8 = 0 as i8
+    previous: i8 = 0 as i8
+    allowed: i32 = 0
+    while vi < value_len:
+        vc = Memory.read_i8((value as i64) + vi)
+        allowed = 0
+        if vc >= 48 and vc <= 57:
+            allowed = 1
+        elif vc >= 65 and vc <= 90:
+            allowed = 1
+        elif vc >= 97 and vc <= 122:
+            allowed = 1
+        elif vc == 45 or vc == 46 or vc == 47 or vc == 92 or vc == 95:
+            allowed = 1
+        if allowed == 0:
+            return 0
+        if vc == 46 and previous == 46:
+            return 0
+        previous = vc
+        vi = vi + 1
+    return 1
+
+fun reset_platform_config():
+    g_plat_schema = ""
+    g_plat_id = ""
+    g_plat_os = ""
+    g_plat_arch = ""
+    g_plat_abi = ""
+    g_plat_module_root = ""
+    g_plat_registry = ""
+    g_plat_manifest_path = ""
+    g_plat_required_capabilities = ""
+    g_plat_toolchain_id = ""
+    g_plat_toolchain_version = ""
+    g_plat_translate = ""
+    g_plat_compile = ""
+    g_plat_linker = ""
+    g_plat_obj_ext = ""
+    g_plat_exe_ext = ""
+    g_plat_target_triple = ""
+    g_plat_default_libs = ""
+    g_plat_runtime_helpers = ""
+    g_plat_sys_path = ""
+    g_plat_stack_size = ""
+    g_plat_entry = ""
+    g_plat_flag_output = ""
+    g_plat_flag_libpath = ""
+    g_plat_flag_defaultlib = ""
+    g_plat_flag_subsystem_console = ""
+    g_plat_flag_subsystem_gui = ""
+    g_plat_flag_entry = ""
+    g_plat_flag_stack = ""
+    g_plat_flag_deterministic = ""
+    g_plat_flag_link_target = ""
+    g_plat_name = ""
+
+fun host_file_exists(path: str) -> i32:
+    handle: i64 = FileOps.file_open_read(path)
+    if handle == -1:
+        return 0
+    FileOps.file_close(handle)
+    return 1
+
+fun resolve_platform_manifest(exe_dir: str, target_id: str, explicit_path: str) -> str:
+    if Memory.strlen(explicit_path) > 0:
+        normalized: str = host_normalize_path(explicit_path)
+        if host_file_exists(normalized) == 1:
+            return normalized
+        nested: str = Str.concat(normalized, Str.concat(g_host_separator, "platform.toml"))
+        if host_file_exists(nested) == 1:
+            return nested
+        return normalized
+
+    root: str = Str.concat(exe_dir, Str.concat(g_host_separator, Str.concat("..", Str.concat(g_host_separator, Str.concat("library", Str.concat(g_host_separator, "platform"))))))
+    target_os: str = target_os_from_id(target_id)
+    target_variant: str = target_variant_from_id(target_id)
+    if is_safe_pack_component(target_os) == 0 or is_safe_pack_component(target_variant) == 0:
+        return ""
+    if Memory.strlen(target_variant) > 0:
+        return Str.concat(root, Str.concat(g_host_separator, Str.concat(target_os, Str.concat(g_host_separator, Str.concat("targets", Str.concat(g_host_separator, Str.concat(target_variant, Str.concat(g_host_separator, "platform.toml"))))))))
+    return Str.concat(root, Str.concat(g_host_separator, Str.concat(target_os, Str.concat(g_host_separator, "platform.toml"))))
+
+fun load_platform_config(exe_dir: str, target_id: str, explicit_path: str) -> i32:
+    reset_platform_config()
+    conf_path: str = resolve_platform_manifest(exe_dir, target_id, explicit_path)
+    g_plat_manifest_path = conf_path
     conf_str: str = read_file_to_string(conf_path)
     conf_len: i64 = Memory.strlen(conf_str)
     if conf_len == 0:
@@ -150,6 +344,8 @@ fun load_platform_config(exe_dir: str, plat_name: str) -> i32:
     vc: i8 = 0 as i8
     val_end: i64 = 0
     vc2: i8 = 0 as i8
+    quote_first: i8 = 0 as i8
+    quote_last: i8 = 0 as i8
     val_len: i64 = 0
     val_buf: i64 = 0
     while ci <= conf_len:
@@ -193,6 +389,14 @@ fun load_platform_config(exe_dir: str, plat_name: str) -> i32:
                             if vc2 != 32 and vc2 != 9 and vc2 != 13:
                                 break
                             val_end = val_end - 1
+                        # Platform Manifest v2 is valid TOML for the scalar
+                        # subset used here. Strip one matching quote pair.
+                        if val_end > val_start:
+                            quote_first = Memory.read_i8(line_buf + val_start)
+                            quote_last = Memory.read_i8(line_buf + val_end)
+                            if quote_first == 34 and quote_last == 34:
+                                val_start = val_start + 1
+                                val_end = val_end - 1
                         val_len = val_end - val_start + 1
                         val_buf = Memory.malloc_zeroed(val_len + 1)
                         if val_len > 0:
@@ -200,20 +404,56 @@ fun load_platform_config(exe_dir: str, plat_name: str) -> i32:
                         plat_config_set(key_buf as str, val_buf as str)
             line_start = ci + 1
         ci = ci + 1
-    return 1
+    if Memory.strlen(g_plat_schema) > 0:
+        if str_eq(g_plat_schema, "2") == 0:
+            IOOps.io_println(Str.concat("Error: Unsupported platform manifest schema: ", g_plat_schema))
+            return 0
+        if Memory.strlen(g_plat_id) == 0 or Memory.strlen(g_plat_os) == 0 or Memory.strlen(g_plat_arch) == 0 or Memory.strlen(g_plat_abi) == 0:
+            IOOps.io_println("Error: Platform Manifest v2 requires id, os, arch, and abi")
+            return 0
+        if Memory.strlen(g_plat_module_root) == 0:
+            IOOps.io_println("Error: Platform Manifest v2 requires module_root")
+            return 0
+    else:
+        IOOps.io_println("Error: Legacy platform packs are unsupported; provide Platform Manifest v2")
+        return 0
 
-fun detect_current_platform() -> str:
-    # Check if running on Windows or Linux by testing exe path
-    exe_path: str = PathOps.get_exe_path()
-    # If path contains backslash or drive letter, it's Windows
-    ep_len: i64 = Memory.strlen(exe_path)
-    pi: i64 = 0
-    while pi < ep_len:
-        pc: i8 = Memory.read_i8((exe_path as i64) + pi)
-        if pc == 92:
-            return "windows"
-        pi = pi + 1
-    return "linux"
+    if Memory.strlen(g_plat_toolchain_id) == 0 or Memory.strlen(g_plat_toolchain_version) == 0:
+        IOOps.io_println("Error: Platform Manifest v2 requires toolchain_id and toolchain_version")
+        return 0
+    if Memory.strlen(g_plat_translate) == 0 or Memory.strlen(g_plat_compile) == 0 or Memory.strlen(g_plat_linker) == 0 or Memory.strlen(g_plat_target_triple) == 0 or Memory.strlen(g_plat_obj_ext) == 0:
+        IOOps.io_println("Error: Platform manifest is missing its toolchain contract")
+        return 0
+    if Memory.strlen(g_plat_sys_path) == 0:
+        IOOps.io_println("Error: Platform manifest requires resource_root/sys_path")
+        return 0
+    if Memory.strlen(g_plat_registry) == 0:
+        IOOps.io_println("Error: Platform Manifest v2 requires a target-local registry")
+        return 0
+    if Memory.strlen(g_plat_required_capabilities) == 0:
+        IOOps.io_println("Error: Platform Manifest v2 requires an explicit capability contract")
+        return 0
+    canonical_id: str = Str.concat(g_plat_os, Str.concat("/", Str.concat(g_plat_arch, Str.concat("-", g_plat_abi))))
+    if str_eq(g_plat_id, canonical_id) == 0:
+        IOOps.io_println(Str.concat("Error: Platform id does not match os/arch/abi: expected ", canonical_id))
+        return 0
+
+    library_root: str = Str.concat(exe_dir, Str.concat(g_host_separator, Str.concat("..", Str.concat(g_host_separator, "library"))))
+    module_file: str = Str.concat(library_root, Str.concat(g_host_separator, Str.concat(host_normalize_path(g_plat_module_root), Str.concat(g_host_separator, "mod.dlt"))))
+    if host_file_exists(module_file) == 0:
+        IOOps.io_println(Str.concat("Error: Platform module root is missing: ", module_file))
+        return 0
+    registry_file: str = Str.concat(library_root, Str.concat(g_host_separator, host_normalize_path(g_plat_registry)))
+    if host_file_exists(registry_file) == 0:
+        IOOps.io_println(Str.concat("Error: Platform registry is missing: ", registry_file))
+        return 0
+    if Memory.strlen(g_plat_runtime_helpers) > 0:
+        helper_file: str = Str.concat(library_root, Str.concat(g_host_separator, Str.concat(host_normalize_path(g_plat_sys_path), Str.concat(g_host_separator, host_normalize_path(g_plat_runtime_helpers)))))
+        if host_file_exists(helper_file) == 0:
+            IOOps.io_println(Str.concat("Error: Platform runtime helper is missing: ", helper_file))
+            return 0
+    g_plat_name = g_plat_os
+    return 1
 
 fun str_replace(template: str, placeholder: str, value: str) -> str:
     # Replace first occurrence of placeholder in template with value
@@ -313,9 +553,7 @@ fun init_library_registry():
     g_lib_reg_paths = Memory.malloc_zeroed(256 * 8)
     g_lib_reg_count = 0
 
-fun load_library_registry(library_root: str):
-    # Read library/mod.dlt
-    reg_path: str = Str.concat(library_root, "mod.dlt")
+fun load_library_registry_file(reg_path: str):
     reg_content: str = read_file_to_string(reg_path)
     if Memory.strlen(reg_content) == 0:
         return
@@ -380,7 +618,7 @@ fun load_library_registry(library_root: str):
                             reg_name: str = str_from_range(reg_content, rn_start, rn_end)
                             # Append .dlt to path
                             reg_rel: str = Str.concat(str_from_range(reg_content, rp_start, rp_end), ".dlt")
-                            # Convert '/' to '\' in path
+                            # Normalize registry paths for the compiler host.
                             reg_win_path: str = ""
                             rwi: i64 = 0
                             rwlen: i64 = Memory.strlen(reg_rel)
@@ -388,8 +626,8 @@ fun load_library_registry(library_root: str):
                             rwbuf: i64 = Memory.malloc_zeroed(2)
                             while rwi < rwlen:
                                 rwc = Memory.read_i8((reg_rel as i64) + rwi)
-                                if rwc == 47:
-                                    reg_win_path = Str.concat(reg_win_path, "\\")
+                                if rwc == 47 or rwc == 92:
+                                    reg_win_path = Str.concat(reg_win_path, g_host_separator)
                                 else:
                                     Memory.write_i8(rwbuf, rwc)
                                     reg_win_path = Str.concat(reg_win_path, rwbuf as str)
@@ -423,6 +661,12 @@ fun load_library_registry(library_root: str):
                     ri = ri + 1
             rline_start = ri + 1
         ri = ri + 1
+
+fun load_library_registry(library_root: str):
+    load_library_registry_file(Str.concat(library_root, "mod.dlt"))
+    if Memory.strlen(g_plat_registry) > 0:
+        target_registry: str = Str.concat(library_root, host_normalize_path(g_plat_registry))
+        load_library_registry_file(target_registry)
 
 fun lookup_library_registry(mod_name: str) -> str:
     # Returns the relative mod.dlt path for the given module name, or "" if not found
@@ -465,7 +709,7 @@ fun load_file_with_deps(library_root: str, rel_path: str) -> str:
         return ""
     mark_file_loaded(rel_path)
 
-    # Convert '/' to '\' in rel_path
+    # Normalize the library-relative path for the compiler host.
     win_path: str = ""
     wpi: i64 = 0
     wplen: i64 = Memory.strlen(rel_path)
@@ -473,8 +717,8 @@ fun load_file_with_deps(library_root: str, rel_path: str) -> str:
     wpbuf: i64 = Memory.malloc_zeroed(2)
     while wpi < wplen:
         wpc = Memory.read_i8((rel_path as i64) + wpi)
-        if wpc == 47:
-            win_path = Str.concat(win_path, "\\")
+        if wpc == 47 or wpc == 92:
+            win_path = Str.concat(win_path, g_host_separator)
         else:
             Memory.write_i8(wpbuf, wpc)
             win_path = Str.concat(win_path, wpbuf as str)
@@ -625,9 +869,9 @@ fun scan_selective_std_imports(user_src: str, library_root: str) -> str:
     slen: i64 = Memory.strlen(user_src)
     si: i64 = 0
     s_line_start: i64 = 0
-    mod_path: str = "std\\mod.dlt"
+    mod_path: str = Str.concat("std", Str.concat(g_host_separator, "mod.dlt"))
     # Platform mod.dlt for fallback expose resolution
-    plat_mod_path: str = Str.concat("platform\\", Str.concat(g_plat_name, "\\mod.dlt"))
+    plat_mod_path: str = host_normalize_path(Str.concat(g_plat_module_root, "/mod.dlt"))
     # Hoisted from loop to avoid alloca-in-loop stack overflow
     sc: i8 = 0 as i8
     s_line_len: i64 = 0
@@ -751,18 +995,18 @@ fun get_exe_dir() -> str:
     return PathOps.get_exe_directory()
 
 fun load_runtime(exe_dir: str) -> str:
-    s: str = g_plat_separator
+    s: str = g_host_separator
     library_root: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", s)))))
     # 1. Core types (Memory, integers, floats) — platform-neutral
     core_rt: str = load_module(library_root, Str.concat("core", Str.concat(s, "mod.dlt")))
     # 2. Platform runtime (kernel32/syscalls, alloc, io...) — platform-specific
-    plat_rt: str = load_module(library_root, Str.concat("platform", Str.concat(s, Str.concat(g_plat_name, Str.concat(s, "mod.dlt")))))
+    plat_rt: str = load_module(library_root, host_normalize_path(Str.concat(g_plat_module_root, "/mod.dlt")))
     # 3. Standard library (collections, file) — platform-neutral
     std_rt: str = load_module(library_root, Str.concat("std", Str.concat(s, "mod.dlt")))
     return Str.concat(core_rt, Str.concat("\n", Str.concat(plat_rt, Str.concat("\n", std_rt))))
 
 fun load_std(exe_dir: str) -> str:
-    s: str = g_plat_separator
+    s: str = g_host_separator
     library_root: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", s)))))
     return load_module(library_root, Str.concat("std", Str.concat(s, "mod.dlt")))
 
@@ -771,7 +1015,7 @@ fun load_prelude(exe_dir: str) -> str:
     # old library/prelude/ directory was removed in v1.5.x because it
     # held a single file. Annotations are core-level (they describe
     # types and behaviour, no OS), so they sit in core/ now.
-    s: str = g_plat_separator
+    s: str = g_host_separator
     prelude_path: str = Str.concat(exe_dir, Str.concat(s, Str.concat("..", Str.concat(s, Str.concat("library", Str.concat(s, Str.concat("core", Str.concat(s, "annotations.dlt"))))))))
     src: str = read_file_to_string(prelude_path)
     return src
@@ -930,7 +1174,7 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                                     break
                                 pci = pci + 1
                         if is_priv == 0:
-                            # Convert '/' (47) to '\' (92) for Windows paths
+                            # Normalize module paths for the compiler host.
                             file_path: str = ""
                             pi: i64 = 0
                             plen: i64 = Memory.strlen(rel_path)
@@ -938,8 +1182,8 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                             cbuf: i64 = Memory.malloc_zeroed(2)
                             while pi < plen:
                                 pc = Memory.read_i8((rel_path as i64) + pi)
-                                if pc == 47:
-                                    file_path = Str.concat(file_path, "\\")
+                                if pc == 47 or pc == 92:
+                                    file_path = Str.concat(file_path, g_host_separator)
                                 else:
                                     Memory.write_i8(cbuf, pc)
                                     file_path = Str.concat(file_path, cbuf as str)
@@ -974,7 +1218,7 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                             rpath_end = rpath_end - 1
                         if rpath_end > rpath_start:
                             req_name: str = str_from_range(mod_content, rpath_start, rpath_end)
-                            # Convert dots to backslashes for path
+                            # Convert module separators for the compiler host.
                             req_path: str = ""
                             ri: i64 = 0
                             rlen: i64 = Memory.strlen(req_name)
@@ -982,15 +1226,13 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                             rcbuf: i64 = Memory.malloc_zeroed(2)
                             while ri < rlen:
                                 rc = Memory.read_i8((req_name as i64) + ri)
-                                if rc == 46:
-                                    req_path = Str.concat(req_path, "\\")
-                                elif rc == 47:
-                                    req_path = Str.concat(req_path, "\\")
+                                if rc == 46 or rc == 47 or rc == 92:
+                                    req_path = Str.concat(req_path, g_host_separator)
                                 else:
                                     Memory.write_i8(rcbuf, rc)
                                     req_path = Str.concat(req_path, rcbuf as str)
                                 ri = ri + 1
-                            req_mod_file: str = Str.concat(req_path, "\\mod.dlt")
+                            req_mod_file: str = Str.concat(req_path, Str.concat(g_host_separator, "mod.dlt"))
                             req_src: str = load_module(library_root, req_mod_file)
                             if Memory.strlen(req_src) > 0:
                                 result = Str.concat(result, req_src)
@@ -1088,7 +1330,7 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
     while mi < mlen:
         mc = Memory.read_i8((mod_name as i64) + mi)
         if mc == 46:
-            mod_path = Str.concat(mod_path, "\\")
+            mod_path = Str.concat(mod_path, g_host_separator)
         else:
             # Append single char
             Memory.write_i8(cbuf, mc)
@@ -1101,18 +1343,18 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
         return p1
 
     # 1b. Try stdlib/std/<mod_path>/mod.dlt
-    p1b: str = Str.concat(Str.concat(std_base, mod_path), "\\mod.dlt")
+    p1b: str = Str.concat(Str.concat(std_base, mod_path), Str.concat(g_host_separator, "mod.dlt"))
     if file_exists(p1b) == 1:
         return p1b
 
     # 2. Try stdlib/std/<mod_path>/lib.dlt
-    p2: str = Str.concat(Str.concat(std_base, mod_path), "\\lib.dlt")
+    p2: str = Str.concat(Str.concat(std_base, mod_path), Str.concat(g_host_separator, "lib.dlt"))
     if file_exists(p2) == 1:
         return p2
 
     # 2c. Try packages dir (dist layout): <exe_dir>/../packages/<mod_path>/mod.dlt
-    pkg_base: str = Str.concat(std_base, "..\\packages\\")
-    pkg_dir: str = Str.concat(Str.concat(pkg_base, mod_path), "\\")
+    pkg_base: str = Str.concat(std_base, Str.concat("..", Str.concat(g_host_separator, Str.concat("packages", g_host_separator))))
+    pkg_dir: str = Str.concat(Str.concat(pkg_base, mod_path), g_host_separator)
     pp: str = Str.concat(pkg_dir, "mod.dlt")
     if file_exists(pp) == 1:
         return pp
@@ -1123,8 +1365,8 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
         return pp2
 
     # 2e. Try external packages: <root>/bootstrap/tools/dolet/lib/external-modules/<mod_path>/mod.dlt
-    ext_base: str = Str.concat(std_base, "..\\bootstrap\\tools\\dolet\\lib\\external-modules\\")
-    pe: str = Str.concat(Str.concat(ext_base, mod_path), "\\mod.dlt")
+    ext_base: str = Str.concat(std_base, Str.concat("..", Str.concat(g_host_separator, Str.concat("bootstrap", Str.concat(g_host_separator, Str.concat("tools", Str.concat(g_host_separator, Str.concat("dolet", Str.concat(g_host_separator, Str.concat("lib", Str.concat(g_host_separator, Str.concat("external-modules", g_host_separator))))))))))))
+    pe: str = Str.concat(Str.concat(ext_base, mod_path), Str.concat(g_host_separator, "mod.dlt"))
     if file_exists(pe) == 1:
         return pe
 
@@ -1134,17 +1376,17 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
         return pe2
 
     # 3. Try <src_dir>/<mod_path>.dlt
-    p3: str = Str.concat(Str.concat(Str.concat(src_dir, "\\"), mod_path), ".dlt")
+    p3: str = Str.concat(Str.concat(Str.concat(src_dir, g_host_separator), mod_path), ".dlt")
     if file_exists(p3) == 1:
         return p3
 
     # 3b. Try <src_dir>/<mod_path>/mod.dlt
-    p3b: str = Str.concat(Str.concat(Str.concat(src_dir, "\\"), mod_path), "\\mod.dlt")
+    p3b: str = Str.concat(Str.concat(Str.concat(src_dir, g_host_separator), mod_path), Str.concat(g_host_separator, "mod.dlt"))
     if file_exists(p3b) == 1:
         return p3b
 
     # 4. Try <src_dir>/<mod_path>/lib.dlt
-    p4: str = Str.concat(Str.concat(Str.concat(src_dir, "\\"), mod_path), "\\lib.dlt")
+    p4: str = Str.concat(Str.concat(Str.concat(src_dir, g_host_separator), mod_path), Str.concat(g_host_separator, "lib.dlt"))
     if file_exists(p4) == 1:
         return p4
 
@@ -1308,12 +1550,12 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
                                             while mni < mn_len:
                                                 mnc = Memory.read_i8((mod_name as i64) + mni)
                                                 if mnc == 46:
-                                                    mn_path = Str.concat(mn_path, "\\")
+                                                    mn_path = Str.concat(mn_path, g_host_separator)
                                                 else:
                                                     Memory.write_i8(mnbuf, mnc)
                                                     mn_path = Str.concat(mn_path, mnbuf as str)
                                                 mni = mni + 1
-                                            mod_rel = Str.concat(mn_path, "\\mod.dlt")
+                                            mod_rel = Str.concat(mn_path, Str.concat(g_host_separator, "mod.dlt"))
                                             mr_len = Memory.strlen(mod_rel)
                                             lib_root = str_from_range(resolved, 0, rlen - mr_len)
                                             mod_src = load_module(lib_root, mod_rel)
@@ -1373,7 +1615,208 @@ fun path_base_name(path: str) -> str:
 # File Delete Helper
 # ==========================================
 fun delete_file(path: str):
-    DeleteFileA(path)
+    FileOps.file_delete(path)
+
+# ==========================================
+# Host Toolchain Manifest v1
+# ==========================================
+# A target pack names abstract roles (translate, compile, link_*). The
+# selected host manifest maps those roles to binaries runnable on this host.
+# This keeps host executables out of platform/<target> and keeps the compiler
+# free of executable suffixes and OS-specific tool paths.
+g_tc_keys: i64 = 0
+g_tc_values: i64 = 0
+g_tc_count: i32 = 0
+g_tc_host_dir: str = ""
+g_tc_root_manifest: str = ""
+g_tc_host_manifest: str = ""
+
+fun reset_toolchain_config():
+    g_tc_keys = Memory.malloc_zeroed(128 * 8)
+    g_tc_values = Memory.malloc_zeroed(128 * 8)
+    g_tc_count = 0
+    g_tc_host_dir = ""
+    g_tc_root_manifest = ""
+    g_tc_host_manifest = ""
+
+fun toolchain_config_set(key: str, value: str) -> i32:
+    if g_tc_keys == 0 or g_tc_values == 0:
+        return 0
+    tci: i32 = 0
+    while tci < g_tc_count:
+        existing_key: str = Memory.read_i64(g_tc_keys + ((tci as i64) * 8)) as str
+        if str_eq(existing_key, key) == 1:
+            Memory.write_i64(g_tc_values + ((tci as i64) * 8), value as i64)
+            return 1
+        tci = tci + 1
+    if g_tc_count >= 128:
+        return 0
+    Memory.write_i64(g_tc_keys + ((g_tc_count as i64) * 8), key as i64)
+    Memory.write_i64(g_tc_values + ((g_tc_count as i64) * 8), value as i64)
+    g_tc_count = g_tc_count + 1
+    return 1
+
+fun toolchain_config_get(key: str) -> str:
+    tci: i32 = 0
+    while tci < g_tc_count:
+        existing_key: str = Memory.read_i64(g_tc_keys + ((tci as i64) * 8)) as str
+        if str_eq(existing_key, key) == 1:
+            return Memory.read_i64(g_tc_values + ((tci as i64) * 8)) as str
+        tci = tci + 1
+    return ""
+
+fun parse_toolchain_manifest(path: str) -> i32:
+    content: str = read_file_to_string(path)
+    content_len: i64 = Memory.strlen(content)
+    if content_len == 0:
+        IOOps.io_println(Str.concat("Error: Cannot read toolchain manifest: ", path))
+        return 0
+
+    ci: i64 = 0
+    line_start: i64 = 0
+    cc: i8 = 0 as i8
+    line_len: i64 = 0
+    line_buf: i64 = 0
+    first_ch: i8 = 0 as i8
+    eq_pos: i64 = 0
+    li: i64 = 0
+    lc: i8 = 0 as i8
+    key_end: i64 = 0
+    kc: i8 = 0 as i8
+    key_buf: i64 = 0
+    val_start: i64 = 0
+    vc: i8 = 0 as i8
+    val_end: i64 = 0
+    vc2: i8 = 0 as i8
+    quote_first: i8 = 0 as i8
+    quote_last: i8 = 0 as i8
+    val_len: i64 = 0
+    val_buf: i64 = 0
+    added: i32 = 0
+    while ci <= content_len:
+        cc = 0 as i8
+        if ci < content_len:
+            cc = Memory.read_i8((content as i64) + ci)
+        if cc == 10 or ci == content_len:
+            line_len = ci - line_start
+            if line_len > 0:
+                line_buf = Memory.malloc_zeroed(line_len + 1)
+                if line_buf == 0:
+                    return 0
+                Memory.copy(line_buf, (content as i64) + line_start, line_len)
+                first_ch = Memory.read_i8(line_buf)
+                if first_ch != 35 and first_ch != 91 and first_ch != 13 and first_ch != 0:
+                    eq_pos = -1
+                    li = 0
+                    while li < line_len:
+                        lc = Memory.read_i8(line_buf + li)
+                        if lc == 61:
+                            eq_pos = li
+                            break
+                        li = li + 1
+                    if eq_pos > 0:
+                        key_end = eq_pos - 1
+                        while key_end >= 0:
+                            kc = Memory.read_i8(line_buf + key_end)
+                            if kc != 32 and kc != 9:
+                                break
+                            key_end = key_end - 1
+                        key_buf = Memory.malloc_zeroed(key_end + 2)
+                        if key_buf == 0:
+                            return 0
+                        Memory.copy(key_buf, line_buf, key_end + 1)
+                        val_start = eq_pos + 1
+                        while val_start < line_len:
+                            vc = Memory.read_i8(line_buf + val_start)
+                            if vc != 32 and vc != 9:
+                                break
+                            val_start = val_start + 1
+                        val_end = line_len - 1
+                        while val_end >= val_start:
+                            vc2 = Memory.read_i8(line_buf + val_end)
+                            if vc2 != 32 and vc2 != 9 and vc2 != 13:
+                                break
+                            val_end = val_end - 1
+                        if val_end > val_start:
+                            quote_first = Memory.read_i8(line_buf + val_start)
+                            quote_last = Memory.read_i8(line_buf + val_end)
+                            if quote_first == 34 and quote_last == 34:
+                                val_start = val_start + 1
+                                val_end = val_end - 1
+                        val_len = val_end - val_start + 1
+                        val_buf = Memory.malloc_zeroed(val_len + 1)
+                        if val_buf == 0:
+                            return 0
+                        if val_len > 0:
+                            Memory.copy(val_buf, line_buf + val_start, val_len)
+                        added = toolchain_config_set(key_buf as str, val_buf as str)
+                        if added == 0:
+                            IOOps.io_println("Error: Toolchain manifest has too many entries")
+                            return 0
+            line_start = ci + 1
+        ci = ci + 1
+    return 1
+
+fun load_host_toolchain(exe_dir: str) -> i32:
+    reset_toolchain_config()
+    if g_tc_keys == 0 or g_tc_values == 0:
+        IOOps.io_println("Error: Cannot allocate host toolchain registry")
+        return 0
+    if is_safe_pack_component(g_plat_toolchain_id) == 0 or is_safe_pack_component(g_plat_toolchain_version) == 0:
+        IOOps.io_println("Error: Unsafe toolchain id or version in platform manifest")
+        return 0
+
+    tc_root: str = Str.concat(exe_dir, Str.concat(g_host_separator, ".."))
+    tc_root = Str.concat(tc_root, Str.concat(g_host_separator, "toolchains"))
+    tc_root = Str.concat(tc_root, Str.concat(g_host_separator, g_plat_toolchain_id))
+    tc_root = Str.concat(tc_root, Str.concat(g_host_separator, g_plat_toolchain_version))
+    g_tc_root_manifest = Str.concat(tc_root, Str.concat(g_host_separator, "toolchain.toml"))
+    if parse_toolchain_manifest(g_tc_root_manifest) == 0:
+        return 0
+    if str_eq(toolchain_config_get("schema"), "1") == 0:
+        IOOps.io_println("Error: Unsupported Host Toolchain Manifest schema")
+        return 0
+    if str_eq(toolchain_config_get("toolchain_id"), g_plat_toolchain_id) == 0 or str_eq(toolchain_config_get("toolchain_version"), g_plat_toolchain_version) == 0:
+        IOOps.io_println("Error: Toolchain package identity does not match platform request")
+        return 0
+    hosts_root: str = toolchain_config_get("hosts_root")
+    if is_safe_pack_relative_path(hosts_root) == 0:
+        IOOps.io_println("Error: Toolchain package has an unsafe or missing hosts_root")
+        return 0
+
+    host_id: str = PlatformInfo.host_id()
+    if is_safe_pack_component(host_id) == 0:
+        IOOps.io_println("Error: Host platform returned an unsafe host id")
+        return 0
+    g_tc_host_dir = Str.concat(tc_root, Str.concat(g_host_separator, Str.concat(host_normalize_path(hosts_root), Str.concat(g_host_separator, host_id))))
+    g_tc_host_manifest = Str.concat(g_tc_host_dir, Str.concat(g_host_separator, "host.toml"))
+    if parse_toolchain_manifest(g_tc_host_manifest) == 0:
+        return 0
+    if str_eq(toolchain_config_get("schema"), "1") == 0:
+        IOOps.io_println("Error: Unsupported Host Toolchain Manifest schema")
+        return 0
+    if str_eq(toolchain_config_get("toolchain_id"), g_plat_toolchain_id) == 0 or str_eq(toolchain_config_get("toolchain_version"), g_plat_toolchain_version) == 0:
+        IOOps.io_println("Error: Host toolchain package identity mismatch")
+        return 0
+    if str_eq(toolchain_config_get("host"), host_id) == 0:
+        IOOps.io_println("Error: Host toolchain manifest identity mismatch")
+        return 0
+    IOOps.io_println(Str.concat("Host toolchain: ", g_tc_host_manifest))
+    return 1
+
+fun resolve_host_tool(role: str) -> str:
+    relative_tool: str = toolchain_config_get(role)
+    if Memory.strlen(relative_tool) == 0:
+        IOOps.io_println(Str.concat("Error: Host toolchain does not provide role: ", role))
+        return ""
+    if is_safe_pack_relative_path(relative_tool) == 0:
+        IOOps.io_println(Str.concat("Error: Host toolchain role has an unsafe path: ", role))
+        return ""
+    tool_path: str = Str.concat(g_tc_host_dir, Str.concat(g_host_separator, host_normalize_path(relative_tool)))
+    if host_file_exists(tool_path) == 0:
+        IOOps.io_println(Str.concat("Error: Host tool is missing: ", tool_path))
+        return ""
+    return tool_path
 
 # ==========================================
 # Extract extern lib names from source code
@@ -1538,7 +1981,7 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
                             break
                         ai = ai + 1
                     if already == 0:
-                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
+                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), Str.concat(g_host_separator, "mod.dlt"))
                         if file_exists(pkg_mod) == 1:
                             pkg_dir = Str.concat(pkg_base, mod_name)
                             lp_flag: str = str_replace(g_plat_flag_libpath, "{path}", Str.concat("\"", Str.concat(pkg_dir, "\"")))
@@ -1588,7 +2031,7 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
                             break
                         ai = ai + 1
                     if already == 0:
-                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), "\\mod.dlt")
+                        pkg_mod = Str.concat(Str.concat(pkg_base, mod_name), Str.concat(g_host_separator, "mod.dlt"))
                         if file_exists(pkg_mod) == 1:
                             pkg_dir = Str.concat(pkg_base, mod_name)
                             lp_flag: str = str_replace(g_plat_flag_libpath, "{path}", Str.concat("\"", Str.concat(pkg_dir, "\"")))
@@ -1607,17 +2050,20 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
 # Main Compiler Driver
 # ==========================================
 fun main() -> i32:
+    compile_start_ms: i64 = TimeOps.time_now_ms()
     # Initialize all constants (workaround for global init bug)
     init_pipeline()
 
     argc: i32 = Args.count()
     if argc < 2:
         IOOps.io_println("Dolet Compiler v2.0.0-beta")
-        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [-O0|-O1|-O2|-O3] [--keep-mlir] [--keep-llvm] [--no-runtime] [--no-console] [--target <name>]")
+        IOOps.io_println("Usage: doletc <input.dlt> [-o output] [-O0|-O1|-O2|-O3] [--emit <mlir|llvm|object|exe>] [--target <os/arch-abi>] [--platform <path>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
-        IOOps.io_println("  -o <path>          Output executable path")
-        IOOps.io_println("  --target <name>    Target platform (reads platform/<name>/platform.conf)")
+        IOOps.io_println("  -o <path>          Output artifact path")
+        IOOps.io_println("  --emit <kind>      Stop after MLIR, LLVM IR, object, or executable (default exe)")
+        IOOps.io_println("  --target <id>      Canonical target ID (for example windows/x86_64-msvc)")
+        IOOps.io_println("  --platform <path>  Explicit platform.toml file or target-pack directory")
         IOOps.io_println("  -O0|-O1|-O2|-O3    Optimization level (default -O0)")
         IOOps.io_println("  --keep-mlir        Keep intermediate .mlir file")
         IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
@@ -1635,6 +2081,8 @@ fun main() -> i32:
     input_path: str = ""
     output_exe: str = ""
     target_platform: str = ""
+    platform_path: str = ""
+    emit_kind: str = "exe"
     # Optimization level passed to clang (-O0..-O3). Default -O0 (fast builds).
     opt_level: str = "0"
 
@@ -1662,6 +2110,14 @@ fun main() -> i32:
             ai = ai + 1
             if ai < argc:
                 target_platform = Args.get(ai)
+        elif str_eq(arg, "--platform") == 1:
+            ai = ai + 1
+            if ai < argc:
+                platform_path = Args.get(ai)
+        elif str_eq(arg, "--emit") == 1:
+            ai = ai + 1
+            if ai < argc:
+                emit_kind = Args.get(ai)
         elif str_eq(arg, "--no-validate") == 1:
             g_validate_enabled = 0
         elif str_eq(arg, "--validate") == 1:
@@ -1692,25 +2148,36 @@ fun main() -> i32:
     if Memory.strlen(input_path) == 0:
         IOOps.io_println("Error: No input file specified")
         return 1
+    if str_eq(emit_kind, "mlir") == 0 and str_eq(emit_kind, "llvm") == 0 and str_eq(emit_kind, "object") == 0 and str_eq(emit_kind, "exe") == 0:
+        IOOps.io_println(Str.concat("Error: Unknown emit kind '", Str.concat(emit_kind, "' (expected mlir, llvm, object, or exe)")))
+        return 1
 
     # Load platform config
     exe_dir: str = get_exe_dir()
+    g_host_separator = PlatformInfo.path_separator()
     if Memory.strlen(target_platform) == 0:
-        target_platform = detect_current_platform()
-    plat_ok: i32 = load_platform_config(exe_dir, target_platform)
+        target_platform = PlatformInfo.default_target()
+    plat_ok: i32 = load_platform_config(exe_dir, target_platform, platform_path)
     if plat_ok == 0:
         IOOps.io_println(Str.concat("Error: Unknown platform '", Str.concat(target_platform, "'")))
         return 1
-    IOOps.io_println(Str.concat("Platform: ", g_plat_name))
+    IOOps.io_println(Str.concat("Target: ", g_plat_id))
+    IOOps.io_println(Str.concat("Platform manifest: ", g_plat_manifest_path))
 
     # Derive paths using platform config
     base_path: str = path_base_name(input_path)
     mlir_path: str = Str.concat(base_path, ".mlir")
     ll_path: str = Str.concat(base_path, ".ll")
     obj_path: str = Str.concat(base_path, g_plat_obj_ext)
-    if Memory.strlen(output_exe) == 0:
+    if Memory.strlen(output_exe) > 0 and str_eq(emit_kind, "mlir") == 1:
+        mlir_path = output_exe
+    elif Memory.strlen(output_exe) > 0 and str_eq(emit_kind, "llvm") == 1:
+        ll_path = output_exe
+    elif Memory.strlen(output_exe) > 0 and str_eq(emit_kind, "object") == 1:
+        obj_path = output_exe
+    elif Memory.strlen(output_exe) == 0:
         output_exe = Str.concat(base_path, g_plat_exe_ext)
-    else:
+    elif str_eq(emit_kind, "exe") == 1:
         # Append exe_ext if user gave -o without extension
         has_dot: i32 = 0
         ocheck: i64 = Memory.strlen(output_exe)
@@ -1737,6 +2204,7 @@ fun main() -> i32:
     IOOps.io_println(Str.concat("Compiling: ", input_path))
 
     # Read source file
+    load_start_ms: i64 = TimeOps.time_now_ms()
     user_src: str = read_file_to_string(input_path)
     user_len: i64 = Memory.strlen(user_src)
     if user_len == 0:
@@ -1747,7 +2215,7 @@ fun main() -> i32:
     source: str = ""
 
     # Load library module registry
-    sep: str = g_plat_separator
+    sep: str = g_host_separator
     library_root: str = Str.concat(exe_dir, Str.concat(sep, Str.concat("..", Str.concat(sep, Str.concat("library", sep)))))
     init_library_registry()
     load_library_registry(library_root)
@@ -1762,7 +2230,7 @@ fun main() -> i32:
         IOOps.io_println(Str.concat("Prelude: ", Str.concat(Convert.i64_to_str(prelude_len), " chars")))
 
     # Build platform-relative path prefix (e.g. "platform/windows/")
-    plat_prefix: str = Str.concat("platform/", Str.concat(g_plat_name, "/"))
+    plat_prefix: str = Str.concat(g_plat_module_root, "/")
 
     if no_runtime == 0:
         rt: str = load_runtime(exe_dir)
@@ -1774,9 +2242,9 @@ fun main() -> i32:
         mark_file_loaded("core/primitives")
         # Runtime now always includes std — mark platform files dynamically
         mark_file_loaded(Str.concat(plat_prefix, "kernel32"))
-        mark_file_loaded(Str.concat(plat_prefix, "syscalls"))
+        mark_file_loaded(Str.concat(plat_prefix, "libc"))
         mark_file_loaded(Str.concat(plat_prefix, "alloc"))
-        mark_file_loaded(Str.concat(plat_prefix, "format"))
+        mark_file_loaded("platform/common/format")
         mark_file_loaded(Str.concat(plat_prefix, "str"))
         mark_file_loaded(Str.concat(plat_prefix, "io"))
         mark_file_loaded(Str.concat(plat_prefix, "file"))
@@ -1819,61 +2287,127 @@ fun main() -> i32:
     source = Str.concat(source, Str.concat("\n", user_src))
 
     src_len: i64 = Memory.strlen(source)
+    load_end_ms: i64 = TimeOps.time_now_ms()
     IOOps.io_println(Str.concat("Source: ", Str.concat(Convert.i64_to_str(src_len), " chars (total)")))
+    IOOps.io_println(Str.concat("  Load/resolve: ", Str.concat(Convert.i64_to_str(load_end_ms - load_start_ms), " ms")))
 
     # Phase 1: Tokenize
     IOOps.io_println("[1/4] Tokenizing...")
+    token_start_ms: i64 = TimeOps.time_now_ms()
     tokenize(source)
+    token_end_ms: i64 = TimeOps.time_now_ms()
     IOOps.io_println(Str.concat("  Tokens: ", Convert.i64_to_str(out_count as i64)))
+    IOOps.io_println(Str.concat("  Buffer: ", Str.concat(Convert.i64_to_str(out_capacity as i64), " tokens")))
+    IOOps.io_println(Str.concat("  Time: ", Str.concat(Convert.i64_to_str(token_end_ms - token_start_ms), " ms")))
 
     # Phase 2: Parse
     IOOps.io_println("[2/4] Parsing...")
+    parse_start_ms: i64 = TimeOps.time_now_ms()
     init_parser(out_kinds, out_values, out_indents, out_count)
     ast: i64 = parse()
+    parse_end_ms: i64 = TimeOps.time_now_ms()
     stmt_count: i32 = nl_count(ast)
     IOOps.io_println(Str.concat("  AST nodes: ", Convert.i64_to_str(stmt_count as i64)))
+    IOOps.io_println(Str.concat("  Time: ", Str.concat(Convert.i64_to_str(parse_end_ms - parse_start_ms), " ms")))
 
     # Phase 3: Generate MLIR
     IOOps.io_println("[3/4] Generating MLIR...")
+    codegen_start_ms: i64 = TimeOps.time_now_ms()
     g_source_file_basename = path_base_name(input_path)
     mlir: str = generate(ast)
+    codegen_end_ms: i64 = TimeOps.time_now_ms()
     mlir_len: i64 = Memory.strlen(mlir)
     IOOps.io_println(Str.concat("  MLIR: ", Str.concat(Convert.i64_to_str(mlir_len), " chars")))
+    IOOps.io_println(Str.concat("  MLIR lines: ", Str.concat(Convert.i64_to_str(g_out_count as i64), Str.concat(" / ", Convert.i64_to_str(g_out_cap as i64)))))
+    IOOps.io_println(Str.concat("  Strings: ", Str.concat(Convert.i64_to_str(g_str_count as i64), Str.concat(" / ", Convert.i64_to_str(g_str_cap as i64)))))
+    IOOps.io_println(Str.concat("  Emitted functions: ", Str.concat(Convert.i64_to_str(g_emitted_fn_count as i64), Str.concat(" / ", Convert.i64_to_str(g_emitted_fn_cap as i64)))))
+    IOOps.io_println(Str.concat("  Time: ", Str.concat(Convert.i64_to_str(codegen_end_ms - codegen_start_ms), " ms")))
 
     # Write .mlir file
+    write_start_ms: i64 = TimeOps.time_now_ms()
     ok: i32 = write_string_to_file(mlir_path, mlir)
     if ok != 1:
         IOOps.io_println("Error: Failed to write .mlir file")
         return 1
+    write_end_ms: i64 = TimeOps.time_now_ms()
+    IOOps.io_println(Str.concat("  Write MLIR: ", Str.concat(Convert.i64_to_str(write_end_ms - write_start_ms), " ms")))
+
+    if str_eq(emit_kind, "mlir") == 1:
+        compile_end_ms: i64 = TimeOps.time_now_ms()
+        IOOps.io_println(Str.concat("  Total: ", Str.concat(Convert.i64_to_str(compile_end_ms - compile_start_ms), " ms")))
+        IOOps.io_println(Str.concat("[SUCCESS] ", mlir_path))
+        return 0
 
     # Phase 4: Full pipeline (MLIR → LLVM IR → Object → Executable)
-    IOOps.io_println("[4/4] Building executable...")
-    tools_dir: str = Str.concat(exe_dir, Str.concat(sep, Str.concat("..", Str.concat(sep, Str.concat("tools", sep)))))
-    sys_libs: str = Str.concat(exe_dir, Str.concat(sep, Str.concat("..", Str.concat(sep, Str.concat("library", Str.concat(sep, g_plat_sys_path))))))
+    IOOps.io_println(Str.concat("[4/4] Building ", emit_kind))
+    tc_ok: i32 = load_host_toolchain(exe_dir)
+    if tc_ok == 0:
+        return 1
+    host_resource_root: str = host_normalize_path(g_plat_sys_path)
+    sys_libs: str = Str.concat(exe_dir, Str.concat(sep, Str.concat("..", Str.concat(sep, Str.concat("library", Str.concat(sep, host_resource_root))))))
+    translate_tool: str = resolve_host_tool(g_plat_translate)
+    if Memory.strlen(translate_tool) == 0:
+        return 1
+    compile_tool: str = ""
+    linker_tool: str = ""
+    if str_eq(emit_kind, "llvm") == 0:
+        compile_tool = resolve_host_tool(g_plat_compile)
+        if Memory.strlen(compile_tool) == 0:
+            return 1
+    if str_eq(emit_kind, "exe") == 1:
+        linker_tool = resolve_host_tool(g_plat_linker)
+        if Memory.strlen(linker_tool) == 0:
+            return 1
 
     # Step 1: mlir-translate (MLIR → LLVM IR)
-    cmd1: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_translate, "\" --mlir-to-llvmir \"")), mlir_path), Str.concat("\" -o \"", Str.concat(ll_path, "\"")))
+    translate_start_ms: i64 = TimeOps.time_now_ms()
+    cmd1: str = Str.concat(Str.concat(Str.concat("\"", translate_tool), "\" --mlir-to-llvmir \""), Str.concat(mlir_path, Str.concat("\" -o \"", Str.concat(ll_path, "\""))))
     rc1: i32 = Process.run(cmd1)
     if rc1 != 0:
         IOOps.io_println("Error: MLIR translation failed")
         return 1
-    IOOps.io_println("  MLIR -> LLVM IR OK")
+    translate_end_ms: i64 = TimeOps.time_now_ms()
+    IOOps.io_println(Str.concat("  MLIR -> LLVM IR OK: ", Str.concat(Convert.i64_to_str(translate_end_ms - translate_start_ms), " ms")))
+
+    if str_eq(emit_kind, "llvm") == 1:
+        if keep_mlir == 0:
+            delete_file(mlir_path)
+        compile_end_ms: i64 = TimeOps.time_now_ms()
+        IOOps.io_println(Str.concat("  Total: ", Str.concat(Convert.i64_to_str(compile_end_ms - compile_start_ms), " ms")))
+        IOOps.io_println(Str.concat("[SUCCESS] ", ll_path))
+        return 0
 
     # Step 2: clang (LLVM IR → Object)
     target_flag: str = ""
     if Memory.strlen(g_plat_target_triple) > 0:
         target_flag = Str.concat(" --target=", g_plat_target_triple)
     opt_flag: str = Str.concat(" -O", opt_level)
-    cmd2: str = Str.concat(Str.concat(Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_compile, "\"")), Str.concat(target_flag, Str.concat(opt_flag, Str.concat(" -c \"", ll_path)))), Str.concat("\" -o \"", Str.concat(obj_path, "\"")))
+    cmd2: str = Str.concat(Str.concat(Str.concat("\"", compile_tool), "\""), Str.concat(target_flag, Str.concat(opt_flag, Str.concat(" -c \"", Str.concat(ll_path, Str.concat("\" -o \"", Str.concat(obj_path, "\"")))))))
+    object_start_ms: i64 = TimeOps.time_now_ms()
     rc2: i32 = Process.run(cmd2)
     if rc2 != 0:
         IOOps.io_println("Error: Compilation to object failed")
         return 1
-    IOOps.io_println("  LLVM IR -> Object OK")
+    object_end_ms: i64 = TimeOps.time_now_ms()
+    IOOps.io_println(Str.concat("  LLVM IR -> Object OK: ", Str.concat(Convert.i64_to_str(object_end_ms - object_start_ms), " ms")))
 
-    # Step 3: Link (Object → Executable) — all flags from platform.conf
-    cmd3: str = Str.concat(Str.concat("\"", tools_dir), Str.concat(g_plat_linker, "\" "))
+    if str_eq(emit_kind, "object") == 1:
+        if keep_mlir == 0:
+            delete_file(mlir_path)
+        if keep_llvm == 0:
+            delete_file(ll_path)
+        compile_end_ms: i64 = TimeOps.time_now_ms()
+        IOOps.io_println(Str.concat("  Total: ", Str.concat(Convert.i64_to_str(compile_end_ms - compile_start_ms), " ms")))
+        IOOps.io_println(Str.concat("[SUCCESS] ", obj_path))
+        return 0
+
+    # Step 3: Link (Object → Executable) — all flags from Platform Manifest v2
+    cmd3: str = Str.concat(Str.concat("\"", linker_tool), "\" ")
     cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
+
+    if Memory.strlen(g_plat_flag_link_target) > 0:
+        link_target_flag: str = str_replace(g_plat_flag_link_target, "{triple}", g_plat_target_triple)
+        cmd3 = Str.concat(cmd3, Str.concat(link_target_flag, " "))
 
     # Link runtime helpers if configured
     rh_len: i64 = Memory.strlen(g_plat_runtime_helpers)
@@ -1921,12 +2455,18 @@ fun main() -> i32:
     flag_ent: str = str_replace(g_plat_flag_entry, "{name}", g_plat_entry)
     cmd3 = Str.concat(cmd3, Str.concat(" ", flag_ent))
 
+    deterministic_len: i64 = Memory.strlen(g_plat_flag_deterministic)
+    if deterministic_len > 0:
+        cmd3 = Str.concat(cmd3, Str.concat(" ", g_plat_flag_deterministic))
+
+    link_start_ms: i64 = TimeOps.time_now_ms()
     rc3: i32 = Process.run(cmd3)
     if rc3 != 0:
         IOOps.io_println("Error: Linking failed")
         IOOps.io_println(Str.concat("  CMD: ", cmd3))
         return 1
-    IOOps.io_println("  Object -> Executable OK")
+    link_end_ms: i64 = TimeOps.time_now_ms()
+    IOOps.io_println(Str.concat("  Object -> Executable OK: ", Str.concat(Convert.i64_to_str(link_end_ms - link_start_ms), " ms")))
 
     # Cleanup intermediate files
     delete_file(obj_path)
@@ -1935,5 +2475,7 @@ fun main() -> i32:
     if keep_llvm == 0:
         delete_file(ll_path)
 
+    compile_end_ms: i64 = TimeOps.time_now_ms()
+    IOOps.io_println(Str.concat("  Total: ", Str.concat(Convert.i64_to_str(compile_end_ms - compile_start_ms), " ms")))
     IOOps.io_println(Str.concat("[SUCCESS] ", output_exe))
     return 0

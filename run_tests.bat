@@ -7,6 +7,7 @@ set "E2E_DIR=tests\e2e"
 set "PASS=0"
 set "FAIL=0"
 set "ERRORS="
+set "TEST_RUNNER=powershell -NoProfile -ExecutionPolicy Bypass -File tests\run_with_limits.ps1"
 
 echo ==========================================
 echo  Dolet Feature Test Runner
@@ -68,10 +69,16 @@ for %%f in (
         if exist "%TESTS_DIR%\%%f.exe" del /q "%TESTS_DIR%\%%f.exe"
         %COMPILER% "%TESTS_DIR%\%%f.dlt" -o "%TESTS_DIR%\%%f.exe" 2>&1
         if exist "%TESTS_DIR%\%%f.exe" (
-            echo   [PASS] Compiled OK
-            set /a PASS+=1
-            REM Try to run
-            "%TESTS_DIR%\%%f.exe" 2>&1
+            REM Run in an isolated process with hard time and memory limits.
+            %TEST_RUNNER% -Executable "%TESTS_DIR%\%%f.exe"
+            if errorlevel 1 (
+                echo   [FAIL] Runtime failed or exceeded safety limits
+                set /a FAIL+=1
+                set "ERRORS=!ERRORS! %%f-runtime"
+            ) else (
+                echo   [PASS] Compiled and ran OK
+                set /a PASS+=1
+            )
             echo.
             REM Cleanup exe after running
             del /q "%TESTS_DIR%\%%f.exe" 2>nul
@@ -99,9 +106,15 @@ for %%f in (
         if exist "%E2E_DIR%\%%f.exe" del /q "%E2E_DIR%\%%f.exe"
         %COMPILER% "%E2E_DIR%\%%f.dlt" -o "%E2E_DIR%\%%f.exe" 2>&1
         if exist "%E2E_DIR%\%%f.exe" (
-            echo   [PASS] Compiled OK
-            set /a PASS+=1
-            "%E2E_DIR%\%%f.exe" 2>&1
+            %TEST_RUNNER% -Executable "%E2E_DIR%\%%f.exe"
+            if errorlevel 1 (
+                echo   [FAIL] Runtime failed or exceeded safety limits
+                set /a FAIL+=1
+                set "ERRORS=!ERRORS! e2e/%%f-runtime"
+            ) else (
+                echo   [PASS] Compiled and ran OK
+                set /a PASS+=1
+            )
             echo.
             del /q "%E2E_DIR%\%%f.exe" 2>nul
         ) else (
@@ -184,15 +197,26 @@ for %%f in (
     gen_inst
     gen_t_static
     gen_inst_zero
+    platform_contract
 ) do (
     echo [TEST] %%f
-    if exist "tests\%%f.dlt" (
+    set "SKIP_STRESS=0"
+    if "%%f"=="parallel_leak_free" if /I not "!DOLET_RUN_STRESS!"=="1" set "SKIP_STRESS=1"
+    if "!SKIP_STRESS!"=="1" (
+        echo   [SKIP] Stress test disabled by default. Set DOLET_RUN_STRESS=1 to enable.
+    ) else if exist "tests\%%f.dlt" (
         if exist "tests\%%f.exe" del /q "tests\%%f.exe"
         %COMPILER% "tests\%%f.dlt" -o "tests\%%f.exe" 2>&1
         if exist "tests\%%f.exe" (
-            echo   [PASS] Compiled OK
-            set /a PASS+=1
-            "tests\%%f.exe" 2>&1
+            %TEST_RUNNER% -Executable "tests\%%f.exe"
+            if errorlevel 1 (
+                echo   [FAIL] Runtime failed or exceeded safety limits
+                set /a FAIL+=1
+                set "ERRORS=!ERRORS! %%f-runtime"
+            ) else (
+                echo   [PASS] Compiled and ran OK
+                set /a PASS+=1
+            )
             echo.
             del /q "tests\%%f.exe" 2>nul
         ) else (
@@ -244,3 +268,5 @@ echo ==========================================
 if not "!ERRORS!"=="" (
     echo  Failed: !ERRORS!
 )
+if %FAIL% gtr 0 exit /b 1
+exit /b 0

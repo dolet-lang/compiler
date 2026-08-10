@@ -40,6 +40,17 @@ if %errorlevel% neq 0 (
 )
 echo.
 
+:: A successful compile is not enough for a self-hosted compiler. Refuse to
+:: promote unless the two self-compiled stages reached a byte-stable fixed point.
+fc /b "%BIN%\doletc2.exe" "%BIN%\doletc3.exe" >nul
+if %errorlevel% neq 0 (
+    echo [FAILED] Bootstrap is not byte-stable: Stage 2 differs from Stage 3
+    echo [FAILED] Refusing to promote a potentially miscompiled compiler
+    exit /b 1
+)
+echo [OK] Stage 2 and Stage 3 are byte-identical
+echo.
+
 :: Step 3: Promote doletc3 as the new doletc
 echo [3/3] Promoting doletc3.exe -^> doletc.exe
 copy /Y "%BIN%\doletc3.exe" "%BIN%\doletc.exe" >nul
