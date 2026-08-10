@@ -82,6 +82,9 @@ g_plat_exe_ext: str = ""
 g_plat_target_triple: str = ""
 g_plat_default_libs: str = ""
 g_plat_runtime_helpers: str = ""
+g_plat_pre_objects: str = ""
+g_plat_post_objects: str = ""
+g_plat_link_options: str = ""
 g_plat_sys_path: str = ""
 g_plat_stack_size: str = ""
 g_plat_entry: str = ""
@@ -135,6 +138,12 @@ fun plat_config_set(key: str, value: str):
         g_plat_default_libs = value
     elif str_eq(key, "runtime_helpers") == 1:
         g_plat_runtime_helpers = value
+    elif str_eq(key, "pre_objects") == 1:
+        g_plat_pre_objects = value
+    elif str_eq(key, "post_objects") == 1:
+        g_plat_post_objects = value
+    elif str_eq(key, "link_options") == 1:
+        g_plat_link_options = value
     elif str_eq(key, "sys_path") == 1:
         g_plat_sys_path = value
     elif str_eq(key, "stack_size") == 1:
@@ -275,6 +284,9 @@ fun reset_platform_config():
     g_plat_target_triple = ""
     g_plat_default_libs = ""
     g_plat_runtime_helpers = ""
+    g_plat_pre_objects = ""
+    g_plat_post_objects = ""
+    g_plat_link_options = ""
     g_plat_sys_path = ""
     g_plat_stack_size = ""
     g_plat_entry = ""
@@ -536,6 +548,64 @@ fun build_defaultlib_flags(libs_csv: str, flag_template: str) -> str:
                     result = flag
             start = di + 1
         di = di + 1
+    return result
+
+# Resolve a comma-separated list of target-owned startup/finalization objects
+# beneath resource_root. Target packs use this for CRT files without teaching
+# the compiler about any particular libc, ABI, or operating system.
+fun build_resource_object_flags(files_csv: str, resource_root: str) -> str:
+    result: str = ""
+    csv_len: i64 = Memory.strlen(files_csv)
+    if csv_len == 0:
+        return result
+    start: i64 = 0
+    fi: i64 = 0
+    fc: i8 = 0 as i8
+    ns: i64 = 0
+    nc: i8 = 0 as i8
+    ne: i64 = 0
+    nc2: i8 = 0 as i8
+    name_len: i64 = 0
+    name_buf: i64 = 0
+    name: str = ""
+    full_path: str = ""
+    quoted: str = ""
+    while fi <= csv_len:
+        fc = 0 as i8
+        if fi < csv_len:
+            fc = Memory.read_i8((files_csv as i64) + fi)
+        if fc == 44 or fi == csv_len:
+            ns = start
+            while ns < fi:
+                nc = Memory.read_i8((files_csv as i64) + ns)
+                if nc != 32 and nc != 9:
+                    break
+                ns = ns + 1
+            ne = fi - 1
+            while ne >= ns:
+                nc2 = Memory.read_i8((files_csv as i64) + ne)
+                if nc2 != 32 and nc2 != 9:
+                    break
+                ne = ne - 1
+            name_len = ne - ns + 1
+            if name_len > 0:
+                name_buf = Memory.malloc_zeroed(name_len + 1)
+                Memory.copy(name_buf, (files_csv as i64) + ns, name_len)
+                name = name_buf as str
+                if is_safe_pack_relative_path(name) == 0:
+                    IOOps.io_println(Str.concat("Error: Unsafe target resource path: ", name))
+                    return ""
+                full_path = Str.concat(resource_root, Str.concat(g_host_separator, host_normalize_path(name)))
+                if host_file_exists(full_path) == 0:
+                    IOOps.io_println(Str.concat("Error: Target link resource is missing: ", full_path))
+                    return ""
+                quoted = Str.concat("\"", Str.concat(full_path, "\""))
+                if Memory.strlen(result) > 0:
+                    result = Str.concat(result, Str.concat(" ", quoted))
+                else:
+                    result = quoted
+            start = fi + 1
+        fi = fi + 1
     return result
 
 # ==========================================
@@ -2049,6 +2119,9 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
 # ==========================================
 # Main Compiler Driver
 # ==========================================
+fun doletc_version_banner() -> str:
+    return "Dolet Compiler v2.0.0-beta.1"
+
 fun main() -> i32:
     compile_start_ms: i64 = TimeOps.time_now_ms()
     # Initialize all constants (workaround for global init bug)
@@ -2056,7 +2129,7 @@ fun main() -> i32:
 
     argc: i32 = Args.count()
     if argc < 2:
-        IOOps.io_println("Dolet Compiler v2.0.0-beta")
+        IOOps.io_println(doletc_version_banner())
         IOOps.io_println("Usage: doletc <input.dlt> [-o output] [-O0|-O1|-O2|-O3] [--emit <mlir|llvm|object|exe>] [--target <os/arch-abi>] [--platform <path>]")
         IOOps.io_println("")
         IOOps.io_println("Options:")
@@ -2094,7 +2167,7 @@ fun main() -> i32:
     while ai < argc:
         arg: str = Args.get(ai)
         if str_eq(arg, "--version") == 1:
-            IOOps.io_println("Dolet Compiler v2.0.0-beta")
+            IOOps.io_println(doletc_version_banner())
             return 0
         elif str_eq(arg, "--no-runtime") == 1:
             no_runtime = 1
@@ -2403,11 +2476,23 @@ fun main() -> i32:
 
     # Step 3: Link (Object → Executable) — all flags from Platform Manifest v2
     cmd3: str = Str.concat(Str.concat("\"", linker_tool), "\" ")
-    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
 
     if Memory.strlen(g_plat_flag_link_target) > 0:
         link_target_flag: str = str_replace(g_plat_flag_link_target, "{triple}", g_plat_target_triple)
         cmd3 = Str.concat(cmd3, Str.concat(link_target_flag, " "))
+
+    # Target-owned options and CRT startup objects precede the program
+    # object. This remains a generic target-pack contract: the driver does
+    # not know whether these files belong to musl, another libc, or an OS.
+    if Memory.strlen(g_plat_link_options) > 0:
+        cmd3 = Str.concat(cmd3, Str.concat(g_plat_link_options, " "))
+    pre_object_flags: str = build_resource_object_flags(g_plat_pre_objects, sys_libs)
+    if Memory.strlen(g_plat_pre_objects) > 0 and Memory.strlen(pre_object_flags) == 0:
+        return 1
+    if Memory.strlen(pre_object_flags) > 0:
+        cmd3 = Str.concat(cmd3, Str.concat(pre_object_flags, " "))
+
+    cmd3 = Str.concat(cmd3, Str.concat(Str.concat("\"", obj_path), "\" "))
 
     # Link runtime helpers if configured
     rh_len: i64 = Memory.strlen(g_plat_runtime_helpers)
@@ -2438,6 +2523,13 @@ fun main() -> i32:
     # Extern libs from source
     extern_lib_flags: str = extract_extern_libs(source)
     cmd3 = Str.concat(cmd3, extern_lib_flags)
+
+    # CRT finalization objects follow user code and native libraries.
+    post_object_flags: str = build_resource_object_flags(g_plat_post_objects, sys_libs)
+    if Memory.strlen(g_plat_post_objects) > 0 and Memory.strlen(post_object_flags) == 0:
+        return 1
+    if Memory.strlen(post_object_flags) > 0:
+        cmd3 = Str.concat(cmd3, Str.concat(" ", post_object_flags))
 
     # Stack size
     flag_stk: str = str_replace(g_plat_flag_stack, "{size}", g_plat_stack_size)

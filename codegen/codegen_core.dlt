@@ -1157,6 +1157,18 @@ fun is_arena_exempt(mlir_fname: str) -> i32:
         return 1
     if str_eq(mlir_fname, "_arena_bool_to_str") == 1:
         return 1
+    # C-ABI compiler runtime leaves. System allocators and other libc
+    # internals are allowed to call these symbols (musl's first malloc,
+    # for example, may clear allocator state through memset). Bracketing
+    # any of them with the scope arena creates a fatal cycle:
+    # malloc -> memset -> _scope_arena_push -> malloc. They must remain
+    # allocation-free leaf functions on every hosted and bare-metal target.
+    if str_eq(mlir_fname, "memset") == 1:
+        return 1
+    if str_eq(mlir_fname, "memcpy") == 1:
+        return 1
+    if str_eq(mlir_fname, "memmove") == 1:
+        return 1
     # All Memory.* primitives are arena-exempt. Not only to prevent the
     # Memory.malloc <-> _scope_arena_init recursion, but because
     # read_i8/write_i8/strlen/copy are HOT and any extra push/pop per

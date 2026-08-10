@@ -31,9 +31,15 @@ The Dolet compiler (`doletc`) is **written in Dolet itself** — it's a self-hos
 .dlt → Tokenize → Parse → Generate MLIR → LLVM IR → Object → Executable
 ```
 
-The compiler is **platform-neutral** — it reads all toolchain and linker configuration from `platform.conf` files at `library/platform/<os>/`. No platform-specific knowledge is hardcoded in the compiler itself.
+The compiler is **platform-neutral**: it reads target ABI, toolchain roles,
+link order, native libraries, and target-owned resources from
+`library/platform/<os>/targets/<arch>-<abi>/platform.toml`. No operating
+system or libc is selected by hardcoded compiler branches.
 
-The runtime uses **no C runtime** — all runtime functions (memory, I/O, strings, process management) are implemented in pure Dolet using the OS API directly (Windows API / Linux raw syscalls).
+Runtime policy belongs to the target pack. For example,
+`windows/x86_64-msvc` uses the Windows platform resources, while the
+self-contained `linux/x86_64-musl` pack owns musl, its CRT objects, and the
+Dolet runtime helpers required for cross-building from Windows.
 
 ## Quick Start
 
@@ -42,7 +48,9 @@ The runtime uses **no C runtime** — all runtime functions (memory, I/O, string
 Download the latest release from [Releases](https://github.com/dolet-lang/dolet-compiler/releases), extract, and run:
 
 ```batch
-doletc hello.dlt -o hello --target windows
+doletc hello.dlt -o hello.exe --target windows/x86_64-msvc
+doletc hello.dlt -o hello --target linux/x86_64-gnu
+doletc hello.dlt -o hello-static --target linux/x86_64-musl
 ```
 
 ### Option 2: Build from Source
@@ -52,13 +60,13 @@ See [Building from Source](#building-from-source) below.
 ## Usage
 
 ```
-doletc <input.dlt> [-o output] [--target <os>] [--release] [--keep-mlir] [--keep-llvm]
+doletc <input.dlt> [-o output] [--target <os/arch-abi>] [--release] [--keep-mlir] [--keep-llvm]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-o <path>` | Output executable path (extension added from platform config) |
-| `--target <os>` | Target platform — loads `library/platform/<os>/platform.conf` |
+| `--target <os/arch-abi>` | Canonical target ID, such as `windows/x86_64-msvc`, `linux/x86_64-gnu`, or `linux/x86_64-musl` |
 | `--release` | Build as GUI app (no console window, Windows only) |
 | `--keep-mlir` | Keep intermediate `.mlir` file |
 | `--keep-llvm` | Keep intermediate `.ll` file |
@@ -153,10 +161,10 @@ dolet-compiler/
 │   ├── std/               # Standard IO
 │   ├── extra/             # Math, random
 │   └── platform/          # OS-specific layers
-│       ├── windows/       # Windows API bindings, .lib files, platform.conf
-│       └── linux/         # Raw syscall wrappers, platform.conf
+│       ├── windows/       # Windows modules and ABI target packs
+│       └── linux/         # Linux modules and ABI target packs
 ├── build/                 # Single-file amalgamation (pipeline_build.dlt)
-├── tests/                 # 48 feature + e2e tests
+├── tests/                 # Feature, regression, and e2e tests
 └── build.bat              # Bootstrap build script
 ```
 
@@ -199,7 +207,7 @@ python bootstrap\doletc.py build\pipeline_build.dlt -o bin\doletc.exe --target w
 ### 4. Verify (Self-Hosting)
 
 ```batch
-bin\doletc.exe build\pipeline_build.dlt -o bin\doletc2.exe --target windows
+bin\doletc.exe build\pipeline_build.dlt -o bin\doletc2.exe --target windows/x86_64-msvc
 ```
 
 If `doletc2.exe` compiles successfully, the compiler can compile itself.
@@ -210,7 +218,7 @@ If `doletc2.exe` compiles successfully, the compiler can compile itself.
 run_tests.bat
 ```
 
-All 48 tests should pass.
+The selected test suites should pass.
 
 ## Self-Hosting Flow
 
@@ -227,30 +235,40 @@ All 48 tests should pass.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-## Platform Configuration
+## Target Packs
 
-The compiler reads all platform-specific settings from `library/platform/<os>/platform.conf`:
+Each canonical target is a self-contained manifest under
+`library/platform/<os>/targets/<arch>-<abi>/platform.toml`:
 
-```ini
+```toml
+schema = 2
+id = "linux/x86_64-musl"
+os = "linux"
+arch = "x86_64"
+abi = "musl"
+module_root = "platform/linux"
+registry = "platform/linux/registry.dlt"
+resource_root = "platform/linux/targets/x86_64-musl/resources"
+
 [toolchain]
-translate = mlir-translate.exe
-compile = clang.exe
-linker = lld-link.exe
-obj_ext = .obj
-exe_ext = .exe
+toolchain_id = "llvm"
+toolchain_version = "1"
+translate_role = "translate"
+compile_role = "compile"
+link_role = "link_elf"
+target_triple = "x86_64-unknown-linux-musl"
 
 [link]
-default_libs = kernel32, ws2_32, msvcrt-math
-runtime_helpers = runtime_helpers.obj
-entry = main
-
-[link.flags]
-output = -out:{path}
-flag_entry = -entry:{name}
-stack = -stack:{size}
+default_libs = "c"
+runtime_helpers = "runtime_helpers.o"
+pre_objects = "crt1.o, crti.o"
+post_objects = "crtn.o"
+link_options = "-static -m elf_x86_64"
 ```
 
-To add a new platform, create `library/platform/<name>/platform.conf` and use `--target <name>`.
+Host executables are selected separately by logical tool roles in
+`toolchains/<id>/<version>/hosts/<host>/host.toml`. Adding another target does
+not require adding OS-specific conditions to the compiler driver.
 
 ## Related Repositories
 

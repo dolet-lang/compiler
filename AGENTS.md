@@ -4,7 +4,7 @@
 > this BEFORE grepping the source. Every section was verified against
 > the codebase at `dolet-compiler/`. File:line references are real.
 
-**Compiler version:** v2.0.0-beta · **Bootstrap:** stage 1→2→3
+**Compiler version:** v2.0.0-beta.1 · **Bootstrap:** stage 1→2→3
 byte-stable on Windows · **Test count:** 94 PASS / 0 FAIL.
 
 ---
@@ -40,7 +40,7 @@ byte-stable on Windows · **Test count:** 94 PASS / 0 FAIL.
 - **Verified facts only.** Every claim was cross-checked against the
   source. File:line references point at the line that proves the
   claim.
-- **Pinned to v2.0.0-beta.** When the language changes, update this
+- **Pinned to v2.0.0-beta.1.** When the language changes, update this
   file in the same PR. Stale doc is worse than no doc.
 - **Examples come from `tests/`.** They're real, runnable, and the
   test-runner verifies them. If an example here disagrees with a test
@@ -1039,11 +1039,21 @@ If string/numeric operation is platform-independent → it goes in
 |---|---|---|---|
 | Windows x86_64-msvc | `.obj` | `.exe` | `link_coff` |
 | Linux x86_64-gnu | `.o` | (none) | `link_driver` |
+| Linux x86_64-musl | `.o` | (none) | `link_elf` |
 
 Target manifests never contain host executable names. Host binaries and
 their filenames belong only to Host Toolchain Manifests. Target sysroots,
 CRT objects, import libraries, runtime helpers, triples, and linker policy
 belong only to Platform Manifests and their target resource directories.
+
+Linux target split:
+
+- `linux/x86_64-gnu` is the dynamic desktop target. Its pack owns the GNU
+  CRT/link SDK, while destination Linux supplies libc, X11, Vulkan loader,
+  and the vendor GPU ICD at run time. X11/Vulkan ABI modules are opt-in and
+  must not be auto-loaded into console or server programs.
+- `linux/x86_64-musl` is the self-contained static target for programs that
+  do not need dynamic desktop/GPU system libraries.
 
 ---
 

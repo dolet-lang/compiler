@@ -1,9 +1,7 @@
-# Build artifacts
-!build/pipeline_build.dlt
-build/*.exe
-build/*.mlir
-build/*.ll
-build/*.obj
+# Build artifacts. pipeline_build.dlt is the single tracked self-hosted stage;
+# everything else under build/ is disposable compiler/toolchain output.
+/build/*
+!/build/pipeline_build.dlt
 
 # Intermediate compiler output
 *.mlir
