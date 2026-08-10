@@ -198,9 +198,31 @@ git clone https://github.com/dolet-lang/tools.git tools
 build.bat
 ```
 
+For normal multi-target development, Obin uses the already trusted
+`bin/doletc.exe`, regenerates the amalgamated source only when its contents
+change, and isolates every artifact by target:
+
+```batch
+obin build --profile release --all-targets
+obin package --profile release --all-targets
+```
+
+This produces `doletc.exe` for `windows/x86_64-msvc`, a GNU Linux `doletc`,
+and a static musl Linux `doletc`. SDK packages place the compiler under `bin/`
+and stage the Dolet library, target packs, toolchain manifest, and matching
+host-tool slot. The Windows package is full because its LLVM/MLIR host pack is
+present locally. Linux packages are thin until the Linux host pack is populated;
+run `tools/setup_tools.sh <llvm-directory>` on Linux before compiling programs
+with them. The setup script links to the native LLVM installation instead of
+copying isolated executables, preserving LLVM/MLIR shared-library resolution.
+The GNU and static-musl compiler executables themselves are already cross-built
+and runnable. `build.bat` remains the independent byte-stable bootstrap trust
+path and must still be used after compiler changes.
+
 Or manually:
 
 ```batch
+python scripts\generate_pipeline.py
 python bootstrap\doletc.py build\pipeline_build.dlt -o bin\doletc.exe --target windows
 ```
 

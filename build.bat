@@ -15,7 +15,7 @@ if not exist "%BIN%" mkdir "%BIN%"
 
 :: Step 0: Concatenate sources into pipeline_build.dlt
 echo [0/3] Generating pipeline_build.dlt ...
-python "%ROOT%bootstrap\build.py" build
+python "%ROOT%scripts\generate_pipeline.py"
 if %errorlevel% neq 0 (
     echo [FAILED] Pipeline generation
     exit /b 1

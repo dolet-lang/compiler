@@ -82,6 +82,7 @@ dolet-compiler/
 │   ├── platform/{windows,linux}/    # OS-specific
 │   └── std/                         # opt-in via `import std`
 ├── bootstrap/                       # Python bootstrap compiler (stage 0)
+├── scripts/generate_pipeline.py    # deterministic source amalgamation for bootstrap + Obin
 ├── toolchains/<id>/<version>/       # host executables selected by logical roles
 │   ├── toolchain.toml               # package identity + supported host packs
 │   └── hosts/<host-id>/host.toml    # role -> host executable mapping
@@ -1095,7 +1096,8 @@ Step 2 — Migrate stdlib to use the new feature:
 ### Bootstrap stages (`build.bat`)
 
 ```
-[0/3] Generate pipeline_build.dlt by concatenating compiler sources (Python script).
+[0/3] `scripts/generate_pipeline.py` deterministically generates
+      pipeline_build.dlt and preserves its timestamp when content is unchanged.
 [1/3] bin/doletc.exe   <pipeline_build.dlt>   →  bin/doletc2.exe
 [2/3] bin/doletc2.exe  <pipeline_build.dlt>   →  bin/doletc3.exe
 [3/3] copy doletc3.exe → bin/doletc.exe (final).
@@ -1104,6 +1106,15 @@ Step 2 — Migrate stdlib to use the new feature:
 `doletc2.exe` and `doletc3.exe` must produce byte-identical output. If
 they differ, the new compiler miscompiles itself somewhere — halt and
 bisect immediately.
+
+### Obin target matrix (distribution, not bootstrap trust)
+
+`obin.toml` declares Windows MSVC, Linux GNU, and Linux musl targets. With an
+already trusted `bin/doletc.exe`, `obin build --all-targets` cross-builds all
+three isolated artifacts and `obin package --all-targets` stages target-named
+SDK directories. This does not replace `build.bat`: Obin is the daily/release
+orchestrator, while the three-stage byte comparison remains the compiler trust
+check.
 
 ### Python bootstrap (stage 0)
 

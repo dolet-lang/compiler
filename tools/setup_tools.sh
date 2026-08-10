@@ -20,10 +20,12 @@ for tool in clang lld-link ld.lld mlir-translate; do
 done
 
 mkdir -p "$dest"
-echo "Installing LLVM host toolchain..."
+echo "Linking LLVM host toolchain..."
 for tool in clang lld-link ld.lld mlir-translate; do
-    cp "$llvm_dir/$tool" "$dest/$tool"
-    chmod +x "$dest/$tool"
+    # Linux LLVM tools commonly depend on libraries beside their original
+    # installation (for example libMLIR.so). Copying only the executable loses
+    # that runtime relationship, so a thin SDK links to the native installation.
+    ln -sfn "$llvm_dir/$tool" "$dest/$tool"
 done
 
-echo "[OK] Installed llvm/1 for linux-x86_64"
+echo "[OK] Linked llvm/1 for linux-x86_64"

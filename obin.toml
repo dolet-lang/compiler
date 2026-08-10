@@ -1,0 +1,46 @@
+[application]
+name = "doletc"
+version = "2.0.0-beta.1"
+entry = "build/pipeline_build.dlt"
+type = "console"
+
+[build]
+default-target = "windows"
+default-profile = "release"
+incremental = true
+targets = ["windows", "linux-gnu", "linux-musl"]
+
+[targets.windows]
+triple = "windows/x86_64-msvc"
+package-include = ["toolchains/llvm/1/hosts/windows-x86_64"]
+
+[targets.linux-gnu]
+triple = "linux/x86_64-gnu"
+package-include = ["toolchains/llvm/1/hosts/linux-x86_64"]
+
+[targets.linux-musl]
+triple = "linux/x86_64-musl"
+package-include = ["toolchains/llvm/1/hosts/linux-x86_64"]
+
+[profiles.dev]
+optimization = 0
+no-console = false
+
+[profiles.release]
+optimization = 3
+no-console = false
+
+[tools]
+doletc = "bin/doletc.exe"
+
+[packages]
+auto-sync = false
+
+[hooks]
+before-build = ["python scripts/generate_pipeline.py"]
+
+[package]
+directory = "dist"
+include-assets = false
+executable-directory = "bin"
+include = ["library", "toolchains/llvm/1/toolchain.toml", "tools", "README.md", "LICENSE"]
