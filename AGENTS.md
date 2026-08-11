@@ -5,7 +5,7 @@
 > the codebase at `dolet-compiler/`. File:line references are real.
 
 **Compiler version:** v2.0.0-beta.1 · **Bootstrap:** stage 1→2→3
-byte-stable on Windows · **Test count:** 121 PASS / 0 FAIL.
+byte-stable on Windows · **Test count:** 122 PASS / 0 FAIL.
 
 ---
 
@@ -1237,7 +1237,7 @@ You DO need `import std` for: `print`, `println`, `File`, `Args`,
 After ANY change to compiler or stdlib:
 
 1. **Bootstrap byte-stable**: `build.bat` produces stage 2 ≡ stage 3.
-2. **No test regressions**: `run_tests.bat` reports `121 PASS / 0 FAIL`.
+2. **No test regressions**: `run_tests.bat` reports `122 PASS / 0 FAIL`.
 3. **All 4 user apps rebuild**: simple-app-eqoi, FileManager, DisplayManager, DesktopShell.
 
 ### Test layout (`run_tests.bat`)

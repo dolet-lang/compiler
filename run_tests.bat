@@ -62,6 +62,7 @@ for %%f in (
     test_40_new_constructor
     test_41_single_line_if
     test_42_method_chain
+    test_43_pure_math_symbols
 ) do (
     echo [TEST] %%f
     if exist "%TESTS_DIR%\%%f.dlt" (

@@ -1,0 +1,23 @@
+# Regression: LLVM may legalize floating-point intrinsics to the conventional
+# sinf/cosf/expf symbols. Core must provide those symbols without a C runtime.
+fun main() -> i32:
+    s32: f32 = @sin(0.5)
+    c32: f32 = @cos(0.5)
+    e32: f32 = @exp(1.0)
+    s64: f64 = @sin(0.5 as f64)
+    c64: f64 = @cos(0.5 as f64)
+    e64: f64 = @exp(1.0 as f64)
+
+    if s32 < 0.47 or s32 > 0.49:
+        return 1
+    if c32 < 0.87 or c32 > 0.89:
+        return 2
+    if e32 < 2.71 or e32 > 2.73:
+        return 3
+    if s64 < 0.47 or s64 > 0.49:
+        return 4
+    if c64 < 0.87 or c64 > 0.89:
+        return 5
+    if e64 < 2.71 or e64 > 2.73:
+        return 6
+    return 0
