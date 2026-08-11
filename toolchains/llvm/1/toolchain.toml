@@ -2,6 +2,7 @@ schema = 1
 toolchain_id = "llvm"
 toolchain_version = "1"
 hosts_root = "hosts"
+targets_root = "targets"
 
 # This is the versioned Dolet LLVM bundle contract. Component versions may
 # differ because MLIR and LLVM tools are distributed independently; the host

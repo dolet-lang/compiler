@@ -1,0 +1,10 @@
+schema = 1
+toolchain_id = "llvm"
+toolchain_version = "1"
+
+# Internal LLVM spelling for Dolet's neutral x86_64/win64/COFF contract.
+# This value is intentionally absent from platform and application manifests.
+arch = "x86_64"
+abi = "win64"
+object_format = "coff"
+codegen_target = "x86_64-pc-windows-msvc"

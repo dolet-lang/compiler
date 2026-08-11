@@ -106,7 +106,10 @@ fun gen_fun_def(node: i64):
     # path requires escape tracking that we haven't added yet. Without
     # it we'd break every compiler function that returns a heap-
     # allocated Str.concat pointer by copying it into the arena.
-    if is_arena_exempt(mlir_fname) == 1:
+    runtime_leaf: i32 = node_has_annot(node, "noarena")
+    if runtime_leaf == 1:
+        g_arena_emit = 0
+    elif is_arena_exempt(mlir_fname) == 1:
         g_arena_emit = 0
     elif has_return == 1 and is_string_type(ret_type) == 1:
         g_arena_emit = 0
@@ -116,7 +119,7 @@ fun gen_fun_def(node: i64):
     # Mirror for stack-trace instrumentation. Independent decision: a
     # str-returning function still wants frame push/pop (push doesn't
     # touch the return value).
-    if g_debug_mode == 1 and is_frame_exempt(mlir_fname) == 0:
+    if runtime_leaf == 0 and g_debug_mode == 1 and is_frame_exempt(mlir_fname) == 0:
         g_debug_emit = 1
     else:
         g_debug_emit = 0
@@ -393,7 +396,10 @@ fun gen_method_def(struct_name: str, node: i64):
     # Mirror gen_fun_def: void-returning methods get an arena bracket;
     # str-returning methods stay heap (escape-safe until Step 6 lands).
     # Compiler-internal / exempt names also skip.
-    if is_arena_exempt(mangled) == 1:
+    runtime_leaf_m: i32 = node_has_annot(node, "noarena")
+    if runtime_leaf_m == 1:
+        g_arena_emit = 0
+    elif is_arena_exempt(mangled) == 1:
         g_arena_emit = 0
     elif has_return == 1 and is_string_type(ret_type) == 1:
         g_arena_emit = 0
@@ -401,7 +407,7 @@ fun gen_method_def(struct_name: str, node: i64):
         g_arena_emit = 1
 
     # --debug stack-trace instrumentation for methods.
-    if g_debug_mode == 1 and is_frame_exempt(mangled) == 0:
+    if runtime_leaf_m == 0 and g_debug_mode == 1 and is_frame_exempt(mangled) == 0:
         g_debug_emit = 1
     else:
         g_debug_emit = 0

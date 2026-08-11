@@ -10941,7 +10941,10 @@ fun gen_fun_def(node: i64):
     # path requires escape tracking that we haven't added yet. Without
     # it we'd break every compiler function that returns a heap-
     # allocated Str.concat pointer by copying it into the arena.
-    if is_arena_exempt(mlir_fname) == 1:
+    runtime_leaf: i32 = node_has_annot(node, "noarena")
+    if runtime_leaf == 1:
+        g_arena_emit = 0
+    elif is_arena_exempt(mlir_fname) == 1:
         g_arena_emit = 0
     elif has_return == 1 and is_string_type(ret_type) == 1:
         g_arena_emit = 0
@@ -10951,7 +10954,7 @@ fun gen_fun_def(node: i64):
     # Mirror for stack-trace instrumentation. Independent decision: a
     # str-returning function still wants frame push/pop (push doesn't
     # touch the return value).
-    if g_debug_mode == 1 and is_frame_exempt(mlir_fname) == 0:
+    if runtime_leaf == 0 and g_debug_mode == 1 and is_frame_exempt(mlir_fname) == 0:
         g_debug_emit = 1
     else:
         g_debug_emit = 0
@@ -11228,7 +11231,10 @@ fun gen_method_def(struct_name: str, node: i64):
     # Mirror gen_fun_def: void-returning methods get an arena bracket;
     # str-returning methods stay heap (escape-safe until Step 6 lands).
     # Compiler-internal / exempt names also skip.
-    if is_arena_exempt(mangled) == 1:
+    runtime_leaf_m: i32 = node_has_annot(node, "noarena")
+    if runtime_leaf_m == 1:
+        g_arena_emit = 0
+    elif is_arena_exempt(mangled) == 1:
         g_arena_emit = 0
     elif has_return == 1 and is_string_type(ret_type) == 1:
         g_arena_emit = 0
@@ -11236,7 +11242,7 @@ fun gen_method_def(struct_name: str, node: i64):
         g_arena_emit = 1
 
     # --debug stack-trace instrumentation for methods.
-    if g_debug_mode == 1 and is_frame_exempt(mangled) == 0:
+    if runtime_leaf_m == 0 and g_debug_mode == 1 and is_frame_exempt(mangled) == 0:
         g_debug_emit = 1
     else:
         g_debug_emit = 0
@@ -16226,7 +16232,10 @@ fun replace_extension(path: str, new_ext: str) -> str:
 # ==========================================
 # Platform Config
 # ==========================================
-# Reads a target pack's Platform Manifest v2 (platform.toml) at startup.
+# Reads a target pack's Platform Manifest (platform.toml) at startup.
+# Manifest v3 carries only platform-neutral identity and ABI facts. Backend
+# spellings belong to the selected toolchain adapter, never to a Dolet target
+# or application manifest.
 # The compiler itself knows NO platform names — just the target contract.
 # ==========================================
 g_host_separator: str = ""
@@ -16235,6 +16244,9 @@ g_plat_id: str = ""
 g_plat_os: str = ""
 g_plat_arch: str = ""
 g_plat_abi: str = ""
+g_plat_runtime: str = ""
+g_plat_object_format: str = ""
+g_plat_executable_format: str = ""
 g_plat_module_root: str = ""
 g_plat_registry: str = ""
 g_plat_manifest_path: str = ""
@@ -16246,8 +16258,9 @@ g_plat_compile: str = ""
 g_plat_linker: str = ""
 g_plat_obj_ext: str = ""
 g_plat_exe_ext: str = ""
-g_plat_target_triple: str = ""
+g_backend_codegen_target: str = ""
 g_plat_default_libs: str = ""
+g_plat_provided_libs: str = ""
 g_plat_runtime_helpers: str = ""
 g_plat_pre_objects: str = ""
 g_plat_post_objects: str = ""
@@ -16277,6 +16290,12 @@ fun plat_config_set(key: str, value: str):
         g_plat_arch = value
     elif str_eq(key, "abi") == 1:
         g_plat_abi = value
+    elif str_eq(key, "runtime") == 1:
+        g_plat_runtime = value
+    elif str_eq(key, "object_format") == 1:
+        g_plat_object_format = value
+    elif str_eq(key, "executable_format") == 1:
+        g_plat_executable_format = value
     elif str_eq(key, "module_root") == 1:
         g_plat_module_root = value
     elif str_eq(key, "registry") == 1:
@@ -16300,9 +16319,13 @@ fun plat_config_set(key: str, value: str):
     elif str_eq(key, "exe_ext") == 1:
         g_plat_exe_ext = value
     elif str_eq(key, "target_triple") == 1:
-        g_plat_target_triple = value
+        # Manifest v2 compatibility only. Manifest v3 resolves this through
+        # toolchains/<id>/<version>/targets/<arch>-<abi>-<format>.toml.
+        g_backend_codegen_target = value
     elif str_eq(key, "default_libs") == 1:
         g_plat_default_libs = value
+    elif str_eq(key, "provided_libs") == 1:
+        g_plat_provided_libs = value
     elif str_eq(key, "runtime_helpers") == 1:
         g_plat_runtime_helpers = value
     elif str_eq(key, "pre_objects") == 1:
@@ -16437,6 +16460,9 @@ fun reset_platform_config():
     g_plat_os = ""
     g_plat_arch = ""
     g_plat_abi = ""
+    g_plat_runtime = ""
+    g_plat_object_format = ""
+    g_plat_executable_format = ""
     g_plat_module_root = ""
     g_plat_registry = ""
     g_plat_manifest_path = ""
@@ -16448,8 +16474,9 @@ fun reset_platform_config():
     g_plat_linker = ""
     g_plat_obj_ext = ""
     g_plat_exe_ext = ""
-    g_plat_target_triple = ""
+    g_backend_codegen_target = ""
     g_plat_default_libs = ""
+    g_plat_provided_libs = ""
     g_plat_runtime_helpers = ""
     g_plat_pre_objects = ""
     g_plat_post_objects = ""
@@ -16568,7 +16595,7 @@ fun load_platform_config(exe_dir: str, target_id: str, explicit_path: str) -> i3
                             if vc2 != 32 and vc2 != 9 and vc2 != 13:
                                 break
                             val_end = val_end - 1
-                        # Platform Manifest v2 is valid TOML for the scalar
+                        # Platform Manifest is valid TOML for the scalar
                         # subset used here. Strip one matching quote pair.
                         if val_end > val_start:
                             quote_first = Memory.read_i8(line_buf + val_start)
@@ -16584,37 +16611,46 @@ fun load_platform_config(exe_dir: str, target_id: str, explicit_path: str) -> i3
             line_start = ci + 1
         ci = ci + 1
     if Memory.strlen(g_plat_schema) > 0:
-        if str_eq(g_plat_schema, "2") == 0:
+        if str_eq(g_plat_schema, "2") == 0 and str_eq(g_plat_schema, "3") == 0:
             IOOps.io_println(Str.concat("Error: Unsupported platform manifest schema: ", g_plat_schema))
             return 0
         if Memory.strlen(g_plat_id) == 0 or Memory.strlen(g_plat_os) == 0 or Memory.strlen(g_plat_arch) == 0 or Memory.strlen(g_plat_abi) == 0:
-            IOOps.io_println("Error: Platform Manifest v2 requires id, os, arch, and abi")
+            IOOps.io_println("Error: Platform Manifest requires id, os, arch, and abi")
             return 0
         if Memory.strlen(g_plat_module_root) == 0:
-            IOOps.io_println("Error: Platform Manifest v2 requires module_root")
+            IOOps.io_println("Error: Platform Manifest requires module_root")
             return 0
+        if str_eq(g_plat_schema, "3") == 1:
+            if Memory.strlen(g_plat_runtime) == 0 or Memory.strlen(g_plat_object_format) == 0 or Memory.strlen(g_plat_executable_format) == 0:
+                IOOps.io_println("Error: Platform Manifest v3 requires runtime, object_format, and executable_format")
+                return 0
     else:
-        IOOps.io_println("Error: Legacy platform packs are unsupported; provide Platform Manifest v2")
+        IOOps.io_println("Error: Legacy platform packs are unsupported; provide Platform Manifest v2 or v3")
         return 0
 
     if Memory.strlen(g_plat_toolchain_id) == 0 or Memory.strlen(g_plat_toolchain_version) == 0:
-        IOOps.io_println("Error: Platform Manifest v2 requires toolchain_id and toolchain_version")
+        IOOps.io_println("Error: Platform Manifest requires toolchain_id and toolchain_version")
         return 0
-    if Memory.strlen(g_plat_translate) == 0 or Memory.strlen(g_plat_compile) == 0 or Memory.strlen(g_plat_linker) == 0 or Memory.strlen(g_plat_target_triple) == 0 or Memory.strlen(g_plat_obj_ext) == 0:
+    if Memory.strlen(g_plat_translate) == 0 or Memory.strlen(g_plat_compile) == 0 or Memory.strlen(g_plat_linker) == 0 or Memory.strlen(g_plat_obj_ext) == 0:
         IOOps.io_println("Error: Platform manifest is missing its toolchain contract")
+        return 0
+    if str_eq(g_plat_schema, "2") == 1 and Memory.strlen(g_backend_codegen_target) == 0:
+        IOOps.io_println("Error: Platform Manifest v2 requires target_triple")
         return 0
     if Memory.strlen(g_plat_sys_path) == 0:
         IOOps.io_println("Error: Platform manifest requires resource_root/sys_path")
         return 0
     if Memory.strlen(g_plat_registry) == 0:
-        IOOps.io_println("Error: Platform Manifest v2 requires a target-local registry")
+        IOOps.io_println("Error: Platform Manifest requires a target-local registry")
         return 0
     if Memory.strlen(g_plat_required_capabilities) == 0:
-        IOOps.io_println("Error: Platform Manifest v2 requires an explicit capability contract")
+        IOOps.io_println("Error: Platform Manifest requires an explicit capability contract")
         return 0
-    canonical_id: str = Str.concat(g_plat_os, Str.concat("/", Str.concat(g_plat_arch, Str.concat("-", g_plat_abi))))
+    canonical_id: str = Str.concat(g_plat_os, Str.concat("/", g_plat_arch))
+    if str_eq(g_plat_schema, "2") == 1:
+        canonical_id = Str.concat(g_plat_os, Str.concat("/", Str.concat(g_plat_arch, Str.concat("-", g_plat_abi))))
     if str_eq(g_plat_id, canonical_id) == 0:
-        IOOps.io_println(Str.concat("Error: Platform id does not match os/arch/abi: expected ", canonical_id))
+        IOOps.io_println(Str.concat("Error: Platform id does not match its manifest identity: expected ", canonical_id))
         return 0
 
     library_root: str = Str.concat(exe_dir, Str.concat(g_host_separator, Str.concat("..", Str.concat(g_host_separator, "library"))))
@@ -17867,6 +17903,7 @@ g_tc_count: i32 = 0
 g_tc_host_dir: str = ""
 g_tc_root_manifest: str = ""
 g_tc_host_manifest: str = ""
+g_tc_target_manifest: str = ""
 
 fun reset_toolchain_config():
     g_tc_keys = Memory.malloc_zeroed(128 * 8)
@@ -17875,6 +17912,7 @@ fun reset_toolchain_config():
     g_tc_host_dir = ""
     g_tc_root_manifest = ""
     g_tc_host_manifest = ""
+    g_tc_target_manifest = ""
 
 fun toolchain_config_set(key: str, value: str) -> i32:
     if g_tc_keys == 0 or g_tc_values == 0:
@@ -18038,6 +18076,32 @@ fun load_host_toolchain(exe_dir: str) -> i32:
     if str_eq(toolchain_config_get("host"), host_id) == 0:
         IOOps.io_println("Error: Host toolchain manifest identity mismatch")
         return 0
+    if str_eq(g_plat_schema, "3") == 1:
+        targets_root: str = toolchain_config_get("targets_root")
+        if is_safe_pack_relative_path(targets_root) == 0:
+            IOOps.io_println("Error: Toolchain package has an unsafe or missing targets_root")
+            return 0
+        adapter_id: str = Str.concat(g_plat_arch, Str.concat("-", Str.concat(g_plat_abi, Str.concat("-", g_plat_object_format))))
+        if is_safe_pack_component(adapter_id) == 0:
+            IOOps.io_println("Error: Platform produced an unsafe backend adapter id")
+            return 0
+        g_tc_target_manifest = Str.concat(tc_root, Str.concat(g_host_separator, Str.concat(host_normalize_path(targets_root), Str.concat(g_host_separator, Str.concat(adapter_id, ".toml")))))
+        if parse_toolchain_manifest(g_tc_target_manifest) == 0:
+            return 0
+        if str_eq(toolchain_config_get("schema"), "1") == 0:
+            IOOps.io_println("Error: Unsupported Backend Adapter Manifest schema")
+            return 0
+        if str_eq(toolchain_config_get("toolchain_id"), g_plat_toolchain_id) == 0 or str_eq(toolchain_config_get("toolchain_version"), g_plat_toolchain_version) == 0:
+            IOOps.io_println("Error: Backend adapter package identity mismatch")
+            return 0
+        if str_eq(toolchain_config_get("arch"), g_plat_arch) == 0 or str_eq(toolchain_config_get("abi"), g_plat_abi) == 0 or str_eq(toolchain_config_get("object_format"), g_plat_object_format) == 0:
+            IOOps.io_println("Error: Backend adapter does not match the platform ABI contract")
+            return 0
+        g_backend_codegen_target = toolchain_config_get("codegen_target")
+        if Memory.strlen(g_backend_codegen_target) == 0:
+            IOOps.io_println("Error: Backend adapter does not provide codegen_target")
+            return 0
+        IOOps.io_println(Str.concat("Backend adapter: ", g_tc_target_manifest))
     IOOps.io_println(Str.concat("Host toolchain: ", g_tc_host_manifest))
     return 1
 
@@ -18060,6 +18124,40 @@ fun resolve_host_tool(role: str) -> str:
 # Scans for 'extern lib "<name>"' patterns
 # Returns linker flags string like "-defaultlib:user32 -defaultlib:gdi32"
 # ==========================================
+fun csv_has_exact_name(names: str, wanted: str) -> i32:
+    total: i64 = Memory.strlen(names)
+    start: i64 = 0
+    index: i64 = 0
+    ch: i8 = 0 as i8
+    left: i64 = 0
+    right: i64 = 0
+    edge: i8 = 0 as i8
+    candidate: str = ""
+    while index <= total:
+        ch = 0 as i8
+        if index < total:
+            ch = Memory.read_i8((names as i64) + index)
+        if ch == 44 or index == total:
+            left = start
+            right = index - 1
+            while left <= right:
+                edge = Memory.read_i8((names as i64) + left)
+                if edge != 32 and edge != 9:
+                    break
+                left = left + 1
+            while right >= left:
+                edge = Memory.read_i8((names as i64) + right)
+                if edge != 32 and edge != 9:
+                    break
+                right = right - 1
+            if right >= left:
+                candidate = str_from_range(names, left, right + 1)
+                if str_eq(candidate, wanted) == 1:
+                    return 1
+            start = index + 1
+        index = index + 1
+    return 0
+
 fun extract_extern_libs(src: str) -> str:
     slen: i64 = Memory.strlen(src)
     result: str = ""
@@ -18138,8 +18236,12 @@ fun extract_extern_libs(src: str) -> str:
                         d4 = Memory.read_i8((lib_name as i64) + ln_len - 1)
                         if d1 == 46 and d2 == 100 and d3 == 108 and d4 == 108:
                             lib_name = Str.substring(lib_name, 0, ln_len - 4)
-                    # Skip kernel32 (already included)
-                    if str_eq(lib_name, "kernel32") == 0:
+                    # A target may satisfy a logical native boundary from a
+                    # target-owned runtime helper instead of a linker library.
+                    # This keeps OS/runtime policy in the Platform Manifest and
+                    # avoids compiler hard-coding (for example, Pure Dolet's
+                    # Linux syscall gateway is provided by runtime_helpers.o).
+                    if str_eq(lib_name, "kernel32") == 0 and csv_has_exact_name(g_plat_provided_libs, lib_name) == 0:
                         ext_flag: str = str_replace(g_plat_flag_defaultlib, "{name}", lib_name)
                         result = Str.concat(result, Str.concat(" ", ext_flag))
                 i = name_end + 1
@@ -18302,7 +18404,7 @@ fun main() -> i32:
         IOOps.io_println("Options:")
         IOOps.io_println("  -o <path>          Output artifact path")
         IOOps.io_println("  --emit <kind>      Stop after MLIR, LLVM IR, object, or executable (default exe)")
-        IOOps.io_println("  --target <id>      Canonical target ID (for example windows/x86_64-msvc)")
+        IOOps.io_println("  --target <id>      Canonical target ID (for example windows/x86_64)")
         IOOps.io_println("  --platform <path>  Explicit platform.toml file or target-pack directory")
         IOOps.io_println("  -O0|-O1|-O2|-O3    Optimization level (default -O0)")
         IOOps.io_println("  --keep-mlir        Keep intermediate .mlir file")
@@ -18482,6 +18584,9 @@ fun main() -> i32:
         mark_file_loaded("core/primitives")
         # Runtime now always includes std — mark platform files dynamically
         mark_file_loaded(Str.concat(plat_prefix, "kernel32"))
+        mark_file_loaded(Str.concat(plat_prefix, "kernel"))
+        # Legacy platform packs used a libc module. Keeping the registry mark
+        # is harmless and prevents duplicate loading for those explicit packs.
         mark_file_loaded(Str.concat(plat_prefix, "libc"))
         mark_file_loaded(Str.concat(plat_prefix, "alloc"))
         mark_file_loaded("platform/common/format")
@@ -18619,8 +18724,8 @@ fun main() -> i32:
 
     # Step 2: clang (LLVM IR → Object)
     target_flag: str = ""
-    if Memory.strlen(g_plat_target_triple) > 0:
-        target_flag = Str.concat(" --target=", g_plat_target_triple)
+    if Memory.strlen(g_backend_codegen_target) > 0:
+        target_flag = Str.concat(" --target=", g_backend_codegen_target)
     opt_flag: str = Str.concat(" -O", opt_level)
     cmd2: str = Str.concat(Str.concat(Str.concat("\"", compile_tool), "\""), Str.concat(target_flag, Str.concat(opt_flag, Str.concat(" -c \"", Str.concat(ll_path, Str.concat("\" -o \"", Str.concat(obj_path, "\"")))))))
     object_start_ms: i64 = TimeOps.time_now_ms()
@@ -18645,7 +18750,8 @@ fun main() -> i32:
     cmd3: str = Str.concat(Str.concat("\"", linker_tool), "\" ")
 
     if Memory.strlen(g_plat_flag_link_target) > 0:
-        link_target_flag: str = str_replace(g_plat_flag_link_target, "{triple}", g_plat_target_triple)
+        link_target_flag: str = str_replace(g_plat_flag_link_target, "{backend}", g_backend_codegen_target)
+        link_target_flag = str_replace(link_target_flag, "{triple}", g_backend_codegen_target)
         cmd3 = Str.concat(cmd3, Str.concat(link_target_flag, " "))
 
     # Target-owned options and CRT startup objects precede the program
@@ -18683,7 +18789,8 @@ fun main() -> i32:
     pkg_libpaths: str = extract_pkg_libpaths(source, pkg_base2)
     cmd3 = Str.concat(cmd3, Str.concat(pkg_libpaths, " "))
 
-    # Default libs from config (e.g. "kernel32, ws2_32, msvcrt-math")
+    # Default libraries from the selected platform contract (for example
+    # "kernel32, ws2_32" on the pure Win32 target).
     default_lib_flags: str = build_defaultlib_flags(g_plat_default_libs, g_plat_flag_defaultlib)
     cmd3 = Str.concat(cmd3, Str.concat(default_lib_flags, " "))
 

@@ -8,18 +8,14 @@ type = "console"
 default-target = "windows"
 default-profile = "release"
 incremental = true
-targets = ["windows", "linux-gnu", "linux-musl"]
+targets = ["windows", "linux"]
 
 [targets.windows]
-triple = "windows/x86_64-msvc"
+id = "windows/x86_64"
 package-include = ["toolchains/llvm/1/hosts/windows-x86_64"]
 
-[targets.linux-gnu]
-triple = "linux/x86_64-gnu"
-package-include = ["toolchains/llvm/1/hosts/linux-x86_64"]
-
-[targets.linux-musl]
-triple = "linux/x86_64-musl"
+[targets.linux]
+id = "linux/x86_64"
 package-include = ["toolchains/llvm/1/hosts/linux-x86_64"]
 
 [profiles.dev]

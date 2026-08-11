@@ -5,7 +5,7 @@
 > the codebase at `dolet-compiler/`. File:line references are real.
 
 **Compiler version:** v2.0.0-beta.1 · **Bootstrap:** stage 1→2→3
-byte-stable on Windows · **Test count:** 94 PASS / 0 FAIL.
+byte-stable on Windows · **Test count:** 121 PASS / 0 FAIL.
 
 ---
 
@@ -181,6 +181,7 @@ Annotations are stacked top-of-decl. Multiple allowed:
 | `@cold` | fun def | LLVM `cold` branch hint. Conflicts with `@hot` | same |
 | `@pure` | fun def | LLVM `readnone` (no side effects, no memory reads) | same |
 | `@noreturn` | fun def | Function never returns (e.g. `panic` helpers) | same |
+| `@noarena` | fun def | Runtime leaf: suppress automatic scope-arena and debug-frame prologues | `codegen_decl.dlt` |
 | `@deprecated` | fun def, struct decl | Compiler emits warning at use sites | `codegen_decl.dlt:42` |
 | `@must_use` | fun def | Compiler errors if return value is discarded | `codegen_decl.dlt:44` |
 
@@ -697,7 +698,7 @@ struct DisplayBox<T: Display>:
 ```
 1. init_pipeline() — registries, constants
 2. parse CLI args
-3. load_platform_config()                  — reads Platform Manifest v2 for the target
+3. load_platform_config()                  — reads Platform Manifest v3 for the target
 4. load_library_registry()                  — reads library/mod.dlt
 5. load_prelude(exe_dir)                    — library/core/annotations.dlt
 6. (unless --no-runtime) load_runtime():
@@ -851,9 +852,9 @@ if m.try_lock():
 m.destroy()                    # release OS state + free buffer
 ```
 
-`@heap struct Mutex` — the OS handle needs a stable address across
-thread spawns. Backed by Win32 `EnterCriticalSection` (uncontended
-~10 ns, single CMPXCHG); pthread_mutex on Linux is a future task.
+`@heap struct Mutex` — synchronization storage needs a stable address across
+thread spawns. Windows uses Win32 primitives. Canonical Linux uses an atomic
+word plus the kernel futex syscall, with no pthread or libc dependency.
 
 ### Pending (not shipped)
 
@@ -861,7 +862,6 @@ thread spawns. Backed by Win32 `EnterCriticalSection` (uncontended
 - `Channel<T>` — message passing
 - `Atomic<T>` generic (pending generics-aware mangling)
 - Memory ordering (Acquire/Release/Relaxed); currently only SeqCst
-- Linux pthread_mutex backing for Mutex
 
 ---
 
@@ -961,12 +961,13 @@ library/
 │   │   ├── args.dlt
 │   │   ├── dir.dlt
 │   │   ├── time.dlt
-│   │   ├── targets/x86_64-msvc/
-│   │   │   ├── platform.toml         # Platform Manifest v2 (target/ABI policy)
+│   │   ├── targets/x86_64/
+│   │   │   ├── platform.toml         # Platform Manifest v3 (target/ABI policy)
 │   │   │   └── resources/            # target runtime helpers/import libraries
 │   │   └── mod.dlt
-│   └── linux/                        # real libc/pthread/process/network backend
-│       └── targets/x86_64-gnu/       # GNU target manifest + runtime helpers
+│   └── linux/                        # Pure Dolet syscall/futex/process/network backend
+│       ├── kernel.dlt                # Linux kernel boundary (no libc)
+│       └── targets/x86_64/           # Manifest + entry/syscall/thread helper
 │
 └── std/                              # OPT-IN via `import std`
     ├── io.dlt                        # print, println, IOOps
@@ -999,8 +1000,8 @@ If string/numeric operation is platform-independent → it goes in
 | Flag | Effect |
 |---|---|
 | `-o <path>` | Output executable path |
-| `--target <os/arch-abi>` | Select a registered target (default from host PlatformInfo) |
-| `--platform <path>` | Use an explicit Platform Manifest v2 |
+| `--target <os/arch>` | Select a registered target (default from host PlatformInfo) |
+| `--platform <path>` | Use an explicit Platform Manifest v3 (v2 is compatibility-only) |
 | `--emit <mlir|llvm|object|exe>` | Stop at the requested pipeline artifact |
 | `--keep-mlir` | Don't delete `.mlir` after build |
 | `--keep-llvm` | Don't delete `.ll` after build |
@@ -1038,23 +1039,22 @@ If string/numeric operation is platform-independent → it goes in
 
 | Platform | obj_ext | exe_ext | link role |
 |---|---|---|---|
-| Windows x86_64-msvc | `.obj` | `.exe` | `link_coff` |
-| Linux x86_64-gnu | `.o` | (none) | `link_driver` |
-| Linux x86_64-musl | `.o` | (none) | `link_elf` |
+| Windows x86_64 | `.obj` | `.exe` | `link_coff` |
+| Linux x86_64 | `.o` | (none) | `link_elf` |
 
 Target manifests never contain host executable names. Host binaries and
 their filenames belong only to Host Toolchain Manifests. Target sysroots,
 CRT objects, import libraries, runtime helpers, triples, and linker policy
 belong only to Platform Manifests and their target resource directories.
 
-Linux target split:
+Canonical Linux target:
 
-- `linux/x86_64-gnu` is the dynamic desktop target. Its pack owns the GNU
-  CRT/link SDK, while destination Linux supplies libc, X11, Vulkan loader,
-  and the vendor GPU ICD at run time. X11/Vulkan ABI modules are opt-in and
-  must not be auto-loaded into console or server programs.
-- `linux/x86_64-musl` is the self-contained static target for programs that
-  do not need dynamic desktop/GPU system libraries.
+- `linux/x86_64` is a static Pure Dolet target. Process entry, syscall register
+  shuffling, FS/TLS setup, and the clone child trampoline live in the
+  target-owned helper object; allocation, files, directories, processes,
+  futex synchronization, time, and networking policy remain Dolet source.
+- Backend spellings such as `x86_64-unknown-linux-none` are private LLVM
+  adapter data under `toolchains/`, never public target IDs.
 
 ---
 
@@ -1109,9 +1109,9 @@ bisect immediately.
 
 ### Obin target matrix (distribution, not bootstrap trust)
 
-`obin.toml` declares Windows MSVC, Linux GNU, and Linux musl targets. With an
-already trusted `bin/doletc.exe`, `obin build --all-targets` cross-builds all
-three isolated artifacts and `obin package --all-targets` stages target-named
+`obin.toml` declares canonical `windows/x86_64` and `linux/x86_64` targets.
+With an already trusted `bin/doletc.exe`, `obin build --all-targets`
+cross-builds both isolated artifacts and `obin package --all-targets` stages target-named
 SDK directories. This does not replace `build.bat`: Obin is the daily/release
 orchestrator, while the three-stage byte comparison remains the compiler trust
 check.

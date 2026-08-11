@@ -31,15 +31,17 @@ The Dolet compiler (`doletc`) is **written in Dolet itself** — it's a self-hos
 .dlt → Tokenize → Parse → Generate MLIR → LLVM IR → Object → Executable
 ```
 
-The compiler is **platform-neutral**: it reads target ABI, toolchain roles,
-link order, native libraries, and target-owned resources from
-`library/platform/<os>/targets/<arch>-<abi>/platform.toml`. No operating
-system or libc is selected by hardcoded compiler branches.
+The compiler is **platform-neutral**: it reads the operating-system contract,
+architecture, ABI facts, toolchain roles, link order, and target-owned
+resources from `library/platform/<os>/targets/<arch>/platform.toml`. Backend
+triples are private LLVM-adapter details and never appear in application
+manifests. No operating system or C runtime is selected by hardcoded compiler
+branches.
 
-Runtime policy belongs to the target pack. For example,
-`windows/x86_64-msvc` uses the Windows platform resources, while the
-self-contained `linux/x86_64-musl` pack owns musl, its CRT objects, and the
-Dolet runtime helpers required for cross-building from Windows.
+The canonical `windows/x86_64` and `linux/x86_64` targets use the Pure Dolet
+runtime. Windows reaches Win32 directly; Linux reaches the kernel through a
+small target-owned syscall/entry object. Neither canonical target links a C
+runtime, and Windows can cross-build the static Linux ELF.
 
 ## Quick Start
 
@@ -48,9 +50,8 @@ Dolet runtime helpers required for cross-building from Windows.
 Download the latest release from [Releases](https://github.com/dolet-lang/dolet-compiler/releases), extract, and run:
 
 ```batch
-doletc hello.dlt -o hello.exe --target windows/x86_64-msvc
-doletc hello.dlt -o hello --target linux/x86_64-gnu
-doletc hello.dlt -o hello-static --target linux/x86_64-musl
+doletc hello.dlt -o hello.exe --target windows/x86_64
+doletc hello.dlt -o hello --target linux/x86_64
 ```
 
 ### Option 2: Build from Source
@@ -60,13 +61,13 @@ See [Building from Source](#building-from-source) below.
 ## Usage
 
 ```
-doletc <input.dlt> [-o output] [--target <os/arch-abi>] [--release] [--keep-mlir] [--keep-llvm]
+doletc <input.dlt> [-o output] [--target <os/arch>] [--release] [--keep-mlir] [--keep-llvm]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-o <path>` | Output executable path (extension added from platform config) |
-| `--target <os/arch-abi>` | Canonical target ID, such as `windows/x86_64-msvc`, `linux/x86_64-gnu`, or `linux/x86_64-musl` |
+| `--target <os/arch>` | Canonical target ID, such as `windows/x86_64` or `linux/x86_64` |
 | `--release` | Build as GUI app (no console window, Windows only) |
 | `--keep-mlir` | Keep intermediate `.mlir` file |
 | `--keep-llvm` | Keep intermediate `.ll` file |
@@ -99,7 +100,7 @@ doletc <input.dlt> [-o output] [--target <os/arch-abi>] [--release] [--keep-mlir
 - **Enums** with variants
 - **Pattern matching** (`match`/`case`)
 - **Generic collections**: `list<T>`, `array<T>`, `map<K, V>`
-- **Custom annotations**: `@inline`, `@hot`, `@deprecated`, composable user-defined annotations
+- **Custom annotations**: `@inline`, `@hot`, `@deprecated`, `@noarena`, composable user-defined annotations
 - **Async/Await** with event loop
 - **FFI** — `extern` blocks for C / OS API interop
 - **Module system** — `import`, `from X import Y`, `use`, access control
@@ -207,16 +208,16 @@ obin build --profile release --all-targets
 obin package --profile release --all-targets
 ```
 
-This produces `doletc.exe` for `windows/x86_64-msvc`, a GNU Linux `doletc`,
-and a static musl Linux `doletc`. SDK packages place the compiler under `bin/`
+This produces `doletc.exe` for `windows/x86_64` and a static Pure Dolet ELF
+for `linux/x86_64`. SDK packages place the compiler under `bin/`
 and stage the Dolet library, target packs, toolchain manifest, and matching
 host-tool slot. The Windows package is full because its LLVM/MLIR host pack is
 present locally. Linux packages are thin until the Linux host pack is populated;
 run `tools/setup_tools.sh <llvm-directory>` on Linux before compiling programs
 with them. The setup script links to the native LLVM installation instead of
 copying isolated executables, preserving LLVM/MLIR shared-library resolution.
-The GNU and static-musl compiler executables themselves are already cross-built
-and runnable. `build.bat` remains the independent byte-stable bootstrap trust
+The Linux compiler executable is cross-built from Windows and runs without a
+dynamic loader or libc. `build.bat` remains the independent byte-stable bootstrap trust
 path and must still be used after compiler changes.
 
 Or manually:
@@ -229,7 +230,7 @@ python bootstrap\doletc.py build\pipeline_build.dlt -o bin\doletc.exe --target w
 ### 4. Verify (Self-Hosting)
 
 ```batch
-bin\doletc.exe build\pipeline_build.dlt -o bin\doletc2.exe --target windows/x86_64-msvc
+bin\doletc.exe build\pipeline_build.dlt -o bin\doletc2.exe --target windows/x86_64
 ```
 
 If `doletc2.exe` compiles successfully, the compiler can compile itself.
@@ -260,17 +261,20 @@ The selected test suites should pass.
 ## Target Packs
 
 Each canonical target is a self-contained manifest under
-`library/platform/<os>/targets/<arch>-<abi>/platform.toml`:
+`library/platform/<os>/targets/<arch>/platform.toml`:
 
 ```toml
-schema = 2
-id = "linux/x86_64-musl"
+schema = 3
+id = "linux/x86_64"
 os = "linux"
 arch = "x86_64"
-abi = "musl"
+abi = "sysv"
+runtime = "dolet"
+object_format = "elf"
+executable_format = "elf"
 module_root = "platform/linux"
 registry = "platform/linux/registry.dlt"
-resource_root = "platform/linux/targets/x86_64-musl/resources"
+resource_root = "platform/linux/targets/x86_64/resources"
 
 [toolchain]
 toolchain_id = "llvm"
@@ -278,14 +282,13 @@ toolchain_version = "1"
 translate_role = "translate"
 compile_role = "compile"
 link_role = "link_elf"
-target_triple = "x86_64-unknown-linux-musl"
 
 [link]
-default_libs = "c"
+provided_libs = "dolet-runtime"
+default_libs = ""
 runtime_helpers = "runtime_helpers.o"
-pre_objects = "crt1.o, crti.o"
-post_objects = "crtn.o"
 link_options = "-static -m elf_x86_64"
+entry = "_start"
 ```
 
 Host executables are selected separately by logical tool roles in

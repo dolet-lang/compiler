@@ -1,0 +1,9 @@
+schema = 1
+toolchain_id = "llvm"
+toolchain_version = "1"
+
+# Internal LLVM spelling for Dolet's neutral x86_64/SysV/ELF contract.
+arch = "x86_64"
+abi = "sysv"
+object_format = "elf"
+codegen_target = "x86_64-unknown-linux-none"
