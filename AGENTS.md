@@ -1001,7 +1001,7 @@ If string/numeric operation is platform-independent → it goes in
 |---|---|
 | `-o <path>` | Output executable path |
 | `--target <os/arch>` | Select a registered target (default from host PlatformInfo) |
-| `--platform <path>` | Use an explicit Platform Manifest v3 (v2 is compatibility-only) |
+| `--platform <path>` | Use an explicit Platform Manifest v3 |
 | `--emit <mlir|llvm|object|exe>` | Stop at the requested pipeline artifact |
 | `--keep-mlir` | Don't delete `.mlir` after build |
 | `--keep-llvm` | Don't delete `.ll` after build |
@@ -1027,7 +1027,7 @@ If string/numeric operation is platform-independent → it goes in
 8. [4/4] Load `toolchains/<id>/<version>/toolchain.toml`, then the
    matching `hosts/<PlatformInfo.host_id()>/host.toml`.
 9. Resolve target-requested logical roles (`translate`, `compile`,
-   `link_coff`, `link_driver`, etc.) to bundled host executables.
+   `link_coff`, `link_elf`, etc.) to bundled host executables.
 10. Build only as far as requested by `--emit`:
      translate role: MLIR → LLVM IR
      compile role:   LLVM IR → target object
@@ -1053,6 +1053,11 @@ Canonical Linux target:
   shuffling, FS/TLS setup, and the clone child trampoline live in the
   target-owned helper object; allocation, files, directories, processes,
   futex synchronization, time, and networking policy remain Dolet source.
+- The same public `linux/x86_64` target automatically selects its internal
+  dynamic desktop SDK when resolved source declares X11 or Vulkan. That
+  profile preserves system-loader TLS, uses an opaque pthread-backed `Thread`
+  handle, and links only the system ABI inputs required by those APIs. Do not
+  expose libc/desktop variants as separate public target IDs.
 - Backend spellings such as `x86_64-unknown-linux-none` are private LLVM
   adapter data under `toolchains/`, never public target IDs.
 

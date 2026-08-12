@@ -1,0 +1,14 @@
+import sys.linux.x11
+
+fun main() -> i32:
+    worker: @heap fun() = fun():
+        Thread.yield_now()
+    thread: Thread = Thread.spawn(worker)
+    if thread.handle == 0:
+        return 2
+    thread.join()
+
+    display: i64 = XOpenDisplay(0)
+    if display != 0:
+        XCloseDisplay(display)
+    return 0

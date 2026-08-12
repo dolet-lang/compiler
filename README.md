@@ -40,8 +40,12 @@ branches.
 
 The canonical `windows/x86_64` and `linux/x86_64` targets use the Pure Dolet
 runtime. Windows reaches Win32 directly; Linux reaches the kernel through a
-small target-owned syscall/entry object. Neither canonical target links a C
-runtime, and Windows can cross-build the static Linux ELF.
+small target-owned syscall/entry object. Ordinary Linux applications are
+static and libc-free, and Windows can cross-build their ELF executables.
+When resolved source uses X11 or Vulkan, the same Linux target automatically
+selects its internal loader-compatible desktop SDK. This keeps one public
+target ID while isolating unavoidable system-library ABI dependencies from
+the Pure Dolet runtime.
 
 ## Quick Start
 
@@ -289,11 +293,22 @@ default_libs = ""
 runtime_helpers = "runtime_helpers.o"
 link_options = "-static -m elf_x86_64"
 entry = "_start"
+
+[link.dynamic]
+dynamic_for_libs = "X11,vulkan"
+dynamic_resource_root = "platform/linux/targets/x86_64/resources/desktop"
+dynamic_default_libs = "pthread,c"
+dynamic_runtime_helpers = "runtime_helpers.o"
+dynamic_pre_objects = "entry_helpers.o"
+dynamic_link_options = "-m elf_x86_64 --allow-shlib-undefined -dynamic-linker /lib64/ld-linux-x86-64.so.2"
+dynamic_entry = "_start"
 ```
 
 Host executables are selected separately by logical tool roles in
 `toolchains/<id>/<version>/hosts/<host>/host.toml`. Adding another target does
-not require adding OS-specific conditions to the compiler driver.
+not require adding OS-specific conditions to the compiler driver. Dynamic
+profiles are target-owned policy selected from resolved external-library
+requirements; they are not separate public targets.
 
 ## Related Repositories
 
