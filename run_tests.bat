@@ -63,6 +63,7 @@ for %%f in (
     test_41_single_line_if
     test_42_method_chain
     test_43_pure_math_symbols
+    test_44_process_large_output
 ) do (
     echo [TEST] %%f
     if exist "%TESTS_DIR%\%%f.dlt" (
@@ -199,12 +200,66 @@ for %%f in (
     gen_t_static
     gen_inst_zero
     platform_contract
+    package_path
+    package_path_transitive
 ) do (
     echo [TEST] %%f
     set "SKIP_STRESS=0"
     if "%%f"=="parallel_leak_free" if /I not "!DOLET_RUN_STRESS!"=="1" set "SKIP_STRESS=1"
     if "!SKIP_STRESS!"=="1" (
         echo   [SKIP] Stress test disabled by default. Set DOLET_RUN_STRESS=1 to enable.
+    ) else if "%%f"=="package_path_transitive" (
+        set "TRANSITIVE_DIR=tests\package_path_transitive"
+        set "TRANSITIVE_LIB=!TRANSITIVE_DIR!\packages\child\transitive_link_fixture.lib"
+        if exist "!TRANSITIVE_LIB!" del /q "!TRANSITIVE_LIB!"
+        toolchains\llvm\1\hosts\windows-x86_64\bin\lld-link.exe /lib /machine:x64 /def:"!TRANSITIVE_DIR!\packages\child\transitive_link_fixture.def" /out:"!TRANSITIVE_LIB!" 2>&1
+        if errorlevel 1 (
+            echo   [FAIL] Could not prepare transitive native-link fixture
+            set /a FAIL+=1
+            set "ERRORS=!ERRORS! %%f-fixture"
+        ) else (
+            if exist "!TRANSITIVE_DIR!\package_path_transitive.exe" del /q "!TRANSITIVE_DIR!\package_path_transitive.exe"
+            %COMPILER% "!TRANSITIVE_DIR!\main.dlt" -o "!TRANSITIVE_DIR!\package_path_transitive.exe" --package-path "!TRANSITIVE_DIR!\packages" 2>&1
+            if exist "!TRANSITIVE_DIR!\package_path_transitive.exe" (
+                %TEST_RUNNER% -Executable "!TRANSITIVE_DIR!\package_path_transitive.exe"
+                if errorlevel 1 (
+                    echo   [FAIL] Runtime failed or exceeded safety limits
+                    set /a FAIL+=1
+                    set "ERRORS=!ERRORS! %%f-runtime"
+                ) else (
+                    echo   [PASS] Transitive native package linked and ran OK
+                    set /a PASS+=1
+                )
+                del /q "!TRANSITIVE_DIR!\package_path_transitive.exe" 2>nul
+            ) else (
+                echo   [FAIL] Transitive package compilation failed
+                set /a FAIL+=1
+                set "ERRORS=!ERRORS! %%f"
+            )
+        )
+        if exist "!TRANSITIVE_LIB!" del /q "!TRANSITIVE_LIB!" 2>nul
+    ) else if "%%f"=="package_path" (
+        if exist "tests\package_path\package_path.exe" del /q "tests\package_path\package_path.exe"
+        %COMPILER% "tests\package_path\main.dlt" -o "tests\package_path\package_path.exe" --package-path "tests\package_path\packages" 2>&1
+        if exist "tests\package_path\package_path.exe" (
+            %TEST_RUNNER% -Executable "tests\package_path\package_path.exe"
+            if errorlevel 1 (
+                echo   [FAIL] Runtime failed or exceeded safety limits
+                set /a FAIL+=1
+                set "ERRORS=!ERRORS! %%f-runtime"
+            ) else (
+                echo   [PASS] Compiled and ran OK
+                set /a PASS+=1
+            )
+            echo.
+            del /q "tests\package_path\package_path.exe" 2>nul
+        ) else (
+            echo   [FAIL] Compilation failed
+            set /a FAIL+=1
+            set "ERRORS=!ERRORS! %%f"
+        )
+        if exist "tests\package_path\main.mlir" del /q "tests\package_path\main.mlir" 2>nul
+        if exist "tests\package_path\main.ll" del /q "tests\package_path\main.ll" 2>nul
     ) else if exist "tests\%%f.dlt" (
         if exist "tests\%%f.exe" del /q "tests\%%f.exe"
         %COMPILER% "tests\%%f.dlt" -o "tests\%%f.exe" 2>&1
@@ -241,6 +296,7 @@ for %%f in (
     generic_bounds_fail
     closures_escape_fail
     trait_impl_fail
+    errors\missing_import
 ) do (
     echo [TEST-MUST-FAIL] %%f
     if exist "tests\%%f.dlt" (

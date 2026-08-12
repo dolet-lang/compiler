@@ -12,6 +12,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "build" / "pipeline_build.dlt"
+VERSION_PATH = ROOT / "VERSION"
+MANIFEST_PATH = ROOT / "obin.toml"
+VERSION_TOKEN = "@DOLET_VERSION@"
+SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 
 LEXER_FILES = ["lexer/tokenizer.dlt"]
 PARSER_FILES = [
@@ -70,11 +74,30 @@ def clean_parser_duplicates(source: str) -> str:
     return "\n".join(cleaned)
 
 
+def compiler_version() -> str:
+    version = VERSION_PATH.read_text(encoding="utf-8").strip()
+    if not SEMVER.fullmatch(version):
+        raise SystemExit(f"[ERROR] Invalid compiler version in VERSION: {version!r}")
+    manifest = MANIFEST_PATH.read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"\s*$', manifest, re.MULTILINE)
+    if match is None or match.group(1) != version:
+        actual = match.group(1) if match is not None else "missing"
+        raise SystemExit(
+            f"[ERROR] obin.toml version {actual!r} does not match VERSION {version!r}"
+        )
+    return version
+
+
 def render() -> str:
     tokenizer = read_source(LEXER_FILES[0])
     parser = clean_parser_duplicates("\n".join(read_source(path) for path in PARSER_FILES))
     codegen = "\n".join(read_source(path) for path in CODEGEN_FILES)
     driver = "\n".join(read_source(path) for path in DRIVER_FILES)
+    if driver.count(VERSION_TOKEN) != 1:
+        raise SystemExit(
+            f"[ERROR] Expected exactly one {VERSION_TOKEN} token in compiler driver"
+        )
+    driver = driver.replace(VERSION_TOKEN, compiler_version())
     return (
         "# ===== Tokenizer =====\n"
         + tokenizer

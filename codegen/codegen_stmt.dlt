@@ -638,7 +638,7 @@ fun gen_return(node: i64):
         if str_eq(val, "") == 1:
             if str_eq(ret_type, "") == 0:
                 if str_eq(ret_type, "void") == 0:
-                    panic(Str.concat(Str.concat("internal codegen error: return value resolved to empty for non-void return type '", ret_type), "'. Likely cause: a chained method call (e.g. f().method()) lost its return type during codegen."))
+                    panic(Str.concat(Str.concat(Str.concat(Str.concat("internal codegen error in function '", g_cur_fn_name), "': return value resolved to empty for non-void return type '"), ret_type), "'. Likely cause: an expression lost its return type during codegen."))
 
     mt: str = mlir_type(ret_type)
     # Values backed by the callee frame must be promoted before return.

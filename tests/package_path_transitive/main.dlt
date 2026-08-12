@@ -1,0 +1,5 @@
+import parent
+
+if transitive_tick() == 0:
+    Process.exit(1)
+print("transitive package link path passed")

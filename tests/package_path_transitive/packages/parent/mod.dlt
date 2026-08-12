@@ -1,0 +1,5 @@
+module parent
+requires child
+
+load parent/api
+export transitive_tick

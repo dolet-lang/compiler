@@ -1,0 +1,3 @@
+import this.module.must.not.exist
+
+print("unreachable")

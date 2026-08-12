@@ -4,8 +4,8 @@
 > this BEFORE grepping the source. Every section was verified against
 > the codebase at `dolet-compiler/`. File:line references are real.
 
-**Compiler version:** v2.0.0-beta.1 · **Bootstrap:** stage 1→2→3
-byte-stable on Windows · **Test count:** 122 PASS / 0 FAIL.
+**Compiler version:** v2.0.0-beta.2 · **Bootstrap:** pinned seed→stage 1→stage 2
+byte-stable on Windows · **Test count:** 126 PASS / 0 FAIL.
 
 ---
 
@@ -40,7 +40,7 @@ byte-stable on Windows · **Test count:** 122 PASS / 0 FAIL.
 - **Verified facts only.** Every claim was cross-checked against the
   source. File:line references point at the line that proves the
   claim.
-- **Pinned to v2.0.0-beta.1.** When the language changes, update this
+- **Pinned to v2.0.0-beta.2.** When the language changes, update this
   file in the same PR. Stale doc is worse than no doc.
 - **Examples come from `tests/`.** They're real, runnable, and the
   test-runner verifies them. If an example here disagrees with a test
@@ -81,13 +81,13 @@ dolet-compiler/
 │   ├── core/                        # auto-loaded, platform-independent
 │   ├── platform/{windows,linux}/    # OS-specific
 │   └── std/                         # opt-in via `import std`
-├── bootstrap/                       # Python bootstrap compiler (stage 0)
+├── bootstrap/                       # archived historical Python stage-0
 ├── scripts/generate_pipeline.py    # deterministic source amalgamation for bootstrap + Obin
 ├── toolchains/<id>/<version>/       # host executables selected by logical roles
 │   ├── toolchain.toml               # package identity + supported host packs
 │   └── hosts/<host-id>/host.toml    # role -> host executable mapping
-├── build.bat                        # 3-stage byte-stable bootstrap
-├── run_tests.bat                    # 121 tests; stress tests opt-in
+├── build.bat                        # pinned-seed, 2-stage fixed-point bootstrap
+├── run_tests.bat                    # 126 tests; stress tests opt-in
 ├── tests/                           # *.dlt test files
 └── bin/doletc.exe                   # the compiled compiler
 ```
@@ -1002,6 +1002,7 @@ If string/numeric operation is platform-independent → it goes in
 | `-o <path>` | Output executable path |
 | `--target <os/arch>` | Select a registered target (default from host PlatformInfo) |
 | `--platform <path>` | Use an explicit Platform Manifest v3 |
+| `--package-path <path>` | Add a project-local package root (repeatable) |
 | `--emit <mlir|llvm|object|exe>` | Stop at the requested pipeline artifact |
 | `--keep-mlir` | Don't delete `.mlir` after build |
 | `--keep-llvm` | Don't delete `.ll` after build |
@@ -1069,7 +1070,7 @@ The compiler is self-hosted. `bin/doletc.exe` was built from a
 previous version of the source. If a new language feature is added,
 the existing `bin/doletc.exe` doesn't know it yet.
 
-### Two-step bootstrap pattern (verified in this session)
+### Two-step language migration pattern
 
 When you add NEW SYNTAX (new keyword, new annotation form, etc.):
 
@@ -1077,14 +1078,14 @@ When you add NEW SYNTAX (new keyword, new annotation form, etc.):
 Step 1 — Build with feature in compiler source but NOT used in stdlib:
   - Edit lexer/parser/codegen to teach the new feature.
   - Stdlib stays on OLD syntax.
-  - Run build.bat — stage 1 (existing doletc.exe) compiles new compiler source. ✓
-  - Stage 2/3 — new doletc compiles itself. ✓
-  - Now bin/doletc.exe knows the new feature.
+  - Run build.bat — the SHA-pinned seed compiles temporary stage 1. ✓
+  - Stage 1 compiles stage 2; promotion requires byte-identical output. ✓
+  - Now the promoted seed knows the new feature.
 
 Step 2 — Migrate stdlib to use the new feature:
   - Edit stdlib files to use the new syntax.
-  - Run build.bat — stage 1 (new doletc.exe with feature support) compiles. ✓
-  - Stage 2/3 byte-stable. ✓
+  - Run build.bat — the pinned seed now understands the migrated source. ✓
+  - Temporary stage 1/stage 2 remain byte-identical. ✓
 ```
 
 **Real example — the `extend`/`group` → `attach` migration:**
@@ -1093,22 +1094,22 @@ Step 2 — Migrate stdlib to use the new feature:
    alongside the existing `extend`/`group` recognition.
 2. Built once. Now `bin/doletc.exe` recognizes `attach` too.
 3. Mass-renamed `^extend ` / `^group ` → `^attach ` across the stdlib.
-4. Built again. Stage 1→2→3 byte-stable.
+4. Built again. Temporary stage 1 and stage 2 were byte-identical.
 5. Dropped `extend`/`group` recognition from the lexer entirely;
    `attach` is now the only method-block keyword. Built a final time
    to confirm nothing still depended on the old spellings.
 
-### Bootstrap stages (`build.bat`)
+### Verified bootstrap stages (`build.bat`)
 
 ```
-[0/3] `scripts/generate_pipeline.py` deterministically generates
-      pipeline_build.dlt and preserves its timestamp when content is unchanged.
-[1/3] bin/doletc.exe   <pipeline_build.dlt>   →  bin/doletc2.exe
-[2/3] bin/doletc2.exe  <pipeline_build.dlt>   →  bin/doletc3.exe
-[3/3] copy doletc3.exe → bin/doletc.exe (final).
+[source] `scripts/generate_pipeline.py` deterministically generates
+         pipeline_build.dlt and preserves its timestamp when content is unchanged.
+[stage-1] SHA-pinned native seed <pipeline_build.dlt> → temporary stage 1
+[stage-2] temporary stage 1      <pipeline_build.dlt> → temporary stage 2
+[verify]  require byte-identical stages, then atomically promote stage 2
 ```
 
-`doletc2.exe` and `doletc3.exe` must produce byte-identical output. If
+The two temporary stages must produce byte-identical output. If
 they differ, the new compiler miscompiles itself somewhere — halt and
 bisect immediately.
 
@@ -1118,18 +1119,16 @@ bisect immediately.
 With an already trusted `bin/doletc.exe`, `obin build --all-targets`
 cross-builds both isolated artifacts and `obin package --all-targets` stages target-named
 SDK directories. This does not replace `build.bat`: Obin is the daily/release
-orchestrator, while the three-stage byte comparison remains the compiler trust
+orchestrator, while the pinned-seed fixed-point comparison remains the compiler trust
 check.
 
-### Python bootstrap (stage 0)
+### Historical Python stage 0
 
-`bootstrap/doletc.py` — Python implementation of Dolet that can compile
-the full self-hosted compiler. Used only when:
-- bin/doletc.exe doesn't exist
-- bin/doletc.exe is broken
-
-Has known limitations (e.g. doesn't implement every recent feature).
-The self-hosted `bin/doletc.exe` is the source of truth.
+`bootstrap/doletc.py` and its parser/code generator are preserved for language
+history only. They implement an older revision and must not build or validate a
+modern release. Recovery uses a reviewed native seed whose SHA-256 is pinned in
+`bootstrap.seed.toml`; acquiring or changing a trusted seed is an explicit
+release-security operation, never an automatic fallback.
 
 ---
 
@@ -1241,8 +1240,8 @@ You DO need `import std` for: `print`, `println`, `File`, `Args`,
 
 After ANY change to compiler or stdlib:
 
-1. **Bootstrap byte-stable**: `build.bat` produces stage 2 ≡ stage 3.
-2. **No test regressions**: `run_tests.bat` reports `122 PASS / 0 FAIL`.
+1. **Bootstrap byte-stable**: `build.bat` produces stage 1 ≡ stage 2.
+2. **No test regressions**: `run_tests.bat` reports `126 PASS / 0 FAIL`.
 3. **All 4 user apps rebuild**: simple-app-eqoi, FileManager, DisplayManager, DesktopShell.
 
 ### Test layout (`run_tests.bat`)
@@ -1252,6 +1251,7 @@ After ANY change to compiler or stdlib:
 | `tests/features/test_NN_*.dlt` | Feature tests (one per major language feature) |
 | `tests/e2e/*.dlt` | End-to-end tests |
 | `tests/<name>.dlt` | Top-level tests (panic_basic, str_split, generic_box, closures_*, atomic_counter, thread_basic, random_basic, nested_namespace, etc.) |
+| `tests/package_path*/` | Project-local and transitive package source/native-link regressions |
 | `tests/visibility_fail_*.dlt` etc. | TESTS THAT MUST FAIL TO COMPILE — runner inverts the assertion |
 
 ### Manual run

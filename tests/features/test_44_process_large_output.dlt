@@ -1,0 +1,17 @@
+# Regression: Process.run_output must continue draining both pipes after its
+# bounded 1 MiB return buffers fill. Stopping the read at the cap deadlocks a
+# child that is still writing, which used to hang the complete test suite.
+fun main() -> i32:
+    command: str = ""
+    if Str.equals(PlatformInfo.name(), "windows"):
+        command = "powershell -NoProfile -Command \"[Console]::Out.Write(('o' * 1100000)); [Console]::Error.Write(('e' * 1100000)); exit 7\""
+    else:
+        command = "head -c 1100000 /dev/zero | tr '\\0' o; head -c 1100000 /dev/zero | tr '\\0' e >&2; exit 7"
+    output: Output = Process.run_output(command)
+    if output.code != 7:
+        return 1
+    if Memory.strlen(output.stdout) < 1048000:
+        return 2
+    if Memory.strlen(output.stderr) < 1048000:
+        return 3
+    return 0

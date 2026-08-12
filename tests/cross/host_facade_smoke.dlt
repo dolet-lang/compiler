@@ -1,0 +1,18 @@
+path: str = PathOps.get_cwd()
+if PlatformHost.is_directory(path) != 1:
+    Process.exit(10)
+if Memory.strlen(PlatformHost.get_environment("PATH")) == 0:
+    Process.exit(11)
+if Str.equals(System.platform(), "windows"):
+    if PlatformHost.path_list_separator() != 59:
+        Process.exit(12)
+    if PlatformHost.paths_are_case_sensitive():
+        Process.exit(13)
+else:
+    if PlatformHost.path_list_separator() != 58:
+        Process.exit(12)
+    if PlatformHost.paths_are_case_sensitive() == false:
+        Process.exit(13)
+if PlatformHost.file_stamp(path) <= 0:
+    Process.exit(14)
+Process.exit(0)

@@ -7,6 +7,11 @@ fun main() -> i32:
     s64: f64 = @sin(0.5 as f64)
     c64: f64 = @cos(0.5 as f64)
     e64: f64 = @exp(1.0 as f64)
+    a1f: f32 = atanf(1.0)
+    a1: f64 = atan(1.0 as f64)
+    an: f64 = atan(0.0 - 1.0 as f64)
+    alarge: f64 = atan(1000.0 as f64)
+    a2q: f64 = atan2(1.0 as f64, 0.0 - 1.0 as f64)
 
     if s32 < 0.47 or s32 > 0.49:
         return 1
@@ -20,4 +25,38 @@ fun main() -> i32:
         return 5
     if e64 < 2.71 or e64 > 2.73:
         return 6
+    if a1f < 0.78538 or a1f > 0.78542:
+        return 7
+    if a1 < 0.78539815 or a1 > 0.78539818:
+        return 8
+    if an < (0.0 - 0.78539818) or an > (0.0 - 0.78539815):
+        return 9
+    if alarge < 1.56979 or alarge > 1.56980:
+        return 10
+    if a2q < 2.35619 or a2q > 2.35620:
+        return 11
+    positive_inf: f64 = exp(1000.0 as f64)
+    negative_inf: f64 = log(0.0 as f64)
+    log_nan: f64 = log(0.0 - 1.0 as f64)
+    pow_nan: f64 = pow(0.0 - 2.0 as f64, 0.5 as f64)
+    mod_nan: f64 = fmod(1.0 as f64, 0.0 as f64)
+    trig_nan: f64 = sin(positive_inf)
+    if positive_inf <= 1.7976931348623157e+308:
+        return 12
+    if negative_inf >= (0.0 - 1.7976931348623157e+308):
+        return 13
+    if log_nan == log_nan:
+        return 14
+    if pow_nan == pow_nan:
+        return 15
+    if mod_nan == mod_nan:
+        return 16
+    if trig_nan == trig_nan:
+        return 17
+    if pow(0.0 - 2.0 as f64, 3.0 as f64) > (0.0 - 7.99):
+        return 18
+    if pow(0.0 - 2.0 as f64, 4.0 as f64) < 15.99:
+        return 19
+    if pow(0.0 as f64, 0.0 - 2.0 as f64) <= 1.7976931348623157e+308:
+        return 20
     return 0

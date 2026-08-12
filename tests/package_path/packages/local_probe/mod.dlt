@@ -1,0 +1,5 @@
+module local_probe
+
+load local_probe/api
+
+export LocalProbe

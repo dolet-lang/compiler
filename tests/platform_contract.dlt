@@ -25,17 +25,31 @@ fun main_contract():
     require_contract(Memory.strlen(cwd) > 0, "cwd")
     joined: str = PathOps.join_path(cwd, "platform_contract.tmp")
     require_contract(Memory.strlen(joined) > Memory.strlen(cwd), "path join")
+    missing_handle: i64 = FileOps.file_open_read("platform_contract.definitely-missing")
+    require_contract(missing_handle == -1, "missing file sentinel")
+    require_contract(not FileOps.file_is_valid(missing_handle), "missing file validity")
 
     output: File = File.open_cwd("platform_contract.tmp", "w")
     require_contract(output.is_valid(), "file create")
     require_contract(output.write("dolet-platform-v1") == 17, "file write")
     output.close()
+    first_stamp: i64 = PlatformHost.file_stamp(joined)
+    require_contract(first_stamp > 0, "file timestamp")
+
+    # Incremental tools depend on the complete sub-second modification stamp,
+    # not file size or only the high half of a native timestamp.
+    Thread.sleep(20)
+    updated: File = File.open_cwd("platform_contract.tmp", "w")
+    require_contract(updated.is_valid(), "file reopen")
+    require_contract(updated.write("dolet-platform-v2") == 17, "file rewrite")
+    updated.close()
+    require_contract(PlatformHost.file_stamp(joined) > first_stamp, "timestamp advances")
 
     input: File = File.open_cwd("platform_contract.tmp", "r")
     require_contract(input.is_valid(), "file open")
     text: str = input.read_text()
     input.close()
-    require_contract(Str.equals(text, "dolet-platform-v1"), "file read")
+    require_contract(Str.equals(text, "dolet-platform-v2"), "file read")
     require_contract(FileOps.file_delete("platform_contract.tmp") == 1, "file delete")
 
     entries: list<str> = Dir.list(".")

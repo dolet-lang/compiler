@@ -39,9 +39,13 @@ contain executable names or host paths.
 On an x86_64 Linux host, install the native Linux executables with:
 
 ```sh
+./tools/setup_tools.sh
+# or explicitly:
 ./tools/setup_tools.sh /opt/llvm/bin
 ```
 
-They are copied to `toolchains/llvm/1/hosts/linux-x86_64/bin/`. Never copy
+With no argument, the script discovers versioned installations such as
+`/usr/lib/llvm-20/bin`. It verifies every tool after linking it into
+`toolchains/llvm/1/hosts/linux-x86_64/bin/`. Never copy
 Windows executables into the Linux host pack: host packs describe the machine
 running `doletc`, independently from the target selected by `--target`.

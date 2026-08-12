@@ -65,13 +65,14 @@ See [Building from Source](#building-from-source) below.
 ## Usage
 
 ```
-doletc <input.dlt> [-o output] [--target <os/arch>] [--release] [--keep-mlir] [--keep-llvm]
+doletc <input.dlt> [-o output] [--target <os/arch>] [--package-path <path>] [--release] [--keep-mlir] [--keep-llvm]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-o <path>` | Output executable path (extension added from platform config) |
 | `--target <os/arch>` | Canonical target ID, such as `windows/x86_64` or `linux/x86_64` |
+| `--package-path <path>` | Add a project-local package root; may be repeated |
 | `--release` | Build as GUI app (no console window, Windows only) |
 | `--keep-mlir` | Keep intermediate `.mlir` file |
 | `--keep-llvm` | Keep intermediate `.ll` file |
@@ -108,7 +109,7 @@ doletc <input.dlt> [-o output] [--target <os/arch>] [--release] [--keep-mlir] [-
 - **Async/Await** with event loop
 - **FFI** — `extern` blocks for C / OS API interop
 - **Module system** — `import`, `from X import Y`, `use`, access control
-- **Cross-platform** — Windows x64 and Linux x64 (no libc)
+- **Cross-platform** — Windows x64 and Linux x64; Pure Dolet core programs are libc-free, while Linux desktop programs use the target-owned X11/Vulkan system ABI profile
 
 ## Example
 
@@ -175,7 +176,11 @@ dolet-compiler/
 
 ## Building from Source
 
-The compiler is self-hosting, so you need the [bootstrap compiler](https://github.com/dolet-lang/dolet-bootstrap) (written in Python) for the first build.
+The compiler is self-hosting. A checked-in native seed is pinned by SHA-256 in
+`bootstrap.seed.toml`; `build.bat` refuses to use a changed seed, regenerates
+the amalgamated source, builds two self-hosted stages, and promotes the result
+only when both stages are byte-identical. The historical Python compiler is
+archived for language archaeology and is not a second source of truth.
 
 ### Prerequisites
 
@@ -189,7 +194,7 @@ git clone https://github.com/dolet-lang/dolet-compiler.git
 cd dolet-compiler
 ```
 
-### 2. Clone Dependencies (inside dolet-compiler)
+### 2. Clone the nested source repositories (inside dolet-compiler)
 
 ```batch
 git clone https://github.com/dolet-lang/dolet-bootstrap.git bootstrap
@@ -217,49 +222,36 @@ for `linux/x86_64`. SDK packages place the compiler under `bin/`
 and stage the Dolet library, target packs, toolchain manifest, and matching
 host-tool slot. The Windows package is full because its LLVM/MLIR host pack is
 present locally. Linux packages are thin until the Linux host pack is populated;
-run `tools/setup_tools.sh <llvm-directory>` on Linux before compiling programs
+run `tools/setup_tools.sh` on Linux before compiling programs
 with them. The setup script links to the native LLVM installation instead of
 copying isolated executables, preserving LLVM/MLIR shared-library resolution.
 The Linux compiler executable is cross-built from Windows and runs without a
 dynamic loader or libc. `build.bat` remains the independent byte-stable bootstrap trust
 path and must still be used after compiler changes.
 
-Or manually:
+To verify without replacing the checked-in seed:
 
 ```batch
-python scripts\generate_pipeline.py
-python bootstrap\doletc.py build\pipeline_build.dlt -o bin\doletc.exe --target windows
+python scripts\bootstrap.py --no-promote
 ```
 
-### 4. Verify (Self-Hosting)
-
-```batch
-bin\doletc.exe build\pipeline_build.dlt -o bin\doletc2.exe --target windows/x86_64
-```
-
-If `doletc2.exe` compiles successfully, the compiler can compile itself.
-
-### 5. Run Tests
+### 4. Run Tests
 
 ```batch
 run_tests.bat
 ```
 
-The selected test suites should pass.
+The suite executes generated programs through hard time and working-set limits.
+The known heavy stress case is opt-in with `DOLET_RUN_STRESS=1`.
 
 ## Self-Hosting Flow
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Stage 1 — Bootstrap                                             │
-│  Python bootstrap ──compiles──> bin/doletc.exe                   │
-│                                                                  │
-│  Stage 2 — Self-Hosting                                          │
-│  doletc.exe ──compiles──> bin/doletc2.exe                        │
-│                                                                  │
-│  Stage 3 — Verification                                          │
-│  doletc2.exe ──compiles──> bin/doletc3.exe                       │
-└──────────────────────────────────────────────────────────────────┘
+```text
+trusted native seed --builds--> stage 1 --builds--> stage 2
+                                 |                 |
+                                 +-- SHA-256 equal-+
+                                            |
+                                            +--> promote
 ```
 
 ## Target Packs
@@ -315,7 +307,7 @@ requirements; they are not separate public targets.
 | Repository | Description |
 |------------|-------------|
 | [dolet-compiler](https://github.com/dolet-lang/dolet-compiler) | The Dolet compiler (this repo) |
-| [dolet-bootstrap](https://github.com/dolet-lang/dolet-bootstrap) | Python bootstrap compiler |
+| [dolet-bootstrap](https://github.com/dolet-lang/dolet-bootstrap) | Historical Python stage-0 archive and compatibility entry point |
 | [library](https://github.com/dolet-lang/library) | Standard library, runtime & platform layers |
 | [tools](https://github.com/dolet-lang/tools) | LLVM toolchain for Windows x64 |
 

@@ -9,6 +9,7 @@
 *.obj
 *.exe
 !bin/doletc.exe
+!bin/doletc
 
 # Host toolchain executables are installed per machine. Manifests stay tracked.
 toolchains/**/hosts/**/bin/*

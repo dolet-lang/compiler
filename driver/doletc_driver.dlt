@@ -113,6 +113,18 @@ g_plat_flag_stack: str = ""
 g_plat_flag_deterministic: str = ""
 g_plat_flag_link_target: str = ""
 g_plat_name: str = ""
+g_package_paths: i64 = 0
+g_resolved_package_dirs: i64 = 0
+
+fun register_resolved_package_dir(directory: str):
+    if g_resolved_package_dirs == 0 or Memory.strlen(directory) == 0:
+        return
+    index: i32 = 0
+    while index < nl_count(g_resolved_package_dirs):
+        if str_eq(nl_get(g_resolved_package_dirs, index) as str, directory) == 1:
+            return
+        index = index + 1
+    nl_add(g_resolved_package_dirs, directory as i64)
 
 fun plat_config_set(key: str, value: str):
     if str_eq(key, "schema") == 1:
@@ -1363,6 +1375,10 @@ fun load_module(library_root: str, mod_rel_path: str) -> str:
                                     req_path = Str.concat(req_path, rcbuf as str)
                                 ri = ri + 1
                             req_mod_file: str = Str.concat(req_path, Str.concat(g_host_separator, "mod.dlt"))
+                            req_package_dir: str = Str.concat(library_root, req_path)
+                            req_package_meta: str = Str.concat(req_package_dir, Str.concat(g_host_separator, "module.meta"))
+                            if file_exists(req_package_meta) == 1:
+                                register_resolved_package_dir(req_package_dir)
                             req_src: str = load_module(library_root, req_mod_file)
                             if Memory.strlen(req_src) > 0:
                                 result = Str.concat(result, req_src)
@@ -1482,11 +1498,27 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
     if file_exists(p2) == 1:
         return p2
 
+    # Project/package-manager roots supplied explicitly by the build tool take
+    # precedence over the compiler installation's bundled packages.
+    if g_package_paths != 0:
+        root_index: i32 = 0
+        while root_index < nl_count(g_package_paths):
+            package_root: str = nl_get(g_package_paths, root_index) as str
+            package_mod: str = Str.concat(Str.concat(Str.concat(package_root, g_host_separator), mod_path), Str.concat(g_host_separator, "mod.dlt"))
+            if file_exists(package_mod) == 1:
+                register_resolved_package_dir(Str.concat(Str.concat(package_root, g_host_separator), mod_path))
+                return package_mod
+            package_file: str = Str.concat(Str.concat(Str.concat(package_root, g_host_separator), mod_path), ".dlt")
+            if file_exists(package_file) == 1:
+                return package_file
+            root_index = root_index + 1
+
     # 2c. Try packages dir (dist layout): <exe_dir>/../packages/<mod_path>/mod.dlt
     pkg_base: str = Str.concat(std_base, Str.concat("..", Str.concat(g_host_separator, Str.concat("packages", g_host_separator))))
     pkg_dir: str = Str.concat(Str.concat(pkg_base, mod_path), g_host_separator)
     pp: str = Str.concat(pkg_dir, "mod.dlt")
     if file_exists(pp) == 1:
+        register_resolved_package_dir(Str.concat(pkg_base, mod_path))
         return pp
 
     # 2d. Try packages dir single-file: <pkg_base>/<mod_path>.dlt
@@ -1521,6 +1553,8 @@ fun try_resolve_module(mod_name: str, std_base: str, src_dir: str) -> str:
         return p4
 
     return ""
+
+g_import_resolution_error: i32 = 0
 
 fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
     # Scan source for lines starting with "import " (ASCII: 105,109,112,111,114,116,32)
@@ -1711,6 +1745,10 @@ fun resolve_and_load_imports(user_src: str, std_base: str, src_dir: str) -> str:
                                                     break
                                                 fc_i = fc_i + 1
                                             register_module_name(first_comp)
+                                    else:
+                                        IOOps.io_println(Str.concat(Str.concat("Error: Module not found: '", mod_name), "'"))
+                                        IOOps.io_println(Str.concat("  searched from: ", src_dir))
+                                        g_import_resolution_error = 1
                 # Move past newline chars
                 if c == 13 and (i + 1) < slen:
                     nr = Memory.read_i8((scan_src as i64) + i + 1)
@@ -2281,11 +2319,161 @@ fun extract_pkg_libpaths(src: str, pkg_base: str) -> str:
     Memory.free(added_names)
     return result
 
+# Native-link metadata must come from parsed declarations, never from byte
+# patterns in source text.  This prevents comments/string literals from
+# selecting an SDK or injecting a linker flag and makes whitespace irrelevant.
+fun native_name_is_safe(name: str) -> i32:
+    length: i64 = Memory.strlen(name)
+    if length <= 0 or length > 128:
+        return 0
+    i: i64 = 0
+    ch: i8 = 0 as i8
+    while i < length:
+        ch = Memory.read_i8((name as i64) + i)
+        if not ((ch >= 48 and ch <= 57) or (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122) or ch == 45 or ch == 46 or ch == 95):
+            return 0
+        i = i + 1
+    return 1
+
+fun native_name_normalize(name: str) -> str:
+    length: i64 = Memory.strlen(name)
+    if length > 4:
+        dot: i8 = Memory.read_i8((name as i64) + length - 4)
+        d: i8 = Memory.read_i8((name as i64) + length - 3)
+        l1: i8 = Memory.read_i8((name as i64) + length - 2)
+        l2: i8 = Memory.read_i8((name as i64) + length - 1)
+        if dot == 46 and (d == 100 or d == 68) and (l1 == 108 or l1 == 76) and (l2 == 108 or l2 == 76):
+            return Str.substring(name, 0, length - 4)
+    return name
+
+fun ast_uses_any_extern_lib(ast: i64, libs_csv: str) -> i32:
+    count: i32 = nl_count(ast)
+    i: i32 = 0
+    node: i64 = 0
+    name: str = ""
+    while i < count:
+        node = nl_get(ast, i)
+        if node != 0 and nd_type(node) == NODE_EXTERN_BLOCK:
+            name = native_name_normalize(extblock_lib(node))
+            if native_name_is_safe(name) == 1 and csv_has_exact_name(libs_csv, name) == 1:
+                return 1
+        i = i + 1
+    return 0
+
+
+g_native_metadata_error: i32 = 0
+
+fun ast_extern_lib_flags(ast: i64) -> str:
+    result: str = ""
+    seen: i64 = mk_node_list(16)
+    count: i32 = nl_count(ast)
+    i: i32 = 0
+    j: i32 = 0
+    node: i64 = 0
+    name: str = ""
+    prior: str = ""
+    duplicate: i32 = 0
+    while i < count:
+        node = nl_get(ast, i)
+        if node != 0 and nd_type(node) == NODE_EXTERN_BLOCK:
+            name = native_name_normalize(extblock_lib(node))
+            if native_name_is_safe(name) == 0:
+                IOOps.io_println(Str.concat("Error: Unsafe extern library name: ", name))
+                g_native_metadata_error = 1
+                return ""
+            duplicate = 0
+            j = 0
+            while j < nl_count(seen):
+                prior = nl_get(seen, j) as str
+                if str_eq(prior, name) == 1:
+                    duplicate = 1
+                    break
+                j = j + 1
+            if duplicate == 0:
+                nl_add(seen, name as i64)
+                if str_eq(name, "kernel32") == 0 and csv_has_exact_name(g_plat_provided_libs, name) == 0:
+                    flag: str = str_replace(g_plat_flag_defaultlib, "{name}", name)
+                    result = Str.concat(result, Str.concat(" ", flag))
+        i = i + 1
+    return result
+
+
+fun module_package_name(module_name: str) -> str:
+    length: i64 = Memory.strlen(module_name)
+    i: i64 = 0
+    ch: i8 = 0 as i8
+    while i < length:
+        ch = Memory.read_i8((module_name as i64) + i)
+        if ch == 46 or ch == 47 or ch == 92:
+            return Str.substring(module_name, 0, i)
+        i = i + 1
+    return module_name
+
+
+fun ast_pkg_libpaths(ast: i64, pkg_base: str) -> str:
+    result: str = ""
+    seen: i64 = mk_node_list(16)
+    if g_resolved_package_dirs != 0:
+        resolved_index: i32 = 0
+        while resolved_index < nl_count(g_resolved_package_dirs):
+            resolved_dir: str = nl_get(g_resolved_package_dirs, resolved_index) as str
+            resolved_flag: str = str_replace(g_plat_flag_libpath, "{path}", Str.concat("\"", Str.concat(resolved_dir, "\"")))
+            result = Str.concat(result, Str.concat(" ", resolved_flag))
+            resolved_name: str = PathOps.get_filename(resolved_dir)
+            if Memory.strlen(resolved_name) > 0:
+                nl_add(seen, resolved_name as i64)
+            resolved_index = resolved_index + 1
+    count: i32 = nl_count(ast)
+    i: i32 = 0
+    j: i32 = 0
+    node: i64 = 0
+    package_name: str = ""
+    prior: str = ""
+    duplicate: i32 = 0
+    package_dir: str = ""
+    while i < count:
+        node = nl_get(ast, i)
+        if node != 0 and nd_type(node) == NODE_IMPORT:
+            package_name = module_package_name(import_module(node))
+            if native_name_is_safe(package_name) == 1:
+                duplicate = 0
+                j = 0
+                while j < nl_count(seen):
+                    prior = nl_get(seen, j) as str
+                    if str_eq(prior, package_name) == 1:
+                        duplicate = 1
+                        break
+                    j = j + 1
+                if duplicate == 0:
+                    package_dir = ""
+                    # Resolve native libraries from the same project-local
+                    # package root that wins source import resolution.
+                    if g_package_paths != 0:
+                        root_index: i32 = 0
+                        while root_index < nl_count(g_package_paths):
+                            root: str = nl_get(g_package_paths, root_index) as str
+                            local_dir: str = Str.concat(Str.concat(root, g_host_separator), package_name)
+                            local_mod: str = Str.concat(local_dir, Str.concat(g_host_separator, "mod.dlt"))
+                            if file_exists(local_mod) == 1:
+                                package_dir = local_dir
+                                break
+                            root_index = root_index + 1
+                    if Memory.strlen(package_dir) == 0:
+                        bundled_mod: str = Str.concat(Str.concat(pkg_base, package_name), Str.concat(g_host_separator, "mod.dlt"))
+                        if file_exists(bundled_mod) == 1:
+                            package_dir = Str.concat(pkg_base, package_name)
+                    if Memory.strlen(package_dir) > 0:
+                        lp_flag: str = str_replace(g_plat_flag_libpath, "{path}", Str.concat("\"", Str.concat(package_dir, "\"")))
+                        result = Str.concat(result, Str.concat(" ", lp_flag))
+                        nl_add(seen, package_name as i64)
+        i = i + 1
+    return result
+
 # ==========================================
 # Main Compiler Driver
 # ==========================================
 fun doletc_version_banner() -> str:
-    return "Dolet Compiler v2.0.0-beta.1"
+    return "Dolet Compiler v@DOLET_VERSION@"
 
 fun main() -> i32:
     compile_start_ms: i64 = TimeOps.time_now_ms()
@@ -2302,6 +2490,7 @@ fun main() -> i32:
         IOOps.io_println("  --emit <kind>      Stop after MLIR, LLVM IR, object, or executable (default exe)")
         IOOps.io_println("  --target <id>      Canonical target ID (for example windows/x86_64)")
         IOOps.io_println("  --platform <path>  Explicit platform.toml file or target-pack directory")
+        IOOps.io_println("  --package-path <p> Add a project-local package root (repeatable)")
         IOOps.io_println("  -O0|-O1|-O2|-O3    Optimization level (default -O0)")
         IOOps.io_println("  --keep-mlir        Keep intermediate .mlir file")
         IOOps.io_println("  --keep-llvm        Keep intermediate .ll file")
@@ -2323,6 +2512,8 @@ fun main() -> i32:
     emit_kind: str = "exe"
     # Optimization level passed to clang (-O0..-O3). Default -O0 (fast builds).
     opt_level: str = "0"
+    g_package_paths = mk_node_list(8)
+    g_resolved_package_dirs = mk_node_list(16)
 
     # Init validator default ON (file-scope non-zero initializers
     # don't take effect at startup in Dolet; assignment here does).
@@ -2352,6 +2543,10 @@ fun main() -> i32:
             ai = ai + 1
             if ai < argc:
                 platform_path = Args.get(ai)
+        elif str_eq(arg, "--package-path") == 1:
+            ai = ai + 1
+            if ai < argc:
+                nl_add(g_package_paths, Args.get(ai) as i64)
         elif str_eq(arg, "--emit") == 1:
             ai = ai + 1
             if ai < argc:
@@ -2433,6 +2628,18 @@ fun main() -> i32:
             if ext_len > 0:
                 output_exe = Str.concat(output_exe, g_plat_exe_ext)
 
+    # Executable intermediates belong to the selected output, not to the
+    # input source.  Apart from keeping build directories self-contained,
+    # this makes simultaneous builds of one source for different targets
+    # safe: each target already has a distinct executable output path, so
+    # its MLIR, LLVM IR, and object files cannot overwrite another build.
+    # Explicit --emit mlir/llvm/object outputs intentionally keep the paths
+    # selected above because those files are the requested final artifacts.
+    if str_eq(emit_kind, "exe") == 1:
+        mlir_path = Str.concat(output_exe, ".dolet.mlir")
+        ll_path = Str.concat(output_exe, ".dolet.ll")
+        obj_path = Str.concat(Str.concat(output_exe, ".dolet"), g_plat_obj_ext)
+
     # Determine if we need full pipeline
     has_output: i32 = 0
     oelen: i64 = Memory.strlen(output_exe)
@@ -2506,7 +2713,10 @@ fun main() -> i32:
     src_dir: str = get_file_dir(input_path)
     if Memory.strlen(src_dir) == 0:
         src_dir = "."
+    g_import_resolution_error = 0
     imp_src: str = resolve_and_load_imports(user_src, std_base, src_dir)
+    if g_import_resolution_error == 1:
+        return 1
     imp_len: i64 = Memory.strlen(imp_src)
     # Append imported module source BEFORE user source so module
     # constants are initialized before user code runs in @main
@@ -2546,6 +2756,11 @@ fun main() -> i32:
     parse_start_ms: i64 = TimeOps.time_now_ms()
     init_parser(out_kinds, out_values, out_indents, out_count)
     ast: i64 = parse()
+    g_native_metadata_error = 0
+    parsed_dynamic_sdk: i32 = ast_uses_any_extern_lib(ast, g_plat_dynamic_for_libs)
+    parsed_extern_lib_flags: str = ast_extern_lib_flags(ast)
+    if g_native_metadata_error == 1:
+        return 1
     parse_end_ms: i64 = TimeOps.time_now_ms()
     stmt_count: i32 = nl_count(ast)
     IOOps.io_println(Str.concat("  AST nodes: ", Convert.i64_to_str(stmt_count as i64)))
@@ -2584,7 +2799,7 @@ fun main() -> i32:
     tc_ok: i32 = load_host_toolchain(exe_dir)
     if tc_ok == 0:
         return 1
-    use_dynamic_sdk: i32 = source_uses_any_extern_lib(source, g_plat_dynamic_for_libs)
+    use_dynamic_sdk: i32 = parsed_dynamic_sdk
     selected_sys_path: str = g_plat_sys_path
     selected_default_libs: str = g_plat_default_libs
     selected_runtime_helpers: str = g_plat_runtime_helpers
@@ -2623,6 +2838,9 @@ fun main() -> i32:
     rc1: i32 = Process.run(cmd1)
     if rc1 != 0:
         IOOps.io_println("Error: MLIR translation failed")
+        if keep_mlir == 0:
+            delete_file(mlir_path)
+        delete_file(ll_path)
         return 1
     translate_end_ms: i64 = TimeOps.time_now_ms()
     IOOps.io_println(Str.concat("  MLIR -> LLVM IR OK: ", Str.concat(Convert.i64_to_str(translate_end_ms - translate_start_ms), " ms")))
@@ -2640,11 +2858,19 @@ fun main() -> i32:
     if Memory.strlen(g_backend_codegen_target) > 0:
         target_flag = Str.concat(" --target=", g_backend_codegen_target)
     opt_flag: str = Str.concat(" -O", opt_level)
-    cmd2: str = Str.concat(Str.concat(Str.concat("\"", compile_tool), "\""), Str.concat(target_flag, Str.concat(opt_flag, Str.concat(" -c \"", Str.concat(ll_path, Str.concat("\" -o \"", Str.concat(obj_path, "\"")))))))
+    # MLIR may attach its host LLVM spelling before clang applies the selected
+    # backend adapter. The explicit --target is authoritative; suppress only
+    # that harmless replacement diagnostic so clean builds remain warning-free.
+    cmd2: str = Str.concat(Str.concat(Str.concat("\"", compile_tool), "\""), Str.concat(target_flag, Str.concat(opt_flag, Str.concat(" -Wno-override-module -c \"", Str.concat(ll_path, Str.concat("\" -o \"", Str.concat(obj_path, "\"")))))))
     object_start_ms: i64 = TimeOps.time_now_ms()
     rc2: i32 = Process.run(cmd2)
     if rc2 != 0:
         IOOps.io_println("Error: Compilation to object failed")
+        delete_file(obj_path)
+        if keep_mlir == 0:
+            delete_file(mlir_path)
+        if keep_llvm == 0:
+            delete_file(ll_path)
         return 1
     object_end_ms: i64 = TimeOps.time_now_ms()
     IOOps.io_println(Str.concat("  LLVM IR -> Object OK: ", Str.concat(Convert.i64_to_str(object_end_ms - object_start_ms), " ms")))
@@ -2699,7 +2925,7 @@ fun main() -> i32:
 
     # Package libpaths
     pkg_base2: str = Str.concat(library_root, Str.concat("..", Str.concat(sep, Str.concat("packages", sep))))
-    pkg_libpaths: str = extract_pkg_libpaths(source, pkg_base2)
+    pkg_libpaths: str = ast_pkg_libpaths(ast, pkg_base2)
     cmd3 = Str.concat(cmd3, Str.concat(pkg_libpaths, " "))
 
     # Default libraries from the selected platform contract (for example
@@ -2707,9 +2933,8 @@ fun main() -> i32:
     default_lib_flags: str = build_defaultlib_flags(selected_default_libs, g_plat_flag_defaultlib)
     cmd3 = Str.concat(cmd3, Str.concat(default_lib_flags, " "))
 
-    # Extern libs from source
-    extern_lib_flags: str = extract_extern_libs(source)
-    cmd3 = Str.concat(cmd3, extern_lib_flags)
+    # Native libraries from validated parsed extern declarations.
+    cmd3 = Str.concat(cmd3, parsed_extern_lib_flags)
 
     # CRT finalization objects follow user code and native libraries.
     post_object_flags: str = build_resource_object_flags(selected_post_objects, sys_libs)
@@ -2743,6 +2968,11 @@ fun main() -> i32:
     if rc3 != 0:
         IOOps.io_println("Error: Linking failed")
         IOOps.io_println(Str.concat("  CMD: ", cmd3))
+        delete_file(obj_path)
+        if keep_mlir == 0:
+            delete_file(mlir_path)
+        if keep_llvm == 0:
+            delete_file(ll_path)
         return 1
     link_end_ms: i64 = TimeOps.time_now_ms()
     IOOps.io_println(Str.concat("  Object -> Executable OK: ", Str.concat(Convert.i64_to_str(link_end_ms - link_start_ms), " ms")))

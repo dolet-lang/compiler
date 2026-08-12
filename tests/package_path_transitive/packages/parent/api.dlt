@@ -1,0 +1,5 @@
+extern lib "transitive_link_fixture":
+    fun GetTickCount64() -> i64
+
+fun transitive_tick() -> i64:
+    return GetTickCount64()

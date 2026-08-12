@@ -1,0 +1,6 @@
+[info]
+name = child
+version = 1.0.0
+
+[libs]
+windows = transitive_link_fixture.lib

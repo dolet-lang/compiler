@@ -1,0 +1,3 @@
+import local_probe
+
+print(LocalProbe.message())
