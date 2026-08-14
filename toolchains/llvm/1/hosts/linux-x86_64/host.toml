@@ -9,3 +9,8 @@ compile = "bin/clang"
 link_driver = "bin/clang"
 link_coff = "bin/lld-link"
 link_elf = "bin/ld.lld"
+
+# Thin Linux SDKs discover one complete native tool directory as a unit. This
+# keeps MLIR, Clang, and LLD on the same LLVM version and preserves their shared
+# library lookup. DOLET_TOOLCHAIN_PATH and PATH are checked before these roots.
+discovery_paths = "/usr/lib/llvm-22/bin:/usr/lib/llvm-21/bin:/usr/lib/llvm-20/bin:/usr/lib/llvm-19/bin:/usr/lib/llvm-18/bin:/usr/lib/llvm-17/bin:/opt/llvm/bin"

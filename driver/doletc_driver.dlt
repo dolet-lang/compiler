@@ -1799,6 +1799,8 @@ g_tc_host_dir: str = ""
 g_tc_root_manifest: str = ""
 g_tc_host_manifest: str = ""
 g_tc_target_manifest: str = ""
+g_tc_discovered_dir: str = ""
+g_tc_discovery_attempted: i32 = 0
 
 fun reset_toolchain_config():
     g_tc_keys = Memory.malloc_zeroed(128 * 8)
@@ -1808,6 +1810,8 @@ fun reset_toolchain_config():
     g_tc_root_manifest = ""
     g_tc_host_manifest = ""
     g_tc_target_manifest = ""
+    g_tc_discovered_dir = ""
+    g_tc_discovery_attempted = 0
 
 fun toolchain_config_set(key: str, value: str) -> i32:
     if g_tc_keys == 0 or g_tc_values == 0:
@@ -1999,6 +2003,83 @@ fun load_host_toolchain(exe_dir: str) -> i32:
     IOOps.io_println(Str.concat("Host toolchain: ", g_tc_host_manifest))
     return 1
 
+fun host_tool_leaf(path: str) -> str:
+    path_len: i64 = Memory.strlen(path)
+    index: i64 = path_len - 1
+    while index >= 0:
+        current: i8 = Memory.read_i8((path as i64) + index)
+        if current == 47 or current == 92:
+            return str_from_range(path, index + 1, path_len)
+        index = index - 1
+    return path
+
+fun host_tool_in_directory(directory: str, relative_tool: str) -> str:
+    if Memory.strlen(directory) == 0:
+        return ""
+    leaf: str = host_tool_leaf(relative_tool)
+    if is_safe_pack_component(leaf) == 0:
+        return ""
+    candidate: str = Str.concat(directory, Str.concat(g_host_separator, leaf))
+    if PlatformHost.is_executable(candidate) == 1:
+        return candidate
+    return ""
+
+fun host_tool_directory_is_complete(directory: str) -> i32:
+    # A fallback is selected as one coherent toolchain root. Resolving each
+    # role independently could silently mix incompatible LLVM/MLIR versions.
+    # Only the selected target's roles are required: a Linux-only installation
+    # need not provide the COFF linker, while cross-target builds still validate
+    # their own linker before accepting the directory.
+    translate_tool: str = toolchain_config_get(g_plat_translate)
+    compile_tool: str = toolchain_config_get(g_plat_compile)
+    linker_tool: str = toolchain_config_get(g_plat_linker)
+    if Memory.strlen(translate_tool) == 0 or Memory.strlen(compile_tool) == 0 or Memory.strlen(linker_tool) == 0:
+        return 0
+    if Memory.strlen(host_tool_in_directory(directory, translate_tool)) == 0:
+        return 0
+    if Memory.strlen(host_tool_in_directory(directory, compile_tool)) == 0:
+        return 0
+    if Memory.strlen(host_tool_in_directory(directory, linker_tool)) == 0:
+        return 0
+    return 1
+
+fun discover_host_tool_dir_in_list(directories: str) -> str:
+    total: i64 = Memory.strlen(directories)
+    separator: i8 = PlatformHost.path_list_separator() as i8
+    start: i64 = 0
+    index: i64 = 0
+    while index <= total:
+        current: i8 = 0 as i8
+        if index < total:
+            current = Memory.read_i8((directories as i64) + index)
+        if index == total or current == separator:
+            # Empty PATH entries mean the current directory on some hosts.
+            # Ignore them so tool discovery cannot be redirected implicitly.
+            if index > start:
+                directory: str = str_from_range(directories, start, index)
+                if host_tool_directory_is_complete(directory) == 1:
+                    return directory
+            start = index + 1
+        index = index + 1
+    return ""
+
+fun discover_host_tool_dir() -> str:
+    if g_tc_discovery_attempted != 0:
+        return g_tc_discovered_dir
+    g_tc_discovery_attempted = 1
+
+    # Explicit user configuration wins, then PATH, then host-manifest defaults.
+    # The compiler never mutates its SDK and never hardcodes an operating system.
+    configured: str = PlatformHost.get_environment("DOLET_TOOLCHAIN_PATH")
+    g_tc_discovered_dir = discover_host_tool_dir_in_list(configured)
+    if Memory.strlen(g_tc_discovered_dir) == 0:
+        g_tc_discovered_dir = discover_host_tool_dir_in_list(PlatformHost.get_environment("PATH"))
+    if Memory.strlen(g_tc_discovered_dir) == 0:
+        g_tc_discovered_dir = discover_host_tool_dir_in_list(toolchain_config_get("discovery_paths"))
+    if Memory.strlen(g_tc_discovered_dir) > 0:
+        IOOps.io_println(Str.concat("Host tools: ", g_tc_discovered_dir))
+    return g_tc_discovered_dir
+
 fun resolve_host_tool(role: str) -> str:
     relative_tool: str = toolchain_config_get(role)
     if Memory.strlen(relative_tool) == 0:
@@ -2007,11 +2088,23 @@ fun resolve_host_tool(role: str) -> str:
     if is_safe_pack_relative_path(relative_tool) == 0:
         IOOps.io_println(Str.concat("Error: Host toolchain role has an unsafe path: ", role))
         return ""
-    tool_path: str = Str.concat(g_tc_host_dir, Str.concat(g_host_separator, host_normalize_path(relative_tool)))
-    if host_file_exists(tool_path) == 0:
-        IOOps.io_println(Str.concat("Error: Host tool is missing: ", tool_path))
-        return ""
-    return tool_path
+
+    # Prefer the versioned SDK bundle for deterministic, offline builds.
+    bundled_path: str = Str.concat(g_tc_host_dir, Str.concat(g_host_separator, host_normalize_path(relative_tool)))
+    if PlatformHost.is_executable(bundled_path) == 1:
+        return bundled_path
+
+    # Thin SDKs may use one complete native LLVM installation without copying
+    # executables away from the shared libraries installed beside them.
+    discovered_dir: str = discover_host_tool_dir()
+    discovered_tool: str = host_tool_in_directory(discovered_dir, relative_tool)
+    if Memory.strlen(discovered_tool) > 0:
+        return discovered_tool
+
+    IOOps.io_println(Str.concat("Error: Host tool is missing: ", bundled_path))
+    IOOps.io_println("       Searched the SDK, DOLET_TOOLCHAIN_PATH, PATH, and host discovery_paths.")
+    IOOps.io_println("       Install a complete LLVM/MLIR tool directory or run tools/setup_tools for this host.")
+    return ""
 
 # ==========================================
 # Extract extern lib names from source code

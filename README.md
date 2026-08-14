@@ -213,18 +213,27 @@ For normal multi-target development, Obin uses the already trusted
 change, and isolates every artifact by target:
 
 ```batch
-obin build --profile release --all-targets
-obin package --profile release --all-targets
+obin build --profile release --target windows
+obin build --profile release --target linux
+obin package --profile release --target windows
+obin package --profile release --target linux
 ```
 
 This produces `doletc.exe` for `windows/x86_64` and a static Pure Dolet ELF
 for `linux/x86_64`. SDK packages place the compiler under `bin/`
-and stage the Dolet library, target packs, toolchain manifest, and matching
-host-tool slot. The Windows package is full because its LLVM/MLIR host pack is
-present locally. Linux packages are thin until the Linux host pack is populated;
-run `tools/setup_tools.sh` on Linux before compiling programs
-with them. The setup script links to the native LLVM installation instead of
-copying isolated executables, preserving LLVM/MLIR shared-library resolution.
+and stage the Dolet library, platform packs, backend target adapters, toolchain
+manifest, and matching host-tool slot. The Windows package is full because its LLVM/MLIR host pack is
+present locally. Linux packages are thin: `doletc` first checks its bundled host
+slot, then `DOLET_TOOLCHAIN_PATH`, `PATH`, and the standard LLVM roots declared
+by the Linux host manifest. A normal installation such as `/usr/lib/llvm-20/bin`
+therefore works directly with `./bin/doletc`. `tools/setup_tools.sh` remains an
+optional way to pin the SDK to a specific native LLVM installation. It links
+instead of copying isolated executables, preserving LLVM/MLIR shared-library resolution.
+The package manifest declares both shared and target-specific required paths,
+so Obin rejects an incomplete SDK instead of printing a misleading success.
+Host-local links are not included in `dist`; the Linux package stages only its
+host manifest and discovers or pins tools on the target machine where their
+LLVM shared-library relationships are valid.
 The Linux compiler executable is cross-built from Windows and runs without a
 dynamic loader or libc. `build.bat` remains the independent byte-stable bootstrap trust
 path and must still be used after compiler changes.

@@ -36,6 +36,17 @@ contain executable names or host paths.
 
 ## Linux LLVM bundle
 
+The thin Linux SDK normally discovers one complete native LLVM/MLIR directory
+automatically. Search order is the bundled host slot, `DOLET_TOOLCHAIN_PATH`,
+`PATH`, then the standard roots declared in `hosts/linux-x86_64/host.toml`.
+For a custom install you can launch directly with, for example:
+
+```sh
+DOLET_TOOLCHAIN_PATH=/custom/llvm/bin ./bin/doletc app.dlt -o app
+```
+
+The setup script is optional and pins the SDK to a chosen installation.
+
 On an x86_64 Linux host, install the native Linux executables with:
 
 ```sh

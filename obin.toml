@@ -8,15 +8,16 @@ type = "console"
 default-target = "windows"
 default-profile = "release"
 incremental = true
-targets = ["windows", "linux"]
 
 [targets.windows]
 id = "windows/x86_64"
 package-include = ["toolchains/llvm/1/hosts/windows-x86_64"]
+package-require = ["bin/doletc.exe", "toolchains/llvm/1/hosts/windows-x86_64/host.toml", "toolchains/llvm/1/hosts/windows-x86_64/bin/clang.exe", "toolchains/llvm/1/hosts/windows-x86_64/bin/ld.lld.exe", "toolchains/llvm/1/hosts/windows-x86_64/bin/lld-link.exe", "toolchains/llvm/1/hosts/windows-x86_64/bin/mlir-translate.exe"]
 
 [targets.linux]
 id = "linux/x86_64"
-package-include = ["toolchains/llvm/1/hosts/linux-x86_64"]
+package-include = ["toolchains/llvm/1/hosts/linux-x86_64/host.toml"]
+package-require = ["bin/doletc", "toolchains/llvm/1/hosts/linux-x86_64/host.toml", "tools/setup_tools.sh"]
 
 [profiles.dev]
 optimization = 0
@@ -39,4 +40,5 @@ before-build = ["python scripts/generate_pipeline.py"]
 directory = "dist"
 include-assets = false
 executable-directory = "bin"
-include = ["library", "toolchains/llvm/1/toolchain.toml", "tools", "README.md", "LICENSE"]
+include = ["library", "toolchains/llvm/1/toolchain.toml", "toolchains/llvm/1/targets", "tools", "README.md", "LICENSE"]
+require = ["library", "toolchains/llvm/1/toolchain.toml", "toolchains/llvm/1/targets/x86_64-win64-coff.toml", "toolchains/llvm/1/targets/x86_64-sysv-elf.toml", "README.md", "LICENSE"]
