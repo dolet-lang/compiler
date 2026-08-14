@@ -2990,7 +2990,12 @@ fun main() -> i32:
     # This remains a generic target-pack contract: the driver does not know
     # whether a selected profile is static, loader-backed, or OS-specific.
     if Memory.strlen(selected_link_options) > 0:
-        cmd3 = Str.concat(cmd3, Str.concat(selected_link_options, " "))
+        # Target packs may keep linker policy files next to their runtime
+        # objects. Resolve the path here without teaching the driver what the
+        # option means (ELF version script, PE policy file, and so on).
+        quoted_resource_root: str = Str.concat("\"", Str.concat(sys_libs, "\""))
+        resolved_link_options: str = str_replace(selected_link_options, "{resource_root}", quoted_resource_root)
+        cmd3 = Str.concat(cmd3, Str.concat(resolved_link_options, " "))
     pre_object_flags: str = build_resource_object_flags(selected_pre_objects, sys_libs)
     if Memory.strlen(selected_pre_objects) > 0 and Memory.strlen(pre_object_flags) == 0:
         return 1

@@ -9702,6 +9702,19 @@ fun gen_assignment(node: i64):
         add_variable(name, alloc_name, vt, 0, 0)
         mn = alloc_name
 
+    # Function parameters are incoming SSA values. On the first assignment,
+    # materialize only that parameter into a local stack slot, seed it with the
+    # incoming value, and shadow the SSA binding. Immutable parameters keep the
+    # zero-overhead direct-SSA path.
+    if is_param_var(name) == 1:
+        param_type: str = get_var_type(name)
+        param_mt: str = mlir_type(param_type)
+        param_alloc: str = emit_alloca(param_mt)
+        emit_store(Str.concat("%", mn), param_alloc, param_mt)
+        param_alloc_name: str = str_from_range(param_alloc, 1, Memory.strlen(param_alloc))
+        add_variable(name, param_alloc_name, param_type, 0, 0)
+        mn = param_alloc_name
+
     vt2: str = get_var_type(name)
     mt2: str = mlir_type(vt2)
 
@@ -19163,7 +19176,12 @@ fun main() -> i32:
     # This remains a generic target-pack contract: the driver does not know
     # whether a selected profile is static, loader-backed, or OS-specific.
     if Memory.strlen(selected_link_options) > 0:
-        cmd3 = Str.concat(cmd3, Str.concat(selected_link_options, " "))
+        # Target packs may keep linker policy files next to their runtime
+        # objects. Resolve the path here without teaching the driver what the
+        # option means (ELF version script, PE policy file, and so on).
+        quoted_resource_root: str = Str.concat("\"", Str.concat(sys_libs, "\""))
+        resolved_link_options: str = str_replace(selected_link_options, "{resource_root}", quoted_resource_root)
+        cmd3 = Str.concat(cmd3, Str.concat(resolved_link_options, " "))
     pre_object_flags: str = build_resource_object_flags(selected_pre_objects, sys_libs)
     if Memory.strlen(selected_pre_objects) > 0 and Memory.strlen(pre_object_flags) == 0:
         return 1

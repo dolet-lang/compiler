@@ -1059,6 +1059,11 @@ Canonical Linux target:
   profile preserves system-loader TLS, uses an opaque pthread-backed `Thread`
   handle, and links only the system ABI inputs required by those APIs. Do not
   expose libc/desktop variants as separate public target IDs.
+- The dynamic profile applies its target-owned ELF export map. Application and
+  runtime symbols stay local so Pure Dolet syscall facade names such as
+  `read`, `write`, and `socket` cannot interpose on libc calls made internally
+  by desktop libraries. Only the process entry contract remains globally
+  visible.
 - Backend spellings such as `x86_64-unknown-linux-none` are private LLVM
   adapter data under `toolchains/`, never public target IDs.
 

@@ -30,6 +30,19 @@ fun gen_assignment(node: i64):
         add_variable(name, alloc_name, vt, 0, 0)
         mn = alloc_name
 
+    # Function parameters are incoming SSA values. On the first assignment,
+    # materialize only that parameter into a local stack slot, seed it with the
+    # incoming value, and shadow the SSA binding. Immutable parameters keep the
+    # zero-overhead direct-SSA path.
+    if is_param_var(name) == 1:
+        param_type: str = get_var_type(name)
+        param_mt: str = mlir_type(param_type)
+        param_alloc: str = emit_alloca(param_mt)
+        emit_store(Str.concat("%", mn), param_alloc, param_mt)
+        param_alloc_name: str = str_from_range(param_alloc, 1, Memory.strlen(param_alloc))
+        add_variable(name, param_alloc_name, param_type, 0, 0)
+        mn = param_alloc_name
+
     vt2: str = get_var_type(name)
     mt2: str = mlir_type(vt2)
 
