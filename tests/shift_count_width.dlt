@@ -1,0 +1,76 @@
+##############################################################################
+# A shift is done in the width of its operands, and an untyped integer literal
+# is an i32. So `1 << n` with an i32 count shifts in 32 bits: n = 40 sets bit
+# 8, not bit 40.
+#
+# packages/input indexes a 64-bit key bitmap with `key % 64` and built its mask
+# that way, so every key whose index was 32 or above aliased the one 32 below
+# it -- pressing one appeared to press the other, and releasing one cleared the
+# other. Making the count an i64 is what fixes it.
+#
+# This test guards the pattern: a 64-bit bitmap must be addressable across all
+# 64 of its bits.
+##############################################################################
+import std
+
+g_bad: i64 = 0
+
+fun check(name: str, got: i64, want: i64):
+    if got == want:
+        print(@"  ok    {name}")
+    else:
+        print(@"  FAIL  {name}: got {got}, want {want}")
+        g_bad = g_bad + 1
+
+# the shape packages/input uses: an i32 key, an i64 count, an i64 mask
+fun bit_of(key: i32) -> i64:
+    pos: i64 = (key % 64) as i64
+    return 1 << pos
+
+print("shift count width")
+
+n: i64 = 40
+a: i64 = 1 << n
+check("1 << 40 with an i64 count", a, 1099511627776)
+
+# i64's most negative value; written this way because a literal one past
+# i64 max does not survive the lexer
+min_i64: i64 = (0 - 9223372036854775807) - 1
+b: i64 = 1 << (63 as i64)
+check("1 << 63 does not fall off the top", b, min_i64)
+
+check("bit_of(40)", bit_of(40), 1099511627776)
+check("bit_of(8)", bit_of(8), 256)
+check("bit_of(96) wraps to bit 32, not bit 0", bit_of(96), 4294967296)
+
+# the aliasing itself: set one key, the other must stay clear
+map: i64 = 0
+map = map | bit_of(40)
+if (map & bit_of(8)) != 0:
+    print("  FAIL  setting key 40 also set key 8")
+    g_bad = g_bad + 1
+else:
+    print("  ok    setting key 40 leaves key 8 clear")
+if (map & bit_of(40)) == 0:
+    print("  FAIL  key 40 did not read back")
+    g_bad = g_bad + 1
+else:
+    print("  ok    key 40 reads back")
+
+# every bit of the map has to be independently addressable
+i: i32 = 0
+collisions: i64 = 0
+while i < 64:
+    j: i32 = 0
+    while j < 64:
+        if i != j:
+            if bit_of(i) == bit_of(j):
+                collisions = collisions + 1
+        j = j + 1
+    i = i + 1
+check("no two of the 64 key bits collide", collisions, 0)
+
+if g_bad > 0:
+    print(@"{g_bad} failed")
+    Process.exit(1)
+print("all ok")

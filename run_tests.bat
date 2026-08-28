@@ -192,6 +192,7 @@ for %%f in (
     nested_field_assign
     parameter_reassign
     param_assign
+    shift_count_width
     type_alias_methods
     nested_namespace
     trait_impl

@@ -5,7 +5,7 @@
 > the codebase at `dolet-compiler/`. File:line references are real.
 
 **Compiler version:** v2.0.0-beta.3 · **Bootstrap:** pinned beta.2 seed→stage 1→stage 2
-byte-stable on Windows · **Test count:** 128 PASS / 0 FAIL.
+byte-stable on Windows · **Test count:** 129 PASS / 0 FAIL.
 
 ---
 
@@ -87,7 +87,7 @@ dolet-compiler/
 │   ├── toolchain.toml               # package identity + supported host packs
 │   └── hosts/<host-id>/host.toml    # role -> host executable mapping
 ├── build.bat                        # pinned-seed, 2-stage fixed-point bootstrap
-├── run_tests.bat                    # 128 tests; stress tests opt-in
+├── run_tests.bat                    # 129 tests; stress tests opt-in
 ├── tests/                           # *.dlt test files
 └── bin/doletc.exe                   # the compiled compiler
 ```
@@ -1139,6 +1139,49 @@ release-security operation, never an automatic fallback.
 
 ## 20. Common pitfalls (verified from past sessions)
 
+### A shift by an `i32` count happens in 32 bits — open, and not a one-liner
+
+```dolet
+bit_pos: i32 = key % 64
+mask: i64 = 1 << bit_pos     # bit_pos 40 sets bit 8
+```
+
+An untyped integer literal is emitted as `i32` (`gen_int_lit` says so in as many
+words: i32 unless the value itself overflows, then `implicit_cast` widens).
+`gen_binary_op` takes the result type from `wider_int_type(lt, rt)`, so when
+both operands are `i32` the shift is done in 32 bits and everything above bit 31
+is gone. `packages/input` indexed a 64-bit key bitmap this way, so every key
+whose `key % 64` was 32 or above aliased the key 32 below it: pressing one
+appeared to press the other. Fixed there by making the count an `i64`, which is
+also the workaround everywhere else — `(1 as i64) << n` or an `i64` count.
+
+**Why the compiler was not changed.** `gen_binary_op` receives an `expected`
+type and ignores it, so the obvious fix is to let the context widen the result.
+That produces invalid IR:
+
+```
+%8 = llvm.shl %6, %7 : i64
+%9 = llvm.sext %8 : i32 to i64      # the consumer re-inferred i32
+```
+
+`infer_expr_type` is context-free and `gen_binary_op` would become
+context-sensitive, so the consumer of the shift casts from a type the shift no
+longer has. Any real fix has to keep those two in agreement — either by
+threading `expected` through `infer_expr_type`, or by adopting a rule that does
+not need context, such as *an untyped literal shifted by a variable is shifted
+in 64 bits*, implemented identically in both. The measured blast radius of that
+second rule across every project in the workspace is three lines, all of them
+currently wrong, but it changes what `1 << n` means and that is a language
+decision, not a bug fix.
+
+`tests/shift_count_width.dlt` guards the pattern.
+
+### An integer literal past `i64` max silently becomes `-`
+
+`0 - 9223372036854775808` reaches MLIR as `llvm.mlir.constant(- : i64)` and
+fails with `expected constant integer or floating point value`, pointing at
+generated code rather than at the source line. Write `(0 - 9223372036854775807) - 1`.
+
 ### Assigning to a parameter — FIXED, and the fix is the interesting part
 
 ```dolet
@@ -1277,7 +1320,7 @@ You DO need `import std` for: `print`, `println`, `File`, `Args`,
 After ANY change to compiler or stdlib:
 
 1. **Bootstrap byte-stable**: `build.bat` produces stage 1 ≡ stage 2.
-2. **No test regressions**: `run_tests.bat` reports `128 PASS / 0 FAIL`.
+2. **No test regressions**: `run_tests.bat` reports `129 PASS / 0 FAIL`.
 3. **All 4 user apps rebuild**: simple-app-eqoi, FileManager, DisplayManager, DesktopShell.
 
 ### Test layout (`run_tests.bat`)
