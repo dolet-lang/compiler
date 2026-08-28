@@ -13,7 +13,8 @@ layer.**
 ```
 composition   eqoi   web   kobic   frog          frameworks and applications
                   ▲
-pure          fonts   ui   image   json          Dolet only, zero OS calls
+pure          fonts  ui  image  json             Dolet only, zero OS calls
+              unicode  text
                   ▲
 os            window   input   net               OS syscalls and own native code
                   ▲
@@ -38,7 +39,7 @@ style preference — it is what makes the package cross-compilable to any target
 including bare metal, and what makes its test suite run in CI without a display
 server.
 
-Current: `fonts`, `ui`, `image`, `json`.
+Current: `fonts`, `ui`, `image`, `json`, `unicode`, `text`.
 
 ### `os`
 
