@@ -5,7 +5,7 @@
 > the codebase at `dolet-compiler/`. File:line references are real.
 
 **Compiler version:** v2.0.0-beta.3 · **Bootstrap:** pinned beta.2 seed→stage 1→stage 2
-byte-stable on Windows · **Test count:** 126 PASS / 0 FAIL.
+byte-stable on Windows · **Test count:** 128 PASS / 0 FAIL.
 
 ---
 
@@ -87,7 +87,7 @@ dolet-compiler/
 │   ├── toolchain.toml               # package identity + supported host packs
 │   └── hosts/<host-id>/host.toml    # role -> host executable mapping
 ├── build.bat                        # pinned-seed, 2-stage fixed-point bootstrap
-├── run_tests.bat                    # 126 tests; stress tests opt-in
+├── run_tests.bat                    # 128 tests; stress tests opt-in
 ├── tests/                           # *.dlt test files
 └── bin/doletc.exe                   # the compiled compiler
 ```
@@ -1139,6 +1139,37 @@ release-security operation, never an automatic fallback.
 
 ## 20. Common pitfalls (verified from past sessions)
 
+### Assigning to a parameter — FIXED, and the fix is the interesting part
+
+```dolet
+fun clamp(w: i64) -> i64:
+    if w < 0:
+        w = 0        # before the fix: every path that skipped this
+    return w         # read an uninitialised slot
+```
+
+A parameter that is assigned to gets a stack slot, and the slot has to be
+seeded with the incoming argument. `emit_alloca` hoists the slot to the entry
+block, but the seeding store was emitted with `emit_store` at the current
+position — so it landed inside whatever branch the first assignment was in.
+`clamp(5)` returned 10 and `clamp(77)` returned 0: the arms inverted. A loop
+was worse, re-seeding the parameter on every iteration and losing whatever had
+accumulated in it.
+
+The fix is `entry_emit_store` in `codegen_core.dlt`: the seed goes to the entry
+buffer beside its alloca, not to the current position. `gen_assignment` uses it
+whenever `g_entry_active == 1`, and falls back to `emit_store` otherwise, so
+global init is unchanged.
+
+Two things let this live for as long as it did, both worth remembering:
+
+- **`run_tests.bat` scores a test on whether it runs, not on what it prints.**
+  A test that computes the wrong number and exits 0 passes. Any test of a
+  *value* has to `Process.exit(1)` itself — see `tests/param_assign.dlt`.
+- **`tests/parameter_reassign.dlt` already existed and was never registered in
+  the runner.** Adding a test file is not adding a test. Both are registered
+  now.
+
 ### `struct A.B:` and `extend/group A.B:` are REJECTED
 
 ```dolet
@@ -1246,7 +1277,7 @@ You DO need `import std` for: `print`, `println`, `File`, `Args`,
 After ANY change to compiler or stdlib:
 
 1. **Bootstrap byte-stable**: `build.bat` produces stage 1 ≡ stage 2.
-2. **No test regressions**: `run_tests.bat` reports `126 PASS / 0 FAIL`.
+2. **No test regressions**: `run_tests.bat` reports `128 PASS / 0 FAIL`.
 3. **All 4 user apps rebuild**: simple-app-eqoi, FileManager, DisplayManager, DesktopShell.
 
 ### Test layout (`run_tests.bat`)

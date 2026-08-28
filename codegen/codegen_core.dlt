@@ -1690,6 +1690,14 @@ fun emit_alloca(mtype: str) -> str:
 fun emit_store(val: str, dest: str, mtype: str):
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(Str.concat("llvm.store ", val), ", "), dest), Str.concat(" : ", mtype)), ", !llvm.ptr"))
 
+# A store that belongs with the entry-block allocas rather than at the current
+# position. Only one thing needs this: seeding a parameter's stack slot with
+# the incoming argument. The alloca is hoisted to entry, so a seed store left
+# behind at the assignment site sits inside whatever branch that assignment is
+# in, and every path that skips the branch reads an uninitialised slot.
+fun entry_emit_store(val: str, dest: str, mtype: str):
+    entry_emit(Str.concat(ind(), Str.concat(Str.concat(Str.concat(Str.concat(Str.concat("llvm.store ", val), ", "), dest), Str.concat(" : ", mtype)), ", !llvm.ptr")))
+
 fun emit_load(src: str, mtype: str) -> str:
     tmp: str = new_tmp()
     emit_ind(Str.concat(Str.concat(Str.concat(Str.concat(tmp, " = llvm.load "), src), Str.concat(" : !llvm.ptr -> ", mtype)), ""))

@@ -34,11 +34,21 @@ fun gen_assignment(node: i64):
     # materialize only that parameter into a local stack slot, seed it with the
     # incoming value, and shadow the SSA binding. Immutable parameters keep the
     # zero-overhead direct-SSA path.
+    #
+    # The seed store has to travel with the alloca. emit_alloca hoists the slot
+    # to the entry block, and a store emitted here would stay behind at the
+    # assignment site -- so for `if cond: p = x` the slot was only ever seeded
+    # on the path that assigned, and every other path read whatever was on the
+    # stack. That produced a silently wrong value from the first assignment
+    # onward, even down a branch where the assignment never ran.
     if is_param_var(name) == 1:
         param_type: str = get_var_type(name)
         param_mt: str = mlir_type(param_type)
         param_alloc: str = emit_alloca(param_mt)
-        emit_store(Str.concat("%", mn), param_alloc, param_mt)
+        if g_entry_active == 1:
+            entry_emit_store(Str.concat("%", mn), param_alloc, param_mt)
+        else:
+            emit_store(Str.concat("%", mn), param_alloc, param_mt)
         param_alloc_name: str = str_from_range(param_alloc, 1, Memory.strlen(param_alloc))
         add_variable(name, param_alloc_name, param_type, 0, 0)
         mn = param_alloc_name

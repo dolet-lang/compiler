@@ -1,0 +1,107 @@
+##############################################################################
+# Assigning to a function parameter.
+#
+# A parameter that is assigned to needs a stack slot, and that slot has to be
+# seeded with the incoming argument. The alloca is hoisted to the entry block;
+# the seeding store used to be left behind at the assignment site, so it sat
+# inside whatever branch the assignment was in. Every path that skipped the
+# branch then read an uninitialised slot, and a loop re-seeded the parameter on
+# every iteration and lost whatever had accumulated in it.
+#
+# It reads as garbage rather than as an error, which is why it survived: the
+# runner scores a test on whether it runs, not on what it prints. So this test
+# exits non-zero when a value is wrong.
+##############################################################################
+import std
+
+g_bad: i64 = 0
+
+fun check(name: str, got: i64, want: i64):
+    if got == want:
+        print(@"  ok    {name}")
+    else:
+        print(@"  FAIL  {name}: got {got}, want {want}")
+        g_bad = g_bad + 1
+
+# assigned down one branch, read down the other
+fun branchy(c: i64, flag: bool) -> i64:
+    if flag:
+        c = 99
+    return c
+
+# accumulated across a loop
+fun accum(total: i64, n: i64) -> i64:
+    i: i64 = 0
+    while i < n:
+        total = total + i
+        i = i + 1
+    return total
+
+# clamped in two independent arms, either of which may be skipped
+fun clamp(w: i64) -> i64:
+    if w < 0:
+        w = 0
+    if w > 10:
+        w = 10
+    return w
+
+# assigned unconditionally, which always worked and must keep working
+fun plain(x: i64) -> i64:
+    x = x * 2
+    return x
+
+# a second parameter assigned after the first, to catch slot mix-ups
+fun swapish(a: i64, b: i64) -> i64:
+    if a > b:
+        a = a - b
+        b = b + a
+    return a * 100 + b
+
+# a str parameter, so the fix is not integer-only
+fun greet(who: str, loud: bool) -> str:
+    if loud:
+        who = "WORLD"
+    return who
+
+print("parameter assignment")
+
+a1: i64 = branchy(64, false)
+a2: i64 = branchy(64, true)
+check("a branch that is not taken leaves the argument alone", a1, 64)
+check("a branch that is taken assigns", a2, 99)
+
+b1: i64 = accum(100, 5)
+check("a loop accumulates into the parameter", b1, 110)
+
+c1: i64 = clamp(5)
+c2: i64 = clamp(0 - 3)
+c3: i64 = clamp(77)
+check("neither arm taken", c1, 5)
+check("the low arm", c2, 0)
+check("the high arm", c3, 10)
+
+d1: i64 = plain(21)
+check("assigned unconditionally", d1, 42)
+
+e1: i64 = swapish(7, 3)
+e2: i64 = swapish(3, 7)
+check("two parameters assigned in one branch", e1, 407)
+check("the same call with the branch skipped", e2, 307)
+
+f1: str = greet("hello", false)
+f2: str = greet("hello", true)
+if f1 == "hello":
+    print("  ok    a str parameter left alone")
+else:
+    print(@"  FAIL  a str parameter left alone: got {f1}")
+    g_bad = g_bad + 1
+if f2 == "WORLD":
+    print("  ok    a str parameter assigned")
+else:
+    print(@"  FAIL  a str parameter assigned: got {f2}")
+    g_bad = g_bad + 1
+
+if g_bad > 0:
+    print(@"{g_bad} failed")
+    Process.exit(1)
+print("all ok")

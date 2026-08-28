@@ -190,6 +190,8 @@ for %%f in (
     random_basic
     struct_nested_global
     nested_field_assign
+    parameter_reassign
+    param_assign
     type_alias_methods
     nested_namespace
     trait_impl
