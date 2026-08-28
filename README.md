@@ -42,10 +42,11 @@ The canonical `windows/x86_64` and `linux/x86_64` targets use the Pure Dolet
 runtime. Windows reaches Win32 directly; Linux reaches the kernel through a
 small target-owned syscall/entry object. Ordinary Linux applications are
 static and libc-free, and Windows can cross-build their ELF executables.
-When resolved source uses X11 or Vulkan, the same Linux target automatically
-selects its internal loader-compatible desktop SDK. This keeps one public
-target ID while isolating unavoidable system-library ABI dependencies from
-the Pure Dolet runtime.
+When resolved source uses the native window bridge or Vulkan, the same Linux
+target automatically selects its internal loader-compatible desktop SDK. The
+bridge prefers Wayland and falls back to X11/XWayland at runtime. This keeps
+one public target ID while isolating unavoidable system-library ABI
+dependencies from the Pure Dolet runtime.
 
 ## Quick Start
 
@@ -176,11 +177,14 @@ dolet-compiler/
 
 ## Building from Source
 
-The compiler is self-hosting. A checked-in native seed is pinned by SHA-256 in
-`bootstrap.seed.toml`; `build.bat` refuses to use a changed seed, regenerates
-the amalgamated source, builds two self-hosted stages, and promotes the result
-only when both stages are byte-identical. The historical Python compiler is
-archived for language archaeology and is not a second source of truth.
+The compiler is self-hosting. Each checked-in native host seed has an
+independent version and SHA-256 pin in `bootstrap.seed.toml`; `build.bat`
+refuses to use a changed or mislabeled seed, regenerates the amalgamated
+source, builds two self-hosted stages, and promotes the result only when both
+stages are byte-identical. A trusted older seed may build the next source
+version; the promoted host record advances only after the fixed point passes.
+The historical Python compiler is archived for language archaeology and is
+not a second source of truth.
 
 ### Prerequisites
 
@@ -222,18 +226,22 @@ obin package --profile release --target linux
 This produces `doletc.exe` for `windows/x86_64` and a static Pure Dolet ELF
 for `linux/x86_64`. SDK packages place the compiler under `bin/`
 and stage the Dolet library, platform packs, backend target adapters, toolchain
-manifest, and matching host-tool slot. The Windows package is full because its LLVM/MLIR host pack is
-present locally. Linux packages are thin: `doletc` first checks its bundled host
-slot, then `DOLET_TOOLCHAIN_PATH`, `PATH`, and the standard LLVM roots declared
-by the Linux host manifest. A normal installation such as `/usr/lib/llvm-20/bin`
-therefore works directly with `./bin/doletc`. `tools/setup_tools.sh` remains an
-optional way to pin the SDK to a specific native LLVM installation. It links
-instead of copying isolated executables, preserving LLVM/MLIR shared-library resolution.
+manifest, and matching host-tool pack. Both release packages are complete:
+`obin package --target linux` runs the target-specific preparation hook, stages
+native Linux `mlir-translate`, Clang, and LLD executables, follows their
+non-glibc shared-library closure, and wraps them with SDK-relative library
+lookup. The resulting compiler therefore works from `./bin/doletc` without a
+system LLVM installation or a configured `PATH`. `DOLET_TOOLCHAIN_PATH`, host
+discovery, and `tools/setup_tools.sh` remain developer overrides rather than
+requirements for release users.
 The package manifest declares both shared and target-specific required paths,
 so Obin rejects an incomplete SDK instead of printing a misleading success.
-Host-local links are not included in `dist`; the Linux package stages only its
-host manifest and discovers or pins tools on the target machine where their
-LLVM shared-library relationships are valid.
+Host-local links are never included in `dist`; the Linux package contains real
+files plus `bundle.toml` hashes and its exact minimum GLIBC symbol version.
+Packaging fails if any required host tool is absent, so a release cannot
+silently degrade into an unusable thin SDK. Official builders can choose the
+baseline WSL distribution with `DOLET_LINUX_WSL_DISTRO` and enforce a maximum
+with `DOLET_LINUX_MAX_GLIBC` (for example `2.35` for Ubuntu 22.04).
 The Linux compiler executable is cross-built from Windows and runs without a
 dynamic loader or libc. `build.bat` remains the independent byte-stable bootstrap trust
 path and must still be used after compiler changes.
@@ -296,7 +304,7 @@ link_options = "-static -m elf_x86_64"
 entry = "_start"
 
 [link.dynamic]
-dynamic_for_libs = "X11,vulkan"
+dynamic_for_libs = "dolet_window_linux,wayland-client,wayland-cursor,xkbcommon,X11,vulkan"
 dynamic_resource_root = "platform/linux/targets/x86_64/resources/desktop"
 dynamic_default_libs = "pthread,c"
 dynamic_runtime_helpers = "runtime_helpers.o"

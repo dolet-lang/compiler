@@ -4,7 +4,7 @@
 > this BEFORE grepping the source. Every section was verified against
 > the codebase at `dolet-compiler/`. File:line references are real.
 
-**Compiler version:** v2.0.0-beta.2 · **Bootstrap:** pinned seed→stage 1→stage 2
+**Compiler version:** v2.0.0-beta.3 · **Bootstrap:** pinned beta.2 seed→stage 1→stage 2
 byte-stable on Windows · **Test count:** 126 PASS / 0 FAIL.
 
 ---
@@ -40,7 +40,7 @@ byte-stable on Windows · **Test count:** 126 PASS / 0 FAIL.
 - **Verified facts only.** Every claim was cross-checked against the
   source. File:line references point at the line that proves the
   claim.
-- **Pinned to v2.0.0-beta.2.** When the language changes, update this
+- **Pinned per-host seeds; current source is v2.0.0-beta.3.** When the language changes, update this
   file in the same PR. Stale doc is worse than no doc.
 - **Examples come from `tests/`.** They're real, runnable, and the
   test-runner verifies them. If an example here disagrees with a test
@@ -1121,11 +1121,11 @@ bisect immediately.
 ### Obin target matrix (distribution, not bootstrap trust)
 
 `obin.toml` declares canonical `windows/x86_64` and `linux/x86_64` targets.
-With an already trusted `bin/doletc.exe`, `obin build --all-targets`
-cross-builds both isolated artifacts and `obin package --all-targets` stages target-named
-SDK directories. This does not replace `build.bat`: Obin is the daily/release
-orchestrator, while the pinned-seed fixed-point comparison remains the compiler trust
-check.
+With an already trusted `bin/doletc.exe`, build and package each release target
+explicitly (`--target windows`, then `--target linux`). Target-specific package
+hooks stage the matching host-tool bundle before Obin validates required files.
+This does not replace `build.bat`: Obin is the daily/release orchestrator, while
+the pinned-seed fixed-point comparison remains the compiler trust check.
 
 ### Historical Python stage 0
 

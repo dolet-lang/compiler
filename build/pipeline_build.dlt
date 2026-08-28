@@ -18752,7 +18752,7 @@ fun ast_pkg_libpaths(ast: i64, pkg_base: str) -> str:
 # Main Compiler Driver
 # ==========================================
 fun doletc_version_banner() -> str:
-    return "Dolet Compiler v2.0.0-beta.2"
+    return "Dolet Compiler v2.0.0-beta.3"
 
 fun main() -> i32:
     compile_start_ms: i64 = TimeOps.time_now_ms()

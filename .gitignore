@@ -13,6 +13,9 @@
 
 # Host toolchain executables are installed per machine. Manifests stay tracked.
 toolchains/**/hosts/**/bin/*
+toolchains/**/hosts/**/lib/*
+toolchains/**/hosts/**/libexec/*
+toolchains/**/hosts/**/bundle.toml
 
 # Cloned repos (users add these manually, NOT part of this repo)
 /bootstrap/
@@ -20,6 +23,7 @@ toolchains/**/hosts/**/bin/*
 !/tools/README.md
 !/tools/setup_tools.bat
 !/tools/setup_tools.sh
+!/scripts/stage_linux_host_tools.py
 /library/
 /packages/
 /dist/
@@ -35,6 +39,7 @@ __pycache__/
 .idea/
 *.swp
 *.swo
+*.bak
 
 # OS
 Thumbs.db

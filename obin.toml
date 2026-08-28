@@ -1,6 +1,6 @@
 [application]
 name = "doletc"
-version = "2.0.0-beta.2"
+version = "2.0.0-beta.3"
 entry = "build/pipeline_build.dlt"
 type = "console"
 
@@ -16,8 +16,11 @@ package-require = ["bin/doletc.exe", "toolchains/llvm/1/hosts/windows-x86_64/hos
 
 [targets.linux]
 id = "linux/x86_64"
-package-include = ["toolchains/llvm/1/hosts/linux-x86_64/host.toml"]
-package-require = ["bin/doletc", "toolchains/llvm/1/hosts/linux-x86_64/host.toml", "tools/setup_tools.sh"]
+package-include = ["toolchains/llvm/1/hosts/linux-x86_64"]
+package-require = ["bin/doletc", "toolchains/llvm/1/hosts/linux-x86_64/host.toml", "toolchains/llvm/1/hosts/linux-x86_64/bundle.toml", "toolchains/llvm/1/hosts/linux-x86_64/bin/clang", "toolchains/llvm/1/hosts/linux-x86_64/bin/ld.lld", "toolchains/llvm/1/hosts/linux-x86_64/bin/lld-link", "toolchains/llvm/1/hosts/linux-x86_64/bin/mlir-translate", "toolchains/llvm/1/hosts/linux-x86_64/libexec/clang", "toolchains/llvm/1/hosts/linux-x86_64/libexec/ld.lld", "toolchains/llvm/1/hosts/linux-x86_64/libexec/lld-link", "toolchains/llvm/1/hosts/linux-x86_64/libexec/mlir-translate"]
+
+[targets.linux.hooks]
+before-package = ["python scripts/stage_linux_host_tools.py"]
 
 [profiles.dev]
 optimization = 0

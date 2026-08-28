@@ -1,12 +1,13 @@
-schema = 2
-compiler_version = "2.0.0-beta.2"
+schema = 3
 
 [seeds.linux-x86_64]
 target = "linux/x86_64"
 path = "bin/doletc"
-sha256 = "86e1ec64d7b3007fd32c3b01f9bef4fd215e8e7a183570cc66df3f9dddfa112b"
+compiler_version = "2.0.0-beta.3"
+sha256 = "fd4372fecef2b9143780d9c6e09a00ba89b8589c016adb53e032c03bdc3705d7"
 
 [seeds.windows-x86_64]
 target = "windows/x86_64"
 path = "bin/doletc.exe"
-sha256 = "f7acf83742843d6d6e192681b359383c60575e16b53c325c35c1f403b4c07993"
+compiler_version = "2.0.0-beta.3"
+sha256 = "ecedaf4f15a5eb33eff59e0307f52240c1592bb268b9c4e7bd068feefb72e2d8"

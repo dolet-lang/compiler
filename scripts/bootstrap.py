@@ -84,15 +84,10 @@ def read_lock() -> dict[str, object]:
     return parse_lock_fallback(text)
 
 
-def checked_version(lock: dict[str, object]) -> str:
+def checked_source_version() -> str:
     version = VERSION_PATH.read_text(encoding="utf-8").strip()
-    locked = str(lock.get("compiler_version", ""))
-    if not version or locked != version:
-        raise RuntimeError(
-            "compiler version metadata is inconsistent\n"
-            f"  VERSION:             {version or 'missing'}\n"
-            f"  bootstrap.seed.toml: {locked or 'missing'}"
-        )
+    if not version:
+        raise RuntimeError("compiler source version is missing from VERSION")
     return version
 
 
@@ -105,7 +100,7 @@ def host_id() -> str:
 
 
 def seed_record(lock: dict[str, object]) -> tuple[str, dict[str, object]]:
-    if lock.get("schema") != 2:
+    if lock.get("schema") != 3:
         raise RuntimeError("unsupported bootstrap.seed.toml schema")
     selected_host = host_id()
     seeds = lock.get("seeds")
@@ -137,6 +132,23 @@ def checked_seed(record: dict[str, object]) -> Path:
             f"  actual:   {actual}\n"
             "Restore the tracked seed and lock from source control before building."
         )
+    expected_version = str(record.get("compiler_version", "")).strip()
+    if not expected_version:
+        raise RuntimeError("trusted seed compiler_version is missing")
+    completed = subprocess.run(
+        [str(seed), "--version"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    reported = (completed.stdout + completed.stderr).strip()
+    if completed.returncode != 0 or not reported.endswith(expected_version):
+        raise RuntimeError(
+            "seed compiler version failure\n"
+            f"  expected: {expected_version}\n"
+            f"  reported: {reported or 'missing'}"
+        )
     return seed
 
 
@@ -155,11 +167,7 @@ def update_lock(
     selected = seeds[selected_host]
     assert isinstance(selected, dict)
     selected["sha256"] = sha256(promoted)
-    lines = [
-        "schema = 2",
-        f"compiler_version = \"{version}\"",
-        "",
-    ]
+    lines = ["schema = 3", ""]
     for name in sorted(seeds):
         record = seeds[name]
         if not isinstance(record, dict):
@@ -169,6 +177,7 @@ def update_lock(
                 f"[seeds.{name}]",
                 f"target = \"{record.get('target', '')}\"",
                 f"path = \"{record.get('path', '')}\"",
+                f"compiler_version = \"{version if name == selected_host else record.get('compiler_version', '')}\"",
                 f"sha256 = \"{record.get('sha256', '')}\"",
                 "",
             ]
@@ -194,7 +203,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     lock = read_lock()
-    version = checked_version(lock)
+    version = checked_source_version()
     selected_host, record = seed_record(lock)
     seed = checked_seed(record)
     if args.verify_seed:
